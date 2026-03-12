@@ -162,10 +162,14 @@ void FAutonomixContextCondenser::SummarizeConversation(
 				Result.ErrorMessage = TEXT("Condensation API call failed or returned empty summary.");
 				UE_LOG(LogAutonomix, Error, TEXT("ContextCondenser: %s"), *Result.ErrorMessage);
 
-				if (PendingCallback)
+				// CRITICAL: Move callback to local before invoking.
+				// The callback may trigger state changes that destroy this condenser,
+				// making 'this' invalid. Writing PendingCallback=nullptr after that = crash.
+				auto LocalCallback = MoveTemp(PendingCallback);
+				PendingCallback = nullptr;
+				if (LocalCallback)
 				{
-					PendingCallback(Result);
-					PendingCallback = nullptr;
+					LocalCallback(Result);
 				}
 				return;
 			}
@@ -184,10 +188,14 @@ void FAutonomixContextCondenser::SummarizeConversation(
 				TEXT("ContextCondenser: Condensed %d messages. Summary length: %d chars. CondenseId: %s"),
 				ConversationManager->GetMessageCount(), Summary.Len(), *Result.CondenseId);
 
-			if (PendingCallback)
+			// CRITICAL: Move callback to local before invoking.
+			// The callback may trigger state changes that destroy this condenser,
+			// making 'this' invalid. Writing PendingCallback=nullptr after that = crash.
+			auto LocalCallback = MoveTemp(PendingCallback);
+			PendingCallback = nullptr;
+			if (LocalCallback)
 			{
-				PendingCallback(Result);
-				PendingCallback = nullptr;
+				LocalCallback(Result);
 			}
 		});
 
