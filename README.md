@@ -31,7 +31,7 @@ Think of it as **Cursor/Roo Code, but for Unreal Engine** — with deep engine i
 
 - **T3D Blueprint Injection** — Creates entire Blueprint node graphs in a single transaction using UE's native T3D format (the same format the editor uses for Ctrl+C/Ctrl+V). No node-by-node API calls.
 - **GUID Placeholder System** — AI uses human-readable tokens (`LINK_1`, `GUID_A`, `NODEREF_Entry`) that get resolved to real engine GUIDs automatically, preserving cross-node pin links.
-- **80+ AI Tools** — Not just file editing. Blueprint creation, component management, material graphs, animation systems, PCG, Enhanced Input, performance profiling, renderer settings, Behavior Trees, Sequencer, DataTables, Python scripting, viewport vision, PIE automation, and more.
+- **85+ AI Tools** — Not just file editing. Blueprint creation, component management, material graphs, animation systems, PCG, Enhanced Input, performance profiling, renderer settings, Behavior Trees, Sequencer, DataTables, Python scripting, viewport vision, PIE automation, and more.
 - **Git-Based Checkpoint System** — Shadow git repo per session lets you save, restore, and diff any point in the AI's work.
 - **Agentic Tool Loop** — The AI autonomously plans, executes tools, verifies results, and iterates until the task is complete.
 - **Multi-Provider Support** — Works with Anthropic Claude, OpenAI, Google Gemini, DeepSeek, Mistral, xAI, OpenRouter, Ollama, LM Studio, and any custom OpenAI-compatible endpoint.
@@ -155,15 +155,20 @@ Think of it as **Cursor/Roo Code, but for Unreal Engine** — with deep engine i
 | `create_anim_montage` | Create AnimMontages from AnimSequences |
 | `get_anim_info` | Query skeleton compatibility, list sequences and montages |
 
-### 🖼️ Widget / UMG Tools (5 tools)
+### 🖼️ Widget / UMG Tools (10 tools)
 
 | Tool | Description |
 |------|-------------|
-| `create_widget_blueprint` | Create Widget Blueprints with root panel selection |
-| `add_widget` | Add widgets to the hierarchy (TextBlock, Button, Image, ProgressBar, etc.) |
-| `set_widget_property` | Set Text, Color, Visibility, Percent, etc. via reflection |
-| `get_widget_tree` | Read full widget hierarchy with panel/leaf classification |
-| `compile_widget_blueprint` | Compile and validate Widget Blueprint |
+| `create_widget_blueprint` | Create Widget Blueprints with root panel selection and optional parent class (CommonActivatableWidget for menus) |
+| `add_widget` | Add widgets to the hierarchy — 30+ widget types: panels (CanvasPanel, VerticalBox, HorizontalBox, etc.), content (SizeBox, Border, Button), leaf (TextBlock, Image, ProgressBar, Slider, ComboBoxString, etc.) |
+| `set_widget_slot` | **CRITICAL** — Configure layout slot: anchors, offsets, padding, alignment, fill rules, z-order. Required for CanvasPanel children. |
+| `set_widget_property` | Set Text, Color, Visibility, Percent, bIsEnabled, RenderOpacity, etc. via reflection |
+| `set_widget_font` | Configure fonts on text widgets — size, typeface (Bold/Italic/Light), font family (Roboto/custom), color, shadow |
+| `set_widget_brush` | Set image/texture/solid color on Image, Button states (Normal/Hovered/Pressed/Disabled), Border, ProgressBar |
+| `bind_widget_event` | Bind widget events (OnClicked, OnHovered, OnValueChanged, OnCheckStateChanged, etc.) to K2 event nodes |
+| `remove_widget` | Remove widgets from the tree (cascades to children) |
+| `get_widget_tree` | Read full widget hierarchy with panel/leaf classification, slot types, and parent names |
+| `compile_widget_blueprint` | Compile and validate Widget Blueprint with widget count summary |
 
 ### 🌿 PCG Tools (5 tools)
 

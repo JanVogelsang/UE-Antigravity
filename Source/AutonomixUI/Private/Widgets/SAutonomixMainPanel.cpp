@@ -2775,47 +2775,93 @@ void SAutonomixMainPanel::HandleContextWindowExceeded(int32 RetryCount)
 	//   3. RetryWithTrimmedHistory() receives a clean, API-valid history
 	// -----------------------------------------------------------------------
 
-	// Apply non-destructive sliding window truncation on the full history.
+	// -----------------------------------------------------------------------
+	// STEP 1: Strip base64 image data from tool_result messages.
+	//
+	// capture_viewport returns massive base64 strings (even at JPEG 512px,
+	// it can be 30-80K chars = ~8-20K tokens). For long sessions or models
+	// with smaller context windows (200K), a single viewport capture can
+	// consume a huge fraction of the context. Stripping these first is far
+	// more effective than removing messages, because the image data is
+	// typically in RECENT messages (not in the oldest that truncation targets).
+	// -----------------------------------------------------------------------
+	{
+		int32 ImagesStripped = 0;
+		int64 CharsFreed = 0;
+		TArray<FAutonomixMessage>& FullHistory = const_cast<TArray<FAutonomixMessage>&>(ConversationManager->GetHistory());
+		for (FAutonomixMessage& Msg : FullHistory)
+		{
+			// Strip [IMAGE:base64:data:image/...;base64,...] blocks from tool results
+			if (Msg.Content.Contains(TEXT("[IMAGE:base64:")))
+			{
+				int32 StartIdx = Msg.Content.Find(TEXT("[IMAGE:base64:"));
+				int32 EndIdx = Msg.Content.Find(TEXT("]"), ESearchCase::IgnoreCase, ESearchDir::FromStart, StartIdx);
+				if (StartIdx != INDEX_NONE && EndIdx != INDEX_NONE)
+				{
+					int32 OrigLen = Msg.Content.Len();
+					FString Before = Msg.Content.Left(StartIdx);
+					FString After = Msg.Content.Mid(EndIdx + 1);
+					Msg.Content = Before + TEXT("[Image stripped to free context space — viewport was already analyzed]") + After;
+					CharsFreed += (OrigLen - Msg.Content.Len());
+					ImagesStripped++;
+				}
+			}
+		}
+
+		if (ImagesStripped > 0)
+		{
+			int32 TokensFreed = CharsFreed / 4; // ~4 chars per token
+			UE_LOG(LogAutonomix, Log,
+				TEXT("MainPanel: Stripped %d base64 images from history, freeing ~%lld chars (~%d tokens)."),
+				ImagesStripped, CharsFreed, TokensFreed);
+		}
+	}
+
+	// -----------------------------------------------------------------------
+	// STEP 2: Apply non-destructive sliding window truncation on the full history.
 	// Remove ~50% of visible messages (matching Roo Code's default TruncationFrac = 0.5).
 	// This is more aggressive than the previous 25% to ensure we actually fit in the window.
+	// -----------------------------------------------------------------------
 	const int32 VisibleBefore = ConversationManager->GetEffectiveHistory().Num();
 	const int32 MessagesRemoved = ConversationManager->TruncateConversation(0.5f);
 
-	if (MessagesRemoved > 0)
+	// Even if MessagesRemoved is 0, the image stripping above may have freed enough.
+	// Always attempt the retry.
 	{
 		// GetEffectiveHistory() now returns the post-truncation view, AND filters orphaned
 		// tool_result blocks whose tool_use_id was in the removed assistant messages.
 		TArray<FAutonomixMessage> TrimmedHistory = ConversationManager->GetEffectiveHistory();
 
 		UE_LOG(LogAutonomix, Log,
-			TEXT("MainPanel: Context overflow — non-destructive truncation removed %d messages. "
+			TEXT("MainPanel: Context overflow — truncation removed %d messages. "
 			     "History: %d → %d effective messages (retry %d/%d)."),
 			MessagesRemoved, VisibleBefore, TrimmedHistory.Num(),
 			RetryCount, FAutonomixClaudeClient::MaxContextWindowRetries
 		);
 
-		// Persist the truncation state so it survives restarts
-		SaveTabsToDisk();
+		if (TrimmedHistory.Num() > 0)
+		{
+			// Persist the truncation state so it survives restarts
+			SaveTabsToDisk();
 
-		// Retry with the clean, orphan-free history
-		Claude->RetryWithTrimmedHistory(TrimmedHistory);
-	}
-	else
-	{
-		// TruncateConversation() returned 0 — conversation is too small to truncate further.
-		UE_LOG(LogAutonomix, Error,
-			TEXT("MainPanel: Cannot reduce history further (effective count=%d). Context window error."),
-			VisibleBefore
-		);
+			// Retry with the clean, orphan-free history
+			Claude->RetryWithTrimmedHistory(TrimmedHistory);
+		}
+		else
+		{
+			// History is completely empty after all reduction
+			UE_LOG(LogAutonomix, Error,
+				TEXT("MainPanel: Cannot reduce history further (effective count=0). Context window error."));
 
-		FAutonomixMessage ErrorMsg(EAutonomixMessageRole::System,
-			TEXT("❌ Context window is full and cannot be reduced further. Please start a new conversation."));
-		ChatView->AddMessage(ErrorMsg);
+			FAutonomixMessage ErrorMsg(EAutonomixMessageRole::System,
+				TEXT("❌ Context window is full and cannot be reduced further. Please start a new conversation."));
+			ChatView->AddMessage(ErrorMsg);
 
-		bIsProcessing = false;
-		bInAgenticLoop = false;
-		if (InputArea.IsValid()) { InputArea->SetSendEnabled(true); InputArea->FocusInput(); }
-		if (ProgressOverlay.IsValid()) ProgressOverlay->HideProgress();
+			bIsProcessing = false;
+			bInAgenticLoop = false;
+			if (InputArea.IsValid()) { InputArea->SetSendEnabled(true); InputArea->FocusInput(); }
+			if (ProgressOverlay.IsValid()) ProgressOverlay->HideProgress();
+		}
 	}
 }
 

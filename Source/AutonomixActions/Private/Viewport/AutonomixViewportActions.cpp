@@ -70,9 +70,12 @@ FAutonomixActionResult FAutonomixViewportActions::ExecuteCaptureViewport(
 	FAutonomixActionResult& Result)
 {
 	// Get optional parameters
-	int32 MaxDimension = 1024;
+	// Default to 512px to keep base64 output within context window budgets.
+	// A 512px JPEG is ~30-80KB of base64 (~8K-20K tokens) — safe for 200K context.
+	// A 1024px PNG was ~500KB-2MB of base64 (~125K-500K tokens) — would blow 200K context.
+	int32 MaxDimension = 512;
 	Params->TryGetNumberField(TEXT("max_dimension"), MaxDimension);
-	MaxDimension = FMath::Clamp(MaxDimension, 256, 2048);
+	MaxDimension = FMath::Clamp(MaxDimension, 256, 1024);
 
 	int32 ViewportIndex = 0;
 	Params->TryGetNumberField(TEXT("viewport_index"), ViewportIndex);
@@ -129,12 +132,32 @@ FAutonomixActionResult FAutonomixViewportActions::ExecuteCaptureViewport(
 
 	UE_LOG(LogAutonomix, Log, TEXT("ViewportActions: Captured viewport %dx%d (%d pixels)"), Width, Height, Pixels.Num());
 
-	// Encode to Base64 PNG
-	FString Base64PNG = EncodePixelsToPNGBase64(Pixels, Width, Height, MaxDimension);
-	if (Base64PNG.IsEmpty())
+	// Use JPEG quality 75 — much smaller than PNG for viewport screenshots.
+	// A 512px JPEG at Q75 is typically 20-60KB → ~27-80K base64 chars → ~7-20K tokens.
+	// A 512px PNG was 200-800KB → ~270K-1M base64 chars → ~67-250K tokens.
+	// This prevents context window overflow on 200K models.
+	int32 JpegQuality = 75;
+	Params->TryGetNumberField(TEXT("quality"), JpegQuality);
+	JpegQuality = FMath::Clamp(JpegQuality, 30, 95);
+
+	FString Base64Image = EncodePixelsToBase64(Pixels, Width, Height, MaxDimension, JpegQuality);
+	if (Base64Image.IsEmpty())
 	{
-		Result.Errors.Add(TEXT("Failed to encode viewport capture to PNG."));
+		Result.Errors.Add(TEXT("Failed to encode viewport capture to JPEG."));
 		return Result;
+	}
+
+	// Log the base64 size for debugging context window issues
+	int32 Base64Len = Base64Image.Len();
+	int32 EstimatedTokens = Base64Len / 4; // ~4 chars per token
+	UE_LOG(LogAutonomix, Log, TEXT("ViewportActions: Base64 output: %d chars (~%d tokens)"), Base64Len, EstimatedTokens);
+
+	// Warn if the image is large relative to typical context windows
+	if (EstimatedTokens > 50000)
+	{
+		UE_LOG(LogAutonomix, Warning,
+			TEXT("ViewportActions: Large image (%d tokens). Consider reducing max_dimension or quality."),
+			EstimatedTokens);
 	}
 
 	// Return the Base64 image data
@@ -142,23 +165,24 @@ FAutonomixActionResult FAutonomixViewportActions::ExecuteCaptureViewport(
 	// an image content block to VLM-capable models.
 	Result.bSuccess = true;
 	Result.ResultMessage = FString::Printf(
-		TEXT("[IMAGE:base64:data:image/png;base64,%s]\n\n"
-			 "Viewport captured successfully (%dx%d, resized to max %dpx). "
+		TEXT("[IMAGE:base64:data:image/jpeg;base64,%s]\n\n"
+			 "Viewport captured successfully (%dx%d, resized to max %dpx, JPEG quality %d, ~%d tokens). "
 			 "The image shows the current editor viewport."),
-		*Base64PNG, Width, Height, MaxDimension);
+		*Base64Image, Width, Height, MaxDimension, JpegQuality, EstimatedTokens);
 
 	return Result;
 }
 
 // ============================================================================
-// PNG Encoding
+// Image Encoding (JPEG default — much smaller than PNG for viewport content)
 // ============================================================================
 
-FString FAutonomixViewportActions::EncodePixelsToPNGBase64(
+FString FAutonomixViewportActions::EncodePixelsToBase64(
 	const TArray<FColor>& Pixels,
 	int32 Width,
 	int32 Height,
-	int32 MaxDimension)
+	int32 MaxDimension,
+	int32 JpegQuality)
 {
 	if (Pixels.Num() == 0 || Width <= 0 || Height <= 0) return FString();
 
@@ -192,13 +216,13 @@ FString FAutonomixViewportActions::EncodePixelsToPNGBase64(
 		PixelsToEncode = &ResizedPixels;
 	}
 
-	// Use IImageWrapper to encode to PNG
+	// Use JPEG encoding (much smaller than PNG for photographic/3D viewport content)
 	IImageWrapperModule& ImageWrapperModule = FModuleManager::LoadModuleChecked<IImageWrapperModule>(TEXT("ImageWrapper"));
-	TSharedPtr<IImageWrapper> ImageWrapper = ImageWrapperModule.CreateImageWrapper(EImageFormat::PNG);
+	TSharedPtr<IImageWrapper> ImageWrapper = ImageWrapperModule.CreateImageWrapper(EImageFormat::JPEG);
 
 	if (!ImageWrapper.IsValid())
 	{
-		UE_LOG(LogAutonomix, Error, TEXT("ViewportActions: Failed to create PNG ImageWrapper"));
+		UE_LOG(LogAutonomix, Error, TEXT("ViewportActions: Failed to create JPEG ImageWrapper"));
 		return FString();
 	}
 
@@ -220,20 +244,21 @@ FString FAutonomixViewportActions::EncodePixelsToPNGBase64(
 		return FString();
 	}
 
-	// Get compressed PNG data
-	TArray<uint8> PNGData;
-	PNGData = ImageWrapper->GetCompressed(100);
+	// Get compressed JPEG data
+	TArray<uint8> CompressedData;
+	CompressedData = ImageWrapper->GetCompressed(JpegQuality);
 
-	if (PNGData.Num() == 0)
+	if (CompressedData.Num() == 0)
 	{
-		UE_LOG(LogAutonomix, Error, TEXT("ViewportActions: PNG compression returned empty data"));
+		UE_LOG(LogAutonomix, Error, TEXT("ViewportActions: JPEG compression returned empty data"));
 		return FString();
 	}
 
-	UE_LOG(LogAutonomix, Log, TEXT("ViewportActions: PNG encoded %dx%d -> %d bytes"), OutWidth, OutHeight, PNGData.Num());
+	UE_LOG(LogAutonomix, Log, TEXT("ViewportActions: JPEG encoded %dx%d Q%d -> %d bytes (vs PNG would be ~%dx larger)"),
+		OutWidth, OutHeight, JpegQuality, CompressedData.Num(), 5);
 
 	// Base64 encode
-	return FBase64::Encode(PNGData);
+	return FBase64::Encode(CompressedData);
 }
 
 #undef LOCTEXT_NAMESPACE

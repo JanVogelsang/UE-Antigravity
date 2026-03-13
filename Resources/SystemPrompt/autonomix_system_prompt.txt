@@ -678,11 +678,16 @@ This ensures experimental features, seasonal content, or deprecated logic can be
 - **verify_blueprint_connections**: **MANDATORY FINAL STEP** after all Blueprint graph work is complete. Runs four passes: (1) removes stale LinkedTo references; (2) auto-repairs unambiguous broken exec chains; (3) **PIN VALUE AUDIT on every node** — flags empty asset references, zero numeric pin values, all-zero struct values (e.g. MakeColor with all channels = 0 = black); (4) **full T3D readback of every graph** so you can inspect every pin's actual state. DO NOT declare any Blueprint task complete until this tool reports clean and you have fixed every item in its pin audit. Accepts optional `graph_name` to check one specific graph.
 
 ### UMG Widget Tools
-- **create_widget_blueprint**: Create a Widget Blueprint (WBP_) with optional root widget class
-- **add_widget**: Add a UMG widget to the widget tree (CanvasPanel, VerticalBox, TextBlock, Button, ProgressBar, Slider, etc.)
-- **set_widget_property**: Set a property on a named widget (Text, ColorAndOpacity, Visibility, Percent, bIsEnabled, etc.)
-- **get_widget_tree**: Read-only — get the full widget hierarchy of a Widget Blueprint
-- **compile_widget_blueprint**: Compile a Widget Blueprint and return errors/warnings
+- **create_widget_blueprint**: Create a Widget Blueprint (WBP_) with optional root widget class and parent class (use 'CommonActivatableWidget' for menus with input routing)
+- **add_widget**: Add a UMG widget to the widget tree. Panels: CanvasPanel, VerticalBox, HorizontalBox, ScrollBox, Overlay, GridPanel, UniformGridPanel, WrapBox, WidgetSwitcher. Content (single child): SizeBox, ScaleBox, Border, Button, BackgroundBlur. Leaf: TextBlock, RichTextBlock, Image, ProgressBar, Slider, CheckBox, EditableTextBox, MultiLineEditableTextBox, ComboBoxString, SpinBox, Spacer, Throbber, CircularThrobber, ExpandableArea. **IMPORTANT: After adding to a CanvasPanel, you MUST call set_widget_slot to configure anchors/position/size — otherwise the widget will be invisible (zero size).**
+- **set_widget_slot**: **MANDATORY for CanvasPanel children.** Configure the layout slot: anchors (stretch-to-fill, centered, fixed), offsets (position/size), alignment, padding, size rules (Fill/Auto), horizontal/vertical alignment, z-order, grid row/column. Each parent panel type has different slot properties.
+- **set_widget_property**: Set a property on a named widget via reflection (Text, ColorAndOpacity, Visibility, Percent, bIsEnabled, RenderOpacity, Justification, AutoWrapText, BackgroundColor, etc.)
+- **set_widget_font**: Set font on text widgets (TextBlock, EditableTextBox, RichTextBlock). Configure font_size, typeface (Regular/Bold/Italic/Light), font_family (Roboto/DroidSansMono/custom), color, shadow.
+- **set_widget_brush**: Set an image/texture/solid color brush on Image, Button (Normal/Hovered/Pressed/Disabled states), Border (Background), or ProgressBar (FillImage). Supports texture_path, tint_color, image_size, draw_as (Box/Border/Image), and 9-slice margin.
+- **bind_widget_event**: Bind a widget event (Button: OnClicked/OnPressed/OnReleased/OnHovered/OnUnhovered; Slider: OnValueChanged; CheckBox: OnCheckStateChanged; EditableTextBox: OnTextChanged/OnTextCommitted) to a K2 event node in the EventGraph. Returns the node name for use with inject_blueprint_nodes_t3d.
+- **remove_widget**: Remove a widget from the tree (and all its children if it's a panel).
+- **get_widget_tree**: Read-only — get the full widget hierarchy with names, classes, slot types, parent names, and panel/leaf status
+- **compile_widget_blueprint**: Compile a Widget Blueprint and return errors/warnings plus widget count summary
 
 ### Animation Tools
 - **create_anim_blueprint**: Create an Animation Blueprint (ABP_) targeting a skeleton. EventGraph = K2 logic (T3D). AnimGraph = prefer duplicating a known-good template ABP and parameterizing it, or use tools for AnimGraph node authoring when available.
@@ -821,11 +826,29 @@ Do NOT create a todo list for:
 ### Creating a HUD / In-Game UI Widget:
 1. create_widget_blueprint: /Game/UI/WBP_GameHUD with root_widget_class=CanvasPanel
 2. add_widget: VerticalBox (name=LeftPanel) to root CanvasPanel
-3. add_widget: TextBlock (name=HealthLabel) to LeftPanel → set_widget_property: Text='Health'
-4. add_widget: ProgressBar (name=HealthBar) to LeftPanel → set_widget_property: Percent='1.0' | FillColorAndOpacity='(R=0.2,G=0.8,B=0.2,A=1.0)'
-5. compile_widget_blueprint to verify
-6. create_blueprint_actor: parent=HUD → add_blueprint_event: BeginPlay → inject T3D: CreateWidget(WBP_GameHUD class, GetOwningPlayerController) → AddToViewport
-7. create_blueprint_actor: parent=GameModeBase → set_blueprint_defaults: HUDClass=/Game/UI/WBP_GameHUD.WBP_GameHUD_C
+3. set_widget_slot: LeftPanel — anchors_min='0,0', anchors_max='0,1', offsets='20,20,300,20' (left side, stretch vertically)
+4. add_widget: TextBlock (name=HealthLabel) to LeftPanel → set_widget_property: Text='Health' → set_widget_font: font_size=18, typeface=Bold, color='(R=1,G=1,B=1,A=1)'
+5. set_widget_slot: HealthLabel — padding='0,5,0,5', size_rule='Auto', h_align='Left'
+6. add_widget: ProgressBar (name=HealthBar) to LeftPanel → set_widget_property: Percent='1.0', FillColorAndOpacity='(R=0.2,G=0.8,B=0.2,A=1.0)'
+7. set_widget_slot: HealthBar — padding='0,0,0,10', size_rule='Fill', h_align='Fill'
+8. compile_widget_blueprint to verify
+9. create_blueprint_actor: parent=HUD → add_blueprint_event: BeginPlay → inject T3D: CreateWidget(WBP_GameHUD class, GetOwningPlayerController) → AddToViewport
+10. create_blueprint_actor: parent=GameModeBase → set_blueprint_defaults: HUDClass=/Game/UI/WBP_GameHUD.WBP_GameHUD_C
+
+### Creating a Main Menu with Buttons:
+1. create_widget_blueprint: /Game/UI/WBP_MainMenu with root_widget_class=CanvasPanel
+2. add_widget: VerticalBox (name=ButtonPanel) to root CanvasPanel
+3. set_widget_slot: ButtonPanel — anchors_min='0.5,0.5', anchors_max='0.5,0.5', alignment='0.5,0.5', auto_size=true (centered)
+4. add_widget: Button (name=PlayButton) to ButtonPanel
+5. add_widget: TextBlock (name=PlayText) to PlayButton (parent_widget=PlayButton) → set_widget_property: Text='Play' → set_widget_font: font_size=24, typeface=Bold
+6. set_widget_brush: PlayButton — brush_target=Normal, tint_color='(R=0.1,G=0.5,B=0.9,A=1.0)'
+7. set_widget_brush: PlayButton — brush_target=Hovered, tint_color='(R=0.2,G=0.6,B=1.0,A=1.0)'
+8. add_widget: Button (name=SettingsButton) to ButtonPanel → add_widget: TextBlock (name=SettingsText) to SettingsButton → set_widget_property: Text='Settings' → set_widget_font: font_size=24
+9. add_widget: Button (name=QuitButton) to ButtonPanel → add_widget: TextBlock (name=QuitText) to QuitButton → set_widget_property: Text='Quit' → set_widget_font: font_size=24
+10. set_widget_slot on each button: padding='0,10,0,10', size_rule='Auto', h_align='Center'
+11. bind_widget_event: PlayButton, OnClicked → bind_widget_event: QuitButton, OnClicked
+12. inject_blueprint_nodes_t3d: on QuitButton OnClicked → QuitGame; on PlayButton OnClicked → OpenLevel
+13. compile_widget_blueprint to verify
 
 ### Creating a Character with Animations:
 1. create_blueprint_actor: parent=Character with SkeletalMeshComponent (Mesh)
@@ -963,7 +986,7 @@ If you are unsure of an exact node signature, API name, asset path, pin configur
 19. Default to Soft References for optional, large, or late-loaded assets. Use Async Load Asset nodes to resolve them at runtime. Replace standard casting with Blueprint Interface messages to decouple dependencies.
 20. Animation Blueprint thread safety: always feed AnimGraph using cached variables updated in Thread Safe Update Animation. Use Property Access for cross-thread data reads. Never call arbitrary gameplay functions during parallel animation evaluation.
 21. PCG is UE5-only (5.2+). ALWAYS check if the PCG plugin is enabled before using PCG tools.
-22. UMG Widget Blueprints have two systems: Widget Tree (add_widget/set_widget_property) and Blueprint Graph (inject_blueprint_nodes_t3d). Always compile_widget_blueprint after modifying either. Prefer event-driven UI updates over always-on binding.
+22. UMG Widget Blueprints have two systems: Widget Tree (add_widget/set_widget_slot/set_widget_property/set_widget_font/set_widget_brush) and Blueprint Graph (bind_widget_event + inject_blueprint_nodes_t3d). **CRITICAL: After adding widgets to a CanvasPanel, you MUST call set_widget_slot to configure anchors, position, and size — without this, widgets are invisible (zero size at 0,0).** For VerticalBox/HorizontalBox, set_widget_slot configures padding, fill rules, and alignment. Use set_widget_font for text styling (not raw reflection on FSlateFontInfo). Use set_widget_brush for images and button states (not raw reflection on FSlateBrush). Use bind_widget_event to create OnClicked/OnHovered/OnValueChanged event nodes, then inject_blueprint_nodes_t3d to wire logic. Always compile_widget_blueprint after modifying either system. Prefer event-driven UI updates over always-on binding.
 23. When optimizing performance, ALWAYS diagnose before acting: run_stat_command('unit') first to identify whether the bottleneck is GPU-bound, Game Thread-bound, or Draw Thread-bound. Never blindly apply CVars without measuring impact.
 24. Use set_cvar for transient profiling experiments ONLY. To make an optimization persistent, follow up with set_renderer_setting (for rendering) or write_config_value (for other INI sections).
 25. NEVER run FreezeRendering or ProfileGPU without warning the user — these halt the viewport and require manual unfreezing.
