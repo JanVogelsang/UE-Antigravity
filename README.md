@@ -329,9 +329,11 @@ Regex-powered file content search with 2-line context before/after each match. F
 | **Mistral** | Mistral Large, Codestral, etc. | ✅ SSE | — |
 | **xAI** | Grok-3, Grok-4, etc. | ✅ SSE | — |
 | **OpenRouter** | Any model via OpenRouter | ✅ SSE | Varies |
-| **Ollama** | Any local model | ✅ SSE | — |
-| **LM Studio** | Any local model | ✅ SSE | — |
+| **Ollama** | Any local model (no API key needed) | ✅ SSE | — |
+| **LM Studio** | Any local model (no API key needed) | ✅ SSE | — |
 | **Custom** | Any OpenAI-compatible endpoint | ✅ SSE | — |
+
+> **💡 Local Models:** Ollama and LM Studio run entirely on your machine — no API key, no cloud, no cost. Just install, pull a model, and connect. See [Local Model Setup](#local-model-setup-ollama--lm-studio) below.
 
 ---
 
@@ -341,7 +343,7 @@ Regex-powered file content search with 2-line context before/after each match. F
 
 - **Unreal Engine 5.3+** (tested on 5.3, 5.4, 5.5)
 - **Visual Studio 2022** or compatible C++ compiler
-- An API key from at least one supported provider
+- An API key from a supported cloud provider **OR** a local model server (Ollama / LM Studio — no API key required)
 - **(Optional)** Git installed on PATH for checkpoint features
 
 ### Steps
@@ -358,7 +360,23 @@ Regex-powered file content search with 2-line context before/after each match. F
 
 4. **Enable the plugin** — It should be enabled by default. If not: Edit → Plugins → search "Autonomix" → Enable → Restart
 
-5. **Configure API key** — Edit → Project Settings → Plugins → Autonomix → enter your API key for your chosen provider
+5. **Configure your provider** — Edit → Project Settings → Plugins → Autonomix:
+   - **Cloud providers** (Anthropic, OpenAI, etc.): Enter your API key for your chosen provider
+   - **Local providers** (Ollama, LM Studio): No API key needed — just set the Base URL and Model ID
+
+### Local Model Setup (Ollama / LM Studio)
+
+**Ollama** (recommended for local):
+1. Install from [ollama.com](https://ollama.com)
+2. Pull a model: `ollama pull devstral:24b` (or `llama3.1:8b` for smaller GPUs)
+3. Ollama starts automatically on `http://localhost:11434`
+4. In Autonomix settings: set Provider to **Ollama (Local)**, Base URL to `http://localhost:11434`, Model ID to your pulled model name
+
+**LM Studio**:
+1. Download from [lmstudio.ai](https://lmstudio.ai)
+2. Load a model in the LM Studio UI
+3. Enable **Local Server** (starts on port 1234 by default)
+4. In Autonomix settings: set Provider to **LM Studio (Local)**, Base URL to `http://localhost:1234`, Model ID as shown in LM Studio
 
 ### Alternative: Manual Copy
 

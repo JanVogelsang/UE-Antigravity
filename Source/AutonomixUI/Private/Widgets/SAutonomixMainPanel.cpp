@@ -191,7 +191,7 @@ void SAutonomixMainPanel::Construct(const FArguments& InArgs)
 				.Text_Lambda([this]()
 				{
 					const UAutonomixDeveloperSettings* Settings = UAutonomixDeveloperSettings::Get();
-					if (Settings && Settings->IsApiKeySet())
+					if (Settings && Settings->IsActiveProviderApiKeySet())
 					{
 						FString ModelName = Settings->GetModelDisplayName();
 						FString TokenInfo = FString::Printf(TEXT(" [%d tokens]"),

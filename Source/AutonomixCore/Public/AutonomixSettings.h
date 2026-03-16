@@ -222,39 +222,41 @@ public:
 	FString OpenRouterModelId;
 
 	// ============================================================================
-	// Ollama (local model server)
+	// Ollama (local model server — NO API KEY REQUIRED)
 	// ============================================================================
 
 	/** Ollama server base URL. Default: http://localhost:11434 */
 	UPROPERTY(Config, EditAnywhere, BlueprintReadOnly, Category = "API|Ollama",
 		meta = (DisplayName = "Ollama Base URL",
-		ToolTip = "Default: http://localhost:11434 — must be running locally"))
+		ToolTip = "No API key needed — Ollama runs locally on your machine.\nDefault: http://localhost:11434\n\nSetup:\n1. Install Ollama from https://ollama.com\n2. Run: ollama pull <model> (e.g. ollama pull devstral:24b)\n3. Ollama starts automatically on localhost:11434\n4. Select 'Ollama (Local)' as your provider in Autonomix"))
 	FString OllamaBaseUrl;
 
 	/** Ollama model ID. Examples: llama3.1, qwen2.5-coder:7b, deepseek-r1:8b */
 	UPROPERTY(Config, EditAnywhere, BlueprintReadOnly, Category = "API|Ollama",
 		meta = (DisplayName = "Ollama Model ID",
-		ToolTip = "Must be pulled first via: ollama pull <model>"))
+		ToolTip = "The model name exactly as shown by 'ollama list'.\nMust be pulled first via: ollama pull <model>\n\nRecommended for Autonomix:\n  devstral:24b (best coding, 24GB VRAM)\n  qwen2.5-coder:32b (strong coding, 32GB VRAM)\n  llama3.1:8b (fast, 8GB VRAM)"))
 	FString OllamaModelId;
 
 	/** Ollama context window size in tokens. Default: 8192. */
 	UPROPERTY(Config, EditAnywhere, BlueprintReadOnly, Category = "API|Ollama",
-		meta = (DisplayName = "Ollama Context Size (tokens)", ClampMin = "512", ClampMax = "131072"))
+		meta = (DisplayName = "Ollama Context Size (tokens)", ClampMin = "512", ClampMax = "131072",
+		ToolTip = "Context window size for the Ollama model.\nHigher values use more VRAM but allow longer conversations.\nDefault: 8192. Most models support up to 32768 or 131072."))
 	int32 OllamaContextSize;
 
 	// ============================================================================
-	// LM Studio (local model server)
+	// LM Studio (local model server — NO API KEY REQUIRED)
 	// ============================================================================
 
 	/** LM Studio server base URL. Default: http://localhost:1234 */
 	UPROPERTY(Config, EditAnywhere, BlueprintReadOnly, Category = "API|LM Studio",
 		meta = (DisplayName = "LM Studio Base URL",
-		ToolTip = "Default: http://localhost:1234 — must be running with Local Server enabled"))
+		ToolTip = "No API key needed — LM Studio runs locally on your machine.\nDefault: http://localhost:1234\n\nSetup:\n1. Download LM Studio from https://lmstudio.ai\n2. Load a model in LM Studio\n3. Enable 'Local Server' in LM Studio (starts on port 1234)\n4. Select 'LM Studio (Local)' as your provider in Autonomix"))
 	FString LMStudioBaseUrl;
 
 	/** LM Studio model identifier as shown in the LM Studio UI */
 	UPROPERTY(Config, EditAnywhere, BlueprintReadOnly, Category = "API|LM Studio",
-		meta = (DisplayName = "LM Studio Model ID"))
+		meta = (DisplayName = "LM Studio Model ID",
+		ToolTip = "The model identifier as shown in LM Studio's model list.\nExample: mistralai/devstral-small-2505\n\nThe model must be loaded and the Local Server must be running."))
 	FString LMStudioModelId;
 
 	// ============================================================================
