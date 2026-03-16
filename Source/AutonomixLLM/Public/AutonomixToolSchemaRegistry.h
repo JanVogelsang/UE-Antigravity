@@ -61,6 +61,16 @@ public:
 	/** Get only enabled tool schemas */
 	TArray<TSharedPtr<FJsonObject>> GetEnabledSchemas() const;
 
+	/**
+	 * Sync schemas with actually-registered tool executors.
+	 * Any schema whose tool name has no registered executor (and is not a meta-tool)
+	 * will be disabled. This prevents the LLM from calling tools that have no
+	 * backend executor (e.g. python tools disabled in settings).
+	 *
+	 * @param RegisteredToolNames  Tool names from ActionRouter->GetRegisteredToolNames()
+	 */
+	void SyncWithRegisteredTools(const TArray<FString>& RegisteredToolNames);
+
 	// ---- Mode-based filtering (v2.0) ----
 
 	/**

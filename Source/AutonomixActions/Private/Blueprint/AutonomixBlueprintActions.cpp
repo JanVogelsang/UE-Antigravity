@@ -84,7 +84,8 @@ TArray<FString> FAutonomixBlueprintActions::GetSupportedToolNames() const
 		TEXT("connect_blueprint_pins"),
 		TEXT("add_enhanced_input_node"),
 		TEXT("modify_blueprint"),
-		TEXT("verify_blueprint_connections")
+		TEXT("verify_blueprint_connections"),
+		TEXT("set_node_pin_default")
 	};
 }
 
@@ -146,6 +147,7 @@ FAutonomixActionResult FAutonomixBlueprintActions::ExecuteAction(const TSharedRe
 	if (ToolName == TEXT("connect_blueprint_pins"))             return ExecuteConnectPins(Params, Result);
 	if (ToolName == TEXT("add_enhanced_input_node"))            return ExecuteAddEnhancedInputNode(Params, Result);
 	if (ToolName == TEXT("verify_blueprint_connections"))       return ExecuteVerifyConnections(Params, Result);
+	if (ToolName == TEXT("set_node_pin_default"))               return ExecuteSetNodePinDefault(Params, Result);
 
 	// Legacy param-based fallback dispatch
 	if (Params->HasField(TEXT("parent_class")))      return ExecuteCreateBlueprint(Params, Result);
@@ -155,7 +157,7 @@ FAutonomixActionResult FAutonomixBlueprintActions::ExecuteAction(const TSharedRe
 	if (Params->HasField(TEXT("t3d_text")))          return ExecuteInjectNodesT3D(Params, Result);
 	if (Params->HasField(TEXT("defaults")))          return ExecuteSetDefaults(Params, Result);
 
-	Result.Errors.Add(FString::Printf(TEXT("Unknown Blueprint tool: '%s'. Supported: create_blueprint_actor, add_blueprint_component, add_blueprint_variable, add_blueprint_function, add_blueprint_event, compile_blueprint, set_blueprint_defaults, set_component_properties, inject_blueprint_nodes_t3d, get_blueprint_info"), *ToolName));
+	Result.Errors.Add(FString::Printf(TEXT("Unknown Blueprint tool: '%s'. Supported: create_blueprint_actor, add_blueprint_component, add_blueprint_variable, add_blueprint_function, add_blueprint_event, compile_blueprint, set_blueprint_defaults, set_component_properties, inject_blueprint_nodes_t3d, get_blueprint_info, connect_blueprint_pins, set_node_pin_default, verify_blueprint_connections"), *ToolName));
 	return Result;
 }
 
@@ -2828,4 +2830,223 @@ bool FAutonomixBlueprintActions::PreFlightValidateT3D(
 	}
 
 	return bValid;
+}
+
+// ============================================================================
+// ExecuteSetNodePinDefault — Set default value on an existing graph node pin
+// ============================================================================
+
+FAutonomixActionResult FAutonomixBlueprintActions::ExecuteSetNodePinDefault(const TSharedRef<FJsonObject>& Params, FAutonomixActionResult& Result)
+{
+	FString AssetPath = Params->GetStringField(TEXT("asset_path"));
+	FString NodeName;
+	if (!Params->TryGetStringField(TEXT("node_name"), NodeName) || NodeName.IsEmpty())
+	{
+		Result.Errors.Add(TEXT("Missing required field: 'node_name'. Provide the internal node name (e.g. 'K2Node_CallFunction_0'). Use get_blueprint_info to find node names."));
+		return Result;
+	}
+
+	FString PinName;
+	if (!Params->TryGetStringField(TEXT("pin_name"), PinName) || PinName.IsEmpty())
+	{
+		Result.Errors.Add(TEXT("Missing required field: 'pin_name'. Provide the input pin name (e.g. 'InString', 'LevelName'). Use get_blueprint_info to find pin names."));
+		return Result;
+	}
+
+	FString Value;
+	if (!Params->TryGetStringField(TEXT("value"), Value))
+	{
+		Result.Errors.Add(TEXT("Missing required field: 'value'. Provide the default value string."));
+		return Result;
+	}
+
+	FString GraphName = TEXT("EventGraph");
+	Params->TryGetStringField(TEXT("graph_name"), GraphName);
+
+	// Load Blueprint
+	UBlueprint* Blueprint = LoadObject<UBlueprint>(nullptr, *AssetPath);
+	if (!Blueprint)
+	{
+		Result.Errors.Add(FString::Printf(TEXT("Blueprint not found: '%s'"), *AssetPath));
+		return Result;
+	}
+
+	// Find the target graph (search all graphs: UbergraphPages + FunctionGraphs)
+	UEdGraph* TargetGraph = nullptr;
+	TArray<UEdGraph*> AllGraphs;
+	Blueprint->GetAllGraphs(AllGraphs);
+	for (UEdGraph* Graph : AllGraphs)
+	{
+		if (Graph && Graph->GetName().Equals(GraphName, ESearchCase::IgnoreCase))
+		{
+			TargetGraph = Graph;
+			break;
+		}
+	}
+
+	if (!TargetGraph)
+	{
+		Result.Errors.Add(FString::Printf(TEXT("Graph '%s' not found in Blueprint '%s'."), *GraphName, *AssetPath));
+		return Result;
+	}
+
+	// Find the target node by internal name (case-insensitive)
+	UEdGraphNode* TargetNode = nullptr;
+	for (UEdGraphNode* Node : TargetGraph->Nodes)
+	{
+		if (Node && Node->GetName().Equals(NodeName, ESearchCase::IgnoreCase))
+		{
+			TargetNode = Node;
+			break;
+		}
+	}
+
+	if (!TargetNode)
+	{
+		// Build a list of available node names for the error message
+		FString AvailableNodes;
+		int32 Count = 0;
+		for (UEdGraphNode* Node : TargetGraph->Nodes)
+		{
+			if (Node && Count < 20)
+			{
+				if (Count > 0) AvailableNodes += TEXT(", ");
+				AvailableNodes += Node->GetName();
+				++Count;
+			}
+		}
+		Result.Errors.Add(FString::Printf(
+			TEXT("Node '%s' not found in graph '%s'. Available nodes: %s"),
+			*NodeName, *GraphName, *AvailableNodes));
+		return Result;
+	}
+
+	// Find the target input pin (case-insensitive)
+	UEdGraphPin* TargetPin = nullptr;
+	for (UEdGraphPin* Pin : TargetNode->Pins)
+	{
+		if (Pin && Pin->Direction == EGPD_Input &&
+			Pin->PinName.ToString().Equals(PinName, ESearchCase::IgnoreCase))
+		{
+			TargetPin = Pin;
+			break;
+		}
+	}
+
+	if (!TargetPin)
+	{
+		// Build a list of available input pin names
+		FString PinList;
+		for (UEdGraphPin* Pin : TargetNode->Pins)
+		{
+			if (Pin && Pin->Direction == EGPD_Input)
+			{
+				PinList += FString::Printf(TEXT("\n  \"%s\" (type: %s)"),
+					*Pin->PinName.ToString(), *Pin->PinType.PinCategory.ToString());
+			}
+		}
+		Result.Errors.Add(FString::Printf(
+			TEXT("Input pin '%s' not found on node '%s'. Available input pins:%s"),
+			*PinName, *NodeName, *PinList));
+		return Result;
+	}
+
+	// Reject exec pins — they don't have default values
+	if (TargetPin->PinType.PinCategory == UEdGraphSchema_K2::PC_Exec)
+	{
+		Result.Errors.Add(FString::Printf(
+			TEXT("Pin '%s' is an execution pin — execution pins do not have default values. Use connect_blueprint_pins to wire them."),
+			*PinName));
+		return Result;
+	}
+
+	// Begin transaction for undo/redo support
+	Blueprint->Modify();
+	TargetNode->Modify();
+
+	const UEdGraphSchema_K2* K2Schema = GetDefault<UEdGraphSchema_K2>();
+	FString PinCategory = TargetPin->PinType.PinCategory.ToString();
+	FString DispatchMethod;
+
+	// Dispatch based on pin type
+	if (TargetPin->PinType.PinCategory == UEdGraphSchema_K2::PC_Object ||
+		TargetPin->PinType.PinCategory == UEdGraphSchema_K2::PC_Class ||
+		TargetPin->PinType.PinCategory == UEdGraphSchema_K2::PC_Interface)
+	{
+		// Hard object/class/interface references — must load the asset and use TrySetDefaultObject
+		DispatchMethod = TEXT("TrySetDefaultObject");
+
+		UObject* LoadedAsset = nullptr;
+		if (!Value.IsEmpty() && !Value.Equals(TEXT("None"), ESearchCase::IgnoreCase))
+		{
+			// Determine the expected class from the pin's sub-category
+			UClass* ExpectedClass = UObject::StaticClass();
+			if (TargetPin->PinType.PinSubCategoryObject.IsValid())
+			{
+				UClass* SubClass = Cast<UClass>(TargetPin->PinType.PinSubCategoryObject.Get());
+				if (SubClass) ExpectedClass = SubClass;
+			}
+
+			LoadedAsset = StaticLoadObject(ExpectedClass, nullptr, *Value);
+			if (!LoadedAsset)
+			{
+				Result.Warnings.Add(FString::Printf(
+					TEXT("Could not load object at path '%s' (expected class: %s). Setting pin to null."),
+					*Value, *ExpectedClass->GetName()));
+			}
+		}
+
+		K2Schema->TrySetDefaultObject(*TargetPin, LoadedAsset);
+	}
+	else if (TargetPin->PinType.PinCategory == UEdGraphSchema_K2::PC_Text)
+	{
+		// FText pins — use TrySetDefaultText for localization correctness
+		DispatchMethod = TEXT("TrySetDefaultText");
+		FText NewText = FText::FromString(Value);
+		K2Schema->TrySetDefaultText(*TargetPin, NewText);
+	}
+	else if (TargetPin->PinType.PinCategory == UEdGraphSchema_K2::PC_SoftObject ||
+			 TargetPin->PinType.PinCategory == UEdGraphSchema_K2::PC_SoftClass)
+	{
+		// Soft references — stored as asset path strings in DefaultValue
+		DispatchMethod = TEXT("TrySetDefaultValue (soft reference)");
+		K2Schema->TrySetDefaultValue(*TargetPin, Value);
+	}
+	else
+	{
+		// All other types: bool, int, float, string, name, byte/enum, struct (FVector, FRotator, etc.)
+		DispatchMethod = TEXT("TrySetDefaultValue");
+		K2Schema->TrySetDefaultValue(*TargetPin, Value);
+	}
+
+	// Post-modification notification
+	TargetNode->PinDefaultValueChanged(TargetPin);
+	TargetGraph->NotifyGraphChanged();
+	FBlueprintEditorUtils::MarkBlueprintAsModified(Blueprint);
+
+	// Compile to bake the new default into bytecode
+	bool bCompileOk = CompileAndReport(Blueprint, Result, true);
+	Blueprint->GetOutermost()->MarkPackageDirty();
+
+	// Read back the actual value to confirm it was set
+	FString ActualValue = TargetPin->DefaultValue;
+	FString ActualObject = TargetPin->DefaultObject ? TargetPin->DefaultObject->GetPathName() : TEXT("");
+	FString ActualText = TargetPin->DefaultTextValue.ToString();
+
+	FString ConfirmValue;
+	if (!ActualObject.IsEmpty())
+		ConfirmValue = ActualObject;
+	else if (!ActualText.IsEmpty())
+		ConfirmValue = ActualText;
+	else
+		ConfirmValue = ActualValue;
+
+	Result.bSuccess = bCompileOk;
+	Result.ResultMessage = FString::Printf(
+		TEXT("Set pin default: %s.%s = \"%s\" (via %s, pin type: %s).\nConfirmed value: \"%s\".\nCompile: %s."),
+		*NodeName, *PinName, *Value, *DispatchMethod, *PinCategory,
+		*ConfirmValue,
+		bCompileOk ? TEXT("SUCCESS") : TEXT("FAILED"));
+	Result.ModifiedAssets.Add(AssetPath);
+	return Result;
 }

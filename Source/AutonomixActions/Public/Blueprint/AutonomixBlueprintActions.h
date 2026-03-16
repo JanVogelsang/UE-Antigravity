@@ -224,6 +224,23 @@ private:
 	 */
 	FAutonomixActionResult ExecuteVerifyConnections(const TSharedRef<FJsonObject>& Params, FAutonomixActionResult& Result);
 
+	/**
+	 * Set a default value on an existing Blueprint graph node's input pin.
+	 *
+	 * Uses UEdGraphSchema_K2::TrySetDefaultValue (for literals/structs/enums),
+	 * TrySetDefaultObject (for hard object/class references), or
+	 * TrySetDefaultText (for FText pins) — the production-correct approach
+	 * that validates type compatibility and integrates with the undo system.
+	 *
+	 * Parameters:
+	 *   - asset_path (string, required): Content path of the Blueprint
+	 *   - node_name (string, required): Internal node name (e.g. "K2Node_CallFunction_0")
+	 *   - pin_name (string, required): Input pin name (e.g. "InString", "LevelName")
+	 *   - value (string, required): The default value to set (format depends on pin type)
+	 *   - graph_name (string, optional): Target graph. Default: "EventGraph".
+	 */
+	FAutonomixActionResult ExecuteSetNodePinDefault(const TSharedRef<FJsonObject>& Params, FAutonomixActionResult& Result);
+
 	// =========================================================================
 	// Helpers
 	// =========================================================================

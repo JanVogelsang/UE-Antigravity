@@ -407,6 +407,37 @@
         },
         "required": ["asset_path"]
       }
+    },
+
+    {
+      "name": "set_node_pin_default",
+      "description": "Set the default value of an INPUT pin on an existing Blueprint graph node.\n\nThis is the CORRECT tool for setting literal values on pins of already-existing nodes.\nUse this when you need to set a value AFTER node injection or on pre-existing nodes.\n\nDO NOT confuse with:\n  - set_blueprint_defaults: sets CDO (Class Default Object) member variable defaults — NOT graph node pins\n  - set_component_properties: sets SCS component template properties — NOT graph node pins\n  - inject_blueprint_nodes_t3d: can set pin defaults at creation time via T3D DefaultValue, but CANNOT modify existing nodes\n\nPIN TYPE FORMATS:\n  bool:          \"true\" or \"false\"\n  int:           \"42\"\n  float/double:  \"3.14\"\n  string:        Raw text (no quotes). Example: ThirdPersonMap\n  name:          Raw text. Example: PlayerStart_0\n  text (FText):  Raw text — automatically wrapped via FText::FromString\n  enum:          Short entry name (e.g. \"Automatic\", not \"EFireMode::Automatic\")\n  FVector:       \"X=1.0 Y=2.0 Z=3.0\"\n  FRotator:      \"P=0.0 Y=90.0 R=0.0\"\n  FLinearColor:  \"(R=1.0,G=0.0,B=0.0,A=1.0)\"\n  FTransform:    \"Translation=(X=0,Y=0,Z=0),Rotation=(X=0,Y=0,Z=0,W=1),Scale3D=(X=1,Y=1,Z=1)\"\n  object ref:    Asset path (e.g. \"/Game/Meshes/SM_Rock.SM_Rock\") — loaded via StaticLoadObject\n  soft ref:      Asset path string (e.g. \"/Game/Maps/ThirdPersonMap.ThirdPersonMap\")\n\nWORKFLOW:\n1. Call get_blueprint_info to find the internal node name and pin names\n2. Call set_node_pin_default with the exact node_name, pin_name, and formatted value\n3. The tool validates the pin type, sets the value, and recompiles the Blueprint\n\nEXAMPLES:\n  Set a string literal:  { node_name: \"K2Node_ConvName_0\", pin_name: \"InString\", value: \"ThirdPersonMap\" }\n  Set a level name:      { node_name: \"K2Node_CallFunction_1\", pin_name: \"LevelName\", value: \"/Game/Maps/Level1\" }\n  Set a float:           { node_name: \"K2Node_CallFunction_2\", pin_name: \"Duration\", value: \"2.5\" }\n  Set an enum:           { node_name: \"K2Node_CallFunction_3\", pin_name: \"TeleportType\", value: \"None\" }\n  Set an object ref:     { node_name: \"K2Node_CallFunction_4\", pin_name: \"SoundToPlay\", value: \"/Game/Audio/SFX_Click.SFX_Click\" }",
+      "input_schema": {
+        "type": "object",
+        "properties": {
+          "asset_path": {
+            "type": "string",
+            "description": "Content path of the Blueprint containing the node"
+          },
+          "node_name": {
+            "type": "string",
+            "description": "Internal node name (e.g. 'K2Node_CallFunction_0', 'K2Node_ConvName_1'). Get this from get_blueprint_info."
+          },
+          "pin_name": {
+            "type": "string",
+            "description": "Input pin name on the node (e.g. 'InString', 'LevelName', 'Duration', 'Value'). Get this from get_blueprint_info."
+          },
+          "value": {
+            "type": "string",
+            "description": "The default value to set. Format depends on pin type — see tool description for format guide."
+          },
+          "graph_name": {
+            "type": "string",
+            "description": "Name of the graph containing the node. Default: 'EventGraph'. Use the function name for function graphs."
+          }
+        },
+        "required": ["asset_path", "node_name", "pin_name", "value"]
+      }
     }
   ]
 }

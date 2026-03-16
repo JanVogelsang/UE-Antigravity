@@ -27,6 +27,9 @@ public:
 	/** Get all registered executor names */
 	TArray<FName> GetRegisteredExecutorNames() const;
 
+	/** Get all registered tool names (keys of the executor map) */
+	TArray<FString> GetRegisteredToolNames() const;
+
 	/** Find executor by tool name */
 	TSharedPtr<IAutonomixActionExecutor> FindExecutorForTool(const FString& ToolName) const;
 

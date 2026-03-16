@@ -385,6 +385,14 @@ void SAutonomixMainPanel::InitializeBackend()
 	ActionRouter = MakeShared<FAutonomixActionRouter>();
 	RegisterExecutors();
 
+	// Sync schemas with registered executors: disable any schema that has no
+	// backend executor (e.g. python_tools.json loaded but bEnablePythonTools=false).
+	// This prevents the LLM from calling tools that would produce "No executor registered" errors.
+	if (ToolSchemaRegistry.IsValid() && ActionRouter.IsValid())
+	{
+		ToolSchemaRegistry->SyncWithRegisteredTools(ActionRouter->GetRegisteredToolNames());
+	}
+
 	ExecutionJournal = MakeShared<FAutonomixExecutionJournal>();
 	EditorContextCapture = MakeShared<FAutonomixEditorContextCapture>();
 	ContextGatherer = MakeShared<FAutonomixContextGatherer>();

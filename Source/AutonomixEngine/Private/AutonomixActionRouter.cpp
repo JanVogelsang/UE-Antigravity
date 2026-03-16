@@ -73,6 +73,13 @@ TArray<FName> FAutonomixActionRouter::GetRegisteredExecutorNames() const
 	return Names;
 }
 
+TArray<FString> FAutonomixActionRouter::GetRegisteredToolNames() const
+{
+	TArray<FString> Names;
+	ExecutorMap.GetKeys(Names);
+	return Names;
+}
+
 TSharedPtr<IAutonomixActionExecutor> FAutonomixActionRouter::FindExecutorForTool(const FString& ToolName) const
 {
 	const TSharedRef<IAutonomixActionExecutor>* Found = ExecutorMap.Find(ToolName);

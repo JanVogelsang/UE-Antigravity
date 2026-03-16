@@ -202,6 +202,49 @@ TArray<TSharedPtr<FJsonObject>> FAutonomixToolSchemaRegistry::GetEnabledSchemas(
 	return Result;
 }
 
+void FAutonomixToolSchemaRegistry::SyncWithRegisteredTools(const TArray<FString>& RegisteredToolNames)
+{
+	// Build a set for O(1) lookups
+	TSet<FString> RegisteredSet;
+	for (const FString& Name : RegisteredToolNames)
+	{
+		RegisteredSet.Add(Name);
+	}
+
+	// Meta-tools are always available even without an executor (they are handled
+	// by the main panel directly, not through the ActionRouter)
+	const TArray<FString>& AlwaysAvailable = GetAlwaysAvailableTools();
+
+	int32 DisabledCount = 0;
+	for (const auto& Pair : ToolSchemas)
+	{
+		const FString& ToolName = Pair.Key;
+
+		// Skip meta-tools — they're handled outside the executor pipeline
+		if (AlwaysAvailable.Contains(ToolName))
+		{
+			continue;
+		}
+
+		if (!RegisteredSet.Contains(ToolName))
+		{
+			// This schema has no executor registered — disable it so the LLM won't see it
+			DisabledTools.Add(ToolName);
+			++DisabledCount;
+		}
+		else
+		{
+			// Executor exists — make sure it's not disabled by a previous sync
+			DisabledTools.Remove(ToolName);
+		}
+	}
+
+	if (DisabledCount > 0)
+	{
+		UE_LOG(LogAutonomix, Log, TEXT("ToolSchemaRegistry: SyncWithRegisteredTools disabled %d schemas with no registered executor."), DisabledCount);
+	}
+}
+
 // ============================================================================
 // Mode-based filtering (v2.0)
 // ============================================================================
