@@ -438,6 +438,31 @@
         },
         "required": ["asset_path", "node_name", "pin_name", "value"]
       }
+    },
+    {
+      "name": "delete_blueprint_nodes",
+      "description": "Delete one or more nodes from a Blueprint graph by their internal names.\n\nUse this to:\n  - Remove DUPLICATE nodes (e.g. if inject_blueprint_nodes_t3d was called twice and created redundant copies)\n  - Remove ORPHANED nodes that are disconnected and no longer needed\n  - Clean up nodes that don't belong to the current task scope\n  - Remove incorrect nodes before re-injecting corrected versions\n\nWORKFLOW:\n1. Call get_blueprint_info to see all nodes and their internal names\n2. Identify nodes to delete by their internal names (e.g. 'K2Node_CallFunction_3')\n3. Call delete_blueprint_nodes with the array of names\n4. The tool breaks all pin connections, removes the nodes, and recompiles\n\nIMPORTANT: Use internal node names (e.g. 'K2Node_Event_0'), NOT display titles.\nAlways call get_blueprint_info first to get current node names.",
+      "input_schema": {
+        "type": "object",
+        "properties": {
+          "asset_path": {
+            "type": "string",
+            "description": "Content path of the Blueprint (e.g. '/Game/UI/BP_MenuGameMode')"
+          },
+          "node_names": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "Array of internal node names to delete (e.g. ['K2Node_CallFunction_3', 'K2Node_Event_1'])"
+          },
+          "graph_name": {
+            "type": "string",
+            "description": "Name of the graph to delete from. Default: 'EventGraph'. Use the function name for function graphs."
+          }
+        },
+        "required": ["asset_path", "node_names"]
+      }
     }
   ]
 }

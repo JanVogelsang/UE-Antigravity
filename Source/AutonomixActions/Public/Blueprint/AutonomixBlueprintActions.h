@@ -241,6 +241,21 @@ private:
 	 */
 	FAutonomixActionResult ExecuteSetNodePinDefault(const TSharedRef<FJsonObject>& Params, FAutonomixActionResult& Result);
 
+	/**
+	 * Delete one or more nodes from a Blueprint graph by their internal names.
+	 *
+	 * Use this to remove duplicate nodes, orphaned nodes, or nodes that are no longer
+	 * needed for the task. Always call get_blueprint_info first to see the current
+	 * node inventory before deleting.
+	 *
+	 * Parameters:
+	 *   - asset_path (string, required): Content path of the Blueprint
+	 *   - node_names (array of string, required): Internal node names to delete
+	 *     (e.g. ["K2Node_CallFunction_3", "K2Node_Event_1"])
+	 *   - graph_name (string, optional): Target graph. Default: "EventGraph".
+	 */
+	FAutonomixActionResult ExecuteDeleteNodes(const TSharedRef<FJsonObject>& Params, FAutonomixActionResult& Result);
+
 	// =========================================================================
 	// Helpers
 	// =========================================================================

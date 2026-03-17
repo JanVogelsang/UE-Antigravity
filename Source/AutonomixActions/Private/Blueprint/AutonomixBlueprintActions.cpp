@@ -85,7 +85,8 @@ TArray<FString> FAutonomixBlueprintActions::GetSupportedToolNames() const
 		TEXT("add_enhanced_input_node"),
 		TEXT("modify_blueprint"),
 		TEXT("verify_blueprint_connections"),
-		TEXT("set_node_pin_default")
+		TEXT("set_node_pin_default"),
+		TEXT("delete_blueprint_nodes")
 	};
 }
 
@@ -148,6 +149,7 @@ FAutonomixActionResult FAutonomixBlueprintActions::ExecuteAction(const TSharedRe
 	if (ToolName == TEXT("add_enhanced_input_node"))            return ExecuteAddEnhancedInputNode(Params, Result);
 	if (ToolName == TEXT("verify_blueprint_connections"))       return ExecuteVerifyConnections(Params, Result);
 	if (ToolName == TEXT("set_node_pin_default"))               return ExecuteSetNodePinDefault(Params, Result);
+	if (ToolName == TEXT("delete_blueprint_nodes"))             return ExecuteDeleteNodes(Params, Result);
 
 	// Legacy param-based fallback dispatch
 	if (Params->HasField(TEXT("parent_class")))      return ExecuteCreateBlueprint(Params, Result);
@@ -1402,46 +1404,72 @@ FAutonomixActionResult FAutonomixBlueprintActions::ExecuteInjectNodesT3D(const T
 
 	Blueprint->Modify();
 
-	// CRITICAL: Sanitize imported nodes before compilation.
+	// CRITICAL: Sanitize ALL graph nodes before compilation (not just imported ones).
 	//
 	// When AI-generated T3D has LinkedTo references to nodes that aren't present
 	// in the graph (wrong node names, non-existent nodes, malformed cross-refs),
 	// FEdGraphUtilities::ImportNodesFromText creates broken UEdGraphPin::LinkedTo
 	// entries pointing to null or destroyed UEdGraphPin objects.
 	//
+	// Additionally, ImportNodesFromText can corrupt EXISTING nodes' pins —
+	// e.g. a pre-existing node's pin array may end up with null entries.
+	//
 	// If these are not cleaned up before CompileBlueprint, the internal call to
 	// FBlueprintEditorUtils::MarkBlueprintAsStructurallyModified → RefreshNodes
-	// → ReconstructNode hits check(Pin) in EdGraphSchema_K2.cpp causing a crash.
+	// → ReconstructNode hits check(Pin) in EdGraphSchema_K2.cpp:6737 causing
+	// an editor crash (Assertion failed: Pin).
 	//
-	// Fix: walk every pin on every imported node and remove null/stale LinkedTo refs.
-	// Also remove links that point back to pins on nodes NOT in our graph (orphaned refs).
+	// Fix v2: Walk EVERY node in the ENTIRE graph (not just imported nodes):
+	//   1. Remove null entries from Node->Pins arrays
+	//   2. Remove null/stale LinkedTo refs on all pins
+	//   3. Remove refs to nodes not present in the graph (orphaned T3D cross-refs)
 	{
-		// Build a set of all node names currently in the graph for fast lookup
+		// Build a set of all valid node pointers in the graph for fast lookup
+		TSet<UEdGraphNode*> ValidGraphNodes;
 		TSet<FString> GraphNodeNames;
 		for (UEdGraphNode* GNode : TargetGraph->Nodes)
 		{
-			if (GNode) GraphNodeNames.Add(GNode->GetName());
+			if (GNode)
+			{
+				ValidGraphNodes.Add(GNode);
+				GraphNodeNames.Add(GNode->GetName());
+			}
 		}
 
 		int32 TotalSanitisedLinks = 0;
-		for (UEdGraphNode* Node : ImportedNodes)
+		int32 TotalNullPinsRemoved = 0;
+
+		// Iterate ALL nodes in the graph, not just imported ones
+		for (UEdGraphNode* Node : TargetGraph->Nodes)
 		{
 			if (!Node) continue;
 
+			// Step 1: Remove null entries from the Pins array itself.
+			// This prevents check(Pin) assertion in ReconstructNode.
+			int32 NullPins = Node->Pins.RemoveAll([](UEdGraphPin* P) { return P == nullptr; });
+			if (NullPins > 0)
+			{
+				TotalNullPinsRemoved += NullPins;
+				UE_LOG(LogAutonomix, Warning,
+					TEXT("BlueprintActions: Removed %d null pin entry(s) from node '%s' Pins array."),
+					NullPins, *Node->GetName());
+			}
+
+			// Step 2: Clean LinkedTo refs on every pin
 			for (UEdGraphPin* Pin : Node->Pins)
 			{
-				if (!Pin) continue;
+				if (!Pin) continue;  // Should not happen after step 1, but defensive
 
 				// Remove any LinkedTo entry that:
 				// (a) is a null pointer
 				// (b) has a null owning node
 				// (c) points to a node not present in the graph (orphaned T3D cross-ref)
-				int32 RemovedCount = Pin->LinkedTo.RemoveAll([&GraphNodeNames](UEdGraphPin* LinkedPin) -> bool
+				int32 RemovedCount = Pin->LinkedTo.RemoveAll([&ValidGraphNodes](UEdGraphPin* LinkedPin) -> bool
 				{
 					if (!LinkedPin) return true;
 					UEdGraphNode* OwningNode = LinkedPin->GetOwningNodeUnchecked();
 					if (!OwningNode) return true;
-					if (!GraphNodeNames.Contains(OwningNode->GetName())) return true;
+					if (!ValidGraphNodes.Contains(OwningNode)) return true;
 					return false;
 				});
 
@@ -1449,7 +1477,7 @@ FAutonomixActionResult FAutonomixBlueprintActions::ExecuteInjectNodesT3D(const T
 				{
 					TotalSanitisedLinks += RemovedCount;
 					UE_LOG(LogAutonomix, Warning,
-						TEXT("BlueprintActions: Removed %d broken LinkedTo ref(s) on pin '%s' of node '%s' (orphaned T3D cross-references)."),
+						TEXT("BlueprintActions: Removed %d broken LinkedTo ref(s) on pin '%s' of node '%s'."),
 						RemovedCount,
 						*Pin->PinName.ToString(),
 						*Node->GetName());
@@ -1457,11 +1485,19 @@ FAutonomixActionResult FAutonomixBlueprintActions::ExecuteInjectNodesT3D(const T
 			}
 		}
 
+		if (TotalNullPinsRemoved > 0)
+		{
+			Result.Warnings.Add(FString::Printf(
+				TEXT("SANITISER: Removed %d null pin(s) from graph nodes. ")
+				TEXT("This prevented an editor crash (check(Pin) assertion in EdGraphSchema_K2)."),
+				TotalNullPinsRemoved));
+		}
+
 		if (TotalSanitisedLinks > 0)
 		{
 			Result.Warnings.Add(FString::Printf(
-				TEXT("SANITISER: Removed %d broken LinkedTo reference(s) from injected nodes. ")
-				TEXT("These are T3D cross-references that point to nodes not present in the current graph injection batch. ")
+				TEXT("SANITISER: Removed %d broken LinkedTo reference(s) from graph nodes. ")
+				TEXT("These are references to null, destroyed, or orphaned pins. ")
 				TEXT("Affected pins are now disconnected. Call verify_blueprint_connections to diagnose and repair missing wires."),
 				TotalSanitisedLinks));
 		}
@@ -3047,6 +3083,159 @@ FAutonomixActionResult FAutonomixBlueprintActions::ExecuteSetNodePinDefault(cons
 		*NodeName, *PinName, *Value, *DispatchMethod, *PinCategory,
 		*ConfirmValue,
 		bCompileOk ? TEXT("SUCCESS") : TEXT("FAILED"));
+	Result.ModifiedAssets.Add(AssetPath);
+	return Result;
+}
+
+// ============================================================================
+// ExecuteDeleteNodes — Remove nodes from a Blueprint graph by name
+// ============================================================================
+
+FAutonomixActionResult FAutonomixBlueprintActions::ExecuteDeleteNodes(const TSharedRef<FJsonObject>& Params, FAutonomixActionResult& Result)
+{
+	FString AssetPath = Params->GetStringField(TEXT("asset_path"));
+	FString GraphName = TEXT("EventGraph");
+	Params->TryGetStringField(TEXT("graph_name"), GraphName);
+
+	// Parse node_names array
+	const TArray<TSharedPtr<FJsonValue>>* NodeNamesArray = nullptr;
+	if (!Params->TryGetArrayField(TEXT("node_names"), NodeNamesArray) || !NodeNamesArray || NodeNamesArray->Num() == 0)
+	{
+		Result.Errors.Add(TEXT("Missing required field: 'node_names'. Provide an array of internal node names to delete (e.g. [\"K2Node_CallFunction_3\", \"K2Node_Event_1\"])."));
+		return Result;
+	}
+
+	TArray<FString> NamesToDelete;
+	for (const TSharedPtr<FJsonValue>& Val : *NodeNamesArray)
+	{
+		if (Val.IsValid() && Val->Type == EJson::String)
+		{
+			FString Name = Val->AsString();
+			if (!Name.IsEmpty())
+			{
+				NamesToDelete.Add(Name);
+			}
+		}
+	}
+
+	if (NamesToDelete.Num() == 0)
+	{
+		Result.Errors.Add(TEXT("node_names array contained no valid string entries."));
+		return Result;
+	}
+
+	// Load Blueprint
+	UBlueprint* Blueprint = LoadObject<UBlueprint>(nullptr, *AssetPath);
+	if (!Blueprint)
+	{
+		Result.Errors.Add(FString::Printf(TEXT("Blueprint not found: '%s'"), *AssetPath));
+		return Result;
+	}
+
+	// Find graph
+	UEdGraph* TargetGraph = FindOrCreateEventGraph(Blueprint, GraphName);
+	if (!TargetGraph)
+	{
+		for (UEdGraph* G : Blueprint->FunctionGraphs)
+		{
+			if (G && G->GetName() == GraphName)
+			{
+				TargetGraph = G;
+				break;
+			}
+		}
+	}
+	if (!TargetGraph)
+	{
+		Result.Errors.Add(FString::Printf(
+			TEXT("Graph '%s' not found in Blueprint '%s'. Use get_blueprint_info to list available graphs."),
+			*GraphName, *AssetPath));
+		return Result;
+	}
+
+	Blueprint->Modify();
+
+	// Find and remove matching nodes
+	TArray<FString> Deleted;
+	TArray<FString> NotFound;
+	TSet<FString> NamesToDeleteSet(NamesToDelete);
+
+	// Collect nodes to delete (can't modify array during iteration)
+	TArray<UEdGraphNode*> NodesToRemove;
+	for (UEdGraphNode* Node : TargetGraph->Nodes)
+	{
+		if (Node && NamesToDeleteSet.Contains(Node->GetName()))
+		{
+			NodesToRemove.Add(Node);
+		}
+	}
+
+	// Track which names we found
+	TSet<FString> FoundNames;
+	for (UEdGraphNode* Node : NodesToRemove)
+	{
+		FoundNames.Add(Node->GetName());
+	}
+
+	for (const FString& Name : NamesToDelete)
+	{
+		if (!FoundNames.Contains(Name))
+		{
+			NotFound.Add(Name);
+		}
+	}
+
+	// Delete nodes: break all pin connections first, then remove from graph
+	for (UEdGraphNode* Node : NodesToRemove)
+	{
+		FString NodeTitle = Node->GetNodeTitle(ENodeTitleType::FullTitle).ToString();
+		FString NodeName = Node->GetName();
+
+		// Break all connections on all pins (prevents dangling LinkedTo refs)
+		for (UEdGraphPin* Pin : Node->Pins)
+		{
+			if (Pin)
+			{
+				Pin->BreakAllPinLinks();
+			}
+		}
+
+		// Remove node from graph
+		TargetGraph->RemoveNode(Node);
+		Deleted.Add(FString::Printf(TEXT("%s (%s)"), *NodeName, *NodeTitle));
+
+		UE_LOG(LogAutonomix, Log, TEXT("BlueprintActions: Deleted node '%s' (%s) from graph '%s' of '%s'"),
+			*NodeName, *NodeTitle, *GraphName, *AssetPath);
+	}
+
+	if (Deleted.Num() == 0 && NotFound.Num() > 0)
+	{
+		Result.Errors.Add(FString::Printf(
+			TEXT("None of the specified nodes were found in graph '%s'. Not found: %s. Use get_blueprint_info to see current node names."),
+			*GraphName, *FString::Join(NotFound, TEXT(", "))));
+		return Result;
+	}
+
+	// Compile
+	bool bCompileOk = CompileAndReport(Blueprint, Result, true);
+	Blueprint->GetOutermost()->MarkPackageDirty();
+
+	// Build result message
+	FString DeletedList = FString::Join(Deleted, TEXT("\n  "));
+	FString ResultMsg = FString::Printf(
+		TEXT("Deleted %d node(s) from graph '%s' of '%s':\n  %s\nCompile: %s."),
+		Deleted.Num(), *GraphName, *AssetPath, *DeletedList,
+		bCompileOk ? TEXT("SUCCESS") : TEXT("FAILED"));
+
+	if (NotFound.Num() > 0)
+	{
+		Result.Warnings.Add(FString::Printf(
+			TEXT("Could not find %d node(s): %s. They may have already been deleted or the names are incorrect."),
+			NotFound.Num(), *FString::Join(NotFound, TEXT(", "))));
+	}
+
+	Result.bSuccess = true;
+	Result.ResultMessage = ResultMsg;
 	Result.ModifiedAssets.Add(AssetPath);
 	return Result;
 }
