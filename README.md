@@ -93,7 +93,7 @@ Think of it as **Cursor/Roo Code, but for Unreal Engine** — with deep engine i
 
 ## Complete Tool Reference
 
-### 🔧 Blueprint Tools (13 tools)
+### 🔧 Blueprint Tools (15 tools)
 
 | Tool | Description |
 |------|-------------|
@@ -107,6 +107,8 @@ Think of it as **Cursor/Roo Code, but for Unreal Engine** — with deep engine i
 | `connect_blueprint_pins` | Wire pins between nodes with type validation and pin name suggestions |
 | `set_blueprint_defaults` | Set CDO properties and component template values |
 | `set_component_properties` | Assign meshes, transforms, collision profiles, and generic properties |
+| `set_node_pin_default` | Set default values on existing graph node input pins (literals, objects, structs, FText) |
+| `delete_blueprint_nodes` | Remove nodes by internal name — prevents duplicates, cleans up orphaned nodes |
 | `compile_blueprint` | Compile and return all errors/warnings |
 | `add_enhanced_input_node` | Add Enhanced Input Action nodes (can't be created via T3D) |
 | `verify_blueprint_connections` | Multi-pass connection audit with auto-repair + pin value diagnostics |
