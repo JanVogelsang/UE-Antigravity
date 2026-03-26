@@ -130,12 +130,57 @@ bool FAutonomixToolSchemaRegistry::LoadSchemaFile(const FString& FilePath)
 	return false;
 }
 
+/** Maximum characters for a tool description in schemas sent to the LLM.
+ *  Long descriptions waste tokens without improving tool selection.
+ *  ~200 chars = ~50 tokens per tool. At 93 tools = ~4,650 tokens for descriptions.
+ *  Without truncation: ~35,000 tokens. Savings: ~86%. */
+static constexpr int32 MaxDescriptionChars = 200;
+
+/** Truncate a description string to fit within the token budget */
+static FString TruncateDescription(const FString& Desc)
+{
+	if (Desc.Len() <= MaxDescriptionChars)
+	{
+		return Desc;
+	}
+	// Truncate at a word boundary near the limit
+	int32 CutPos = MaxDescriptionChars;
+	while (CutPos > 0 && Desc[CutPos] != TEXT(' '))
+	{
+		CutPos--;
+	}
+	if (CutPos == 0) CutPos = MaxDescriptionChars;
+	return Desc.Left(CutPos) + TEXT("...");
+}
+
+/** Create a lightweight clone of a schema with truncated description.
+ *  Only clones when truncation is needed — returns original pointer otherwise. */
+static TSharedPtr<FJsonObject> MakeTruncatedSchema(const TSharedPtr<FJsonObject>& Original)
+{
+	if (!Original.IsValid()) return Original;
+
+	FString Desc;
+	if (!Original->TryGetStringField(TEXT("description"), Desc) || Desc.Len() <= MaxDescriptionChars)
+	{
+		return Original;  // No truncation needed
+	}
+
+	// Shallow clone: copy all fields, replace only description
+	TSharedPtr<FJsonObject> Clone = MakeShared<FJsonObject>();
+	for (const auto& Pair : Original->Values)
+	{
+		Clone->SetField(Pair.Key, Pair.Value);
+	}
+	Clone->SetStringField(TEXT("description"), TruncateDescription(Desc));
+	return Clone;
+}
+
 TArray<TSharedPtr<FJsonObject>> FAutonomixToolSchemaRegistry::GetAllSchemas() const
 {
 	TArray<TSharedPtr<FJsonObject>> Result;
 	for (const auto& Pair : ToolSchemas)
 	{
-		Result.Add(Pair.Value);
+		Result.Add(MakeTruncatedSchema(Pair.Value));
 	}
 	return Result;
 }
@@ -196,7 +241,7 @@ TArray<TSharedPtr<FJsonObject>> FAutonomixToolSchemaRegistry::GetEnabledSchemas(
 	{
 		if (!DisabledTools.Contains(Pair.Key))
 		{
-			Result.Add(Pair.Value);
+			Result.Add(MakeTruncatedSchema(Pair.Value));
 		}
 	}
 	return Result;
@@ -407,7 +452,7 @@ TArray<TSharedPtr<FJsonObject>> FAutonomixToolSchemaRegistry::GetSchemasForMode(
 		// Always-available tools are included in every mode
 		if (AlwaysAvailable.Contains(ToolName))
 		{
-			Result.Add(Pair.Value);
+			Result.Add(MakeTruncatedSchema(Pair.Value));
 			continue;
 		}
 
@@ -424,7 +469,7 @@ TArray<TSharedPtr<FJsonObject>> FAutonomixToolSchemaRegistry::GetSchemasForMode(
 
 		if (bAllowed)
 		{
-			Result.Add(Pair.Value);
+			Result.Add(MakeTruncatedSchema(Pair.Value));
 		}
 	}
 

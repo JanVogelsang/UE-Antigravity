@@ -1390,6 +1390,92 @@ void FAutonomixOpenAICompatClient::HandleRequestComplete(
 
 	ConsecutiveRateLimits = 0;
 
+	// =========================================================================
+	// NON-STREAMING RESPONSE PARSING
+	//
+	// When streaming is disabled (Ollama, LM Studio, Custom endpoints), the
+	// response body is a complete JSON object — NOT SSE events. The SSE progress
+	// handler never fires, so we must parse the full body here.
+	//
+	// Chat Completions non-streaming format:
+	// {
+	//   "choices": [{"message": {"role": "assistant", "content": "...", "tool_calls": [...]}}],
+	//   "usage": {"prompt_tokens": N, "completion_tokens": N}
+	// }
+	// =========================================================================
+	if (!bStreamingEnabled)
+	{
+		FString FullBody = Response->GetContentAsString();
+		UE_LOG(LogAutonomix, Log, TEXT("OpenAICompatClient: Non-streaming response received (%d bytes)."), FullBody.Len());
+
+		TSharedPtr<FJsonObject> ResponseObj;
+		TSharedRef<TJsonReader<>> JsonReader = TJsonReaderFactory<>::Create(FullBody);
+		if (FJsonSerializer::Deserialize(JsonReader, ResponseObj) && ResponseObj.IsValid())
+		{
+			// Extract usage
+			const TSharedPtr<FJsonObject>* UsageObj = nullptr;
+			if (ResponseObj->TryGetObjectField(TEXT("usage"), UsageObj))
+			{
+				ExtractTokenUsage(*UsageObj);
+			}
+
+			// Extract choices[0].message
+			const TArray<TSharedPtr<FJsonValue>>* Choices = nullptr;
+			if (ResponseObj->TryGetArrayField(TEXT("choices"), Choices) && Choices->Num() > 0)
+			{
+				const TSharedPtr<FJsonObject>* ChoiceObj = nullptr;
+				if ((*Choices)[0]->TryGetObject(ChoiceObj))
+				{
+					const TSharedPtr<FJsonObject>* MessageObj = nullptr;
+					if ((*ChoiceObj)->TryGetObjectField(TEXT("message"), MessageObj))
+					{
+						// Text content
+						FString Content;
+						if ((*MessageObj)->TryGetStringField(TEXT("content"), Content) && !Content.IsEmpty())
+						{
+							CurrentAssistantContent = Content;
+							StreamingTextDelegate.Broadcast(CurrentMessageId, Content);
+						}
+
+						// Tool calls
+						const TArray<TSharedPtr<FJsonValue>>* ToolCalls = nullptr;
+						if ((*MessageObj)->TryGetArrayField(TEXT("tool_calls"), ToolCalls))
+						{
+							for (const TSharedPtr<FJsonValue>& TCVal : *ToolCalls)
+							{
+								const TSharedPtr<FJsonObject>* TCObj = nullptr;
+								if (!TCVal->TryGetObject(TCObj)) continue;
+
+								FPendingToolCallState State;
+								(*TCObj)->TryGetStringField(TEXT("id"), State.ToolUseId);
+								State.Index = PendingToolCallStates.Num();
+
+								const TSharedPtr<FJsonObject>* FuncObj = nullptr;
+								if ((*TCObj)->TryGetObjectField(TEXT("function"), FuncObj))
+								{
+									(*FuncObj)->TryGetStringField(TEXT("name"), State.ToolName);
+									(*FuncObj)->TryGetStringField(TEXT("arguments"), State.ArgumentsAccumulated);
+								}
+
+								PendingToolCallStates.Add(State);
+							}
+						}
+					}
+				}
+			}
+		}
+		else
+		{
+			UE_LOG(LogAutonomix, Error, TEXT("OpenAICompatClient: Failed to parse non-streaming response JSON."));
+		}
+
+		FinalizeResponse();
+		return;
+	}
+
+	// =========================================================================
+	// STREAMING RESPONSE FLUSH (SSE mode only)
+	// =========================================================================
 	// CRITICAL FIX: Do NOT re-process the full response body here.
 	// HandleRequestProgress() already processed all bytes incrementally via
 	// LastBytesReceived offset tracking. Calling ProcessSSEChunk(FullBody) would
