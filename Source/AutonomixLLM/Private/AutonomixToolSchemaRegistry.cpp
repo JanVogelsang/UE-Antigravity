@@ -568,6 +568,70 @@ FString FAutonomixToolSchemaRegistry::GetModeDisplayName(EAutonomixAgentMode Mod
 	return TEXT("General");
 }
 
+TArray<TSharedPtr<FJsonObject>> FAutonomixToolSchemaRegistry::GetEssentialSchemas() const
+{
+	// =========================================================================
+	// Essential tool set for local providers (Ollama, LM Studio).
+	//
+	// Local models with 8K-64K context windows cannot handle 90+ tool schemas.
+	// The full schema set alone = ~5,000 tokens (post-truncation); with project
+	// context and system prompt, this easily exceeds the model's capacity.
+	//
+	// Symptoms when overloaded:
+	//   - "I currently do not have the capability to create files"
+	//   - "I can't access your files or personal data"
+	//   - Model ignores tools entirely and responds with plain text
+	//
+	// This method returns only the ~15 core tools needed for useful work.
+	// Token cost: ~750 tokens (vs ~5,000 for full set, ~35K for untruncated).
+	//
+	// The tools selected mirror Roo Code's core tool set:
+	//   - File system: read_file, write_file, apply_diff, list_directory, search_files
+	//   - Context: search_assets, get_blueprint_info
+	//   - Meta: attempt_completion, ask_followup_question, update_todo_list, switch_mode, new_task
+	// =========================================================================
+	static const TSet<FString> EssentialToolNames = {
+		// File operations (core agentic workflow)
+		TEXT("read_file"),
+		TEXT("write_file"),
+		TEXT("apply_diff"),
+		TEXT("list_directory"),
+		TEXT("search_files"),
+
+		// Asset/context queries
+		TEXT("search_assets"),
+		TEXT("get_blueprint_info"),
+		TEXT("get_project_context"),
+
+		// Blueprint basics (most common UE task)
+		TEXT("inject_blueprint_nodes_t3d"),
+		TEXT("connect_blueprint_pins"),
+
+		// Meta-tools (always needed)
+		TEXT("attempt_completion"),
+		TEXT("ask_followup_question"),
+		TEXT("update_todo_list"),
+		TEXT("switch_mode"),
+		TEXT("new_task"),
+	};
+
+	TArray<TSharedPtr<FJsonObject>> Result;
+	for (const auto& Pair : ToolSchemas)
+	{
+		if (DisabledTools.Contains(Pair.Key)) continue;
+
+		if (EssentialToolNames.Contains(Pair.Key))
+		{
+			Result.Add(MakeTruncatedSchema(Pair.Value));
+		}
+	}
+
+	UE_LOG(LogAutonomix, Log, TEXT("ToolSchemaRegistry: GetEssentialSchemas() returned %d tools (from %d total)."),
+		Result.Num(), ToolSchemas.Num());
+
+	return Result;
+}
+
 FString FAutonomixToolSchemaRegistry::GetModeWhenToUse(EAutonomixAgentMode Mode)
 {
 	switch (Mode)

@@ -1031,7 +1031,20 @@ TSharedPtr<FJsonObject> FAutonomixOpenAICompatClient::BuildChatCompletionsBody(
 	if (ToolSchemas.Num() > 0)
 	{
 		Body->SetArrayField(TEXT("tools"), ConvertToolSchemas(ToolSchemas));
-		Body->SetStringField(TEXT("tool_choice"), TEXT("auto"));
+
+		// CRITICAL FIX (local providers): Do NOT send tool_choice for Ollama/LMStudio.
+		// Some local models (devstral, qwen, llama) do not support tool_choice and may:
+		//   - Ignore tools entirely ("I can't create files")
+		//   - Return 400 errors
+		//   - Silently drop the tools array
+		// Roo Code's native-ollama.ts never sends tool_choice — only passes the tools array.
+		// Cloud providers benefit from tool_choice:"auto" to hint tool usage.
+		const bool bIsLocalProvider = (Provider == EAutonomixProvider::Ollama ||
+		                               Provider == EAutonomixProvider::LMStudio);
+		if (!bIsLocalProvider)
+		{
+			Body->SetStringField(TEXT("tool_choice"), TEXT("auto"));
+		}
 	}
 
 	return Body;
