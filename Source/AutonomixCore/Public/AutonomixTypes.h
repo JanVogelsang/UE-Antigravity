@@ -36,7 +36,8 @@ enum class EAutonomixMessageRole : uint8
 	Assistant	UMETA(DisplayName = "Assistant"),
 	System		UMETA(DisplayName = "System"),
 	ToolResult	UMETA(DisplayName = "Tool Result"),
-	Error		UMETA(DisplayName = "Error")
+	Error		UMETA(DisplayName = "Error"),
+	None 		UMETA(DisplayName = "None")
 };
 
 /** Type of action the AI is requesting */
@@ -184,7 +185,10 @@ enum class EAutonomixProvider : uint8
 	LMStudio		UMETA(DisplayName = "LM Studio (Local)"),
 
 	/** Custom — any OpenAI-compatible endpoint (LiteLLM, Groq, Together, etc.) */
-	Custom			UMETA(DisplayName = "Custom (OpenAI-Compatible)")
+	Custom			UMETA(DisplayName = "Custom (OpenAI-Compatible)"),
+
+	/** GitHub Copilot (uses device flow + token exchange) */
+	GitHubCopilot	UMETA(DisplayName = "GitHub Copilot (Student/Pro)")
 };
 
 /** Reasoning effort level for models that support it (OpenAI o-series, Gemini 2.5+, DeepSeek-R1) */
@@ -341,7 +345,7 @@ struct AUTONOMIXCORE_API FAutonomixMessage
 	GENERATED_BODY()
 
 	/** Unique ID for this message */
-	UPROPERTY(BlueprintReadOnly, Category = "Autonomix")
+	UPROPERTY(BlueprintReadOnly, Category = "Autonomix", Meta = (IgnoreForMemberInitializationTest))
 	FGuid MessageId;
 
 	/** Role of the sender */
@@ -367,6 +371,9 @@ struct AUTONOMIXCORE_API FAutonomixMessage
 	/** Whether this message is still being streamed */
 	UPROPERTY(BlueprintReadOnly, Category = "Autonomix")
 	bool bIsStreaming = false;
+
+	UPROPERTY(BlueprintReadOnly, Category = "Autonomix")
+	bool bIsCollapsible = false;
 
 	// ---- Context Management Tags (non-destructive condense/truncate) ----
 
@@ -451,7 +458,7 @@ struct AUTONOMIXCORE_API FAutonomixAction
 	GENERATED_BODY()
 
 	/** Unique ID for this action */
-	UPROPERTY(BlueprintReadOnly, Category = "Autonomix")
+	UPROPERTY(BlueprintReadOnly, Category = "Autonomix", Meta = (IgnoreForMemberInitializationTest))
 	FGuid ActionId;
 
 	/** Human-readable description of this action */
@@ -494,7 +501,7 @@ struct AUTONOMIXCORE_API FAutonomixActionPlan
 	GENERATED_BODY()
 
 	/** Unique ID for this plan */
-	UPROPERTY(BlueprintReadOnly, Category = "Autonomix")
+	UPROPERTY(BlueprintReadOnly, Category = "Autonomix", Meta = (IgnoreForMemberInitializationTest))
 	FGuid PlanId;
 
 	/** Human-readable summary of the full plan */
@@ -530,7 +537,7 @@ struct AUTONOMIXCORE_API FAutonomixActionResult
 	bool bSuccess = false;
 
 	/** The action that was executed */
-	UPROPERTY(BlueprintReadOnly, Category = "Autonomix")
+	UPROPERTY(BlueprintReadOnly, Category = "Autonomix", Meta = (IgnoreForMemberInitializationTest))
 	FGuid ActionId;
 
 	/** Human-readable result message */
@@ -618,7 +625,7 @@ struct AUTONOMIXCORE_API FAutonomixActionExecutionRecord
 	GENERATED_BODY()
 
 	/** Unique ID for this execution record */
-	UPROPERTY(BlueprintReadOnly, Category = "Autonomix")
+	UPROPERTY(BlueprintReadOnly, Category = "Autonomix", Meta = (IgnoreForMemberInitializationTest))
 	FGuid RecordId;
 
 	/** Name of the tool that was executed */
@@ -876,7 +883,7 @@ struct AUTONOMIXCORE_API FAutonomixTodoItem
 {
 	GENERATED_BODY()
 
-	UPROPERTY(BlueprintReadOnly, Category = "Autonomix")
+	UPROPERTY(BlueprintReadOnly, Category = "Autonomix", Meta = (IgnoreForMemberInitializationTest))
 	FString Id;
 
 	UPROPERTY(BlueprintReadOnly, Category = "Autonomix")

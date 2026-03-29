@@ -18,12 +18,27 @@ void SAutonomixChatView::Construct(const FArguments& InArgs)
 
 void SAutonomixChatView::AddMessage(const FAutonomixMessage& Message)
 {
+	if (Message.Content.IsEmpty())
+	{
+		return;
+	}
+
+	bool bShowRoleLabel = true;
+	if (LastMessageRole.IsSet() && LastMessageRole.GetValue() == Message.Role)
+	{
+		bShowRoleLabel = false;
+	}
+
 	MessageContainer->AddSlot()
 		.AutoHeight()
 		.Padding(4.0f, 2.0f)
 		[
-			SNew(SAutonomixMessage).Message(Message)
+			SNew(SAutonomixMessage)
+			.Message(Message)
+			.ShowRoleLabel(bShowRoleLabel)
 		];
+
+	LastMessageRole = Message.Role;
 
 	if (bAutoScroll)
 	{
@@ -31,7 +46,7 @@ void SAutonomixChatView::AddMessage(const FAutonomixMessage& Message)
 	}
 }
 
-void SAutonomixChatView::UpdateStreamingMessage(const FGuid& MessageId, const FString& DeltaText)
+void SAutonomixChatView::UpdateStreamingMessage(const FGuid& MessageId, const FString& DeltaText, EAutonomixMessageRole Role)
 {
 	// Find the last SAutonomixMessage child widget and append text to it
 	// The streaming message is always the last one added
@@ -42,7 +57,17 @@ void SAutonomixChatView::UpdateStreamingMessage(const FGuid& MessageId, const FS
 		TSharedPtr<SAutonomixMessage> MsgWidget = StaticCastSharedRef<SAutonomixMessage>(LastChild);
 		if (MsgWidget.IsValid())
 		{
-			MsgWidget->AppendText(DeltaText);
+			if (Role == EAutonomixMessageRole::None || Role == MsgWidget->GetMessageData().Role)
+			{
+				// If Role is None, or matches the existing message role, append as normal
+				MsgWidget->AppendText(DeltaText);
+			}
+			else
+			{
+				// If last message role doesn't match the update role, we need to add a new message for the new role
+				FAutonomixMessage NewMsg(Role, DeltaText);
+				AddMessage(NewMsg);
+			}
 		}
 	}
 
@@ -55,6 +80,7 @@ void SAutonomixChatView::UpdateStreamingMessage(const FGuid& MessageId, const FS
 void SAutonomixChatView::ClearMessages()
 {
 	MessageContainer->ClearChildren();
+	LastMessageRole.Reset();
 }
 
 void SAutonomixChatView::ScrollToBottom()

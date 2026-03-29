@@ -1525,7 +1525,7 @@ void SAutonomixMainPanel::OnStreamingText(const FGuid& MessageId, const FString&
 {
 	if (ChatView.IsValid())
 	{
-		ChatView->UpdateStreamingMessage(CurrentStreamingMessageId, DeltaText);
+		ChatView->UpdateStreamingMessage(CurrentStreamingMessageId, DeltaText, EAutonomixMessageRole::Assistant);
 	}
 }
 
@@ -1744,9 +1744,6 @@ void SAutonomixMainPanel::OnRequestCompletedPostContextManagement()
 				TEXT("If there is more work to do, use the appropriate tool to continue. ")
 				TEXT("Do NOT respond with plain text only — you MUST call a tool."));
 
-			FAutonomixMessage NudgeUIMsg(EAutonomixMessageRole::System,
-				TEXT("🔄 AI responded without tools. Prompting to use attempt_completion or continue..."));
-			ChatView->AddMessage(NudgeUIMsg);
 			SaveTabsToDisk();
 			ContinueAgenticLoop();
 			return;
@@ -1773,8 +1770,6 @@ void SAutonomixMainPanel::OnRequestCompletedPostContextManagement()
 				FAutonomixMessage& NudgeMsg = ConversationManager->AddUserMessage(
 					TEXT("[AUTONOMIX SYSTEM] Please continue the task. If it is complete, ")
 					TEXT("you MUST call attempt_completion. Do not respond with text only."));
-				FAutonomixMessage NudgeUIMsg(EAutonomixMessageRole::System, TEXT("🔄 Prompting the AI to continue..."));
-				ChatView->AddMessage(NudgeUIMsg);
 				SaveTabsToDisk();
 				ContinueAgenticLoop();
 				return;
@@ -1903,7 +1898,9 @@ void SAutonomixMainPanel::ProcessToolCallQueue()
 	UE_LOG(LogAutonomix, Log, TEXT("MainPanel: Processing %d tool calls (loop %d)"),
 		ToolCallQueue.Num(), AgenticLoopCount);
 
-	for (const FAutonomixToolCall& ToolCall : ToolCallQueue)
+	TArray<FAutonomixToolCall> ActiveToolCalls = MoveTemp(ToolCallQueue);
+	ToolCallQueue.Empty();
+	for (const FAutonomixToolCall& ToolCall : ActiveToolCalls)
 	{
 		// Phase 1: Check for tool repetition (identical consecutive calls)
 		if (ToolRepetitionDetector.IsValid())
@@ -1919,7 +1916,7 @@ void SAutonomixMainPanel::ProcessToolCallQueue()
 				if (UserResponse != EAppReturnType::Yes)
 				{
 					// User chose to stop
-					ToolCallQueue.Empty();
+					ActiveToolCalls.Empty();
 					bIsProcessing = false;
 					bInAgenticLoop = false;
 					AgenticLoopCount = 0;
@@ -1934,8 +1931,16 @@ void SAutonomixMainPanel::ProcessToolCallQueue()
 			}
 		}
 
-		FAutonomixMessage ToolMsg(EAutonomixMessageRole::System,
-			FString::Printf(TEXT("🔧 Executing: %s"), *ToolCall.ToolName));
+		// Add a collapsible "Executing" system message; body will be filled with the result below
+		FString ExecutingParamsStr;
+		if (ToolCall.InputParams.IsValid())
+		{
+			TSharedRef<TJsonWriter<>> ParamsWriter = TJsonWriterFactory<>::Create(&ExecutingParamsStr);
+			FJsonSerializer::Serialize(ToolCall.InputParams.ToSharedRef(), ParamsWriter);
+		}
+		FAutonomixMessage ToolMsg(EAutonomixMessageRole::Assistant,
+			FString::Printf(TEXT("🔧 Executing: %s\n%s\n\n"), *ToolCall.ToolName, *ExecutingParamsStr));
+		ToolMsg.bIsCollapsible = true;
 		ChatView->AddMessage(ToolMsg);
 
 		bool bIsError = false;
@@ -1949,14 +1954,20 @@ void SAutonomixMainPanel::ProcessToolCallQueue()
 			ToolResultMsg.ToolName = TEXT("error");
 		}
 
-		FAutonomixMessage ResultUIMsg(EAutonomixMessageRole::System,
-			FString::Printf(TEXT("  -> %s: %s"),
-				bIsError ? TEXT("❌") : TEXT("✅"),
-				*ResultContent.Left(200)));
-		ChatView->AddMessage(ResultUIMsg);
+		// Append the full result into the previously added executing message (no truncation)
+		FString ResultToAppend = ResultContent;
+		if (bIsError)
+		{
+			ResultToAppend = FString::Printf(TEXT("❌ %s"), *ResultContent);
+		}
+		else
+		{
+			ResultToAppend = FString::Printf(TEXT("✅ %s"), *ResultContent);
+		}
+		ChatView->UpdateStreamingMessage(ToolMsg.MessageId, ResultToAppend);
 	}
 
-	ToolCallQueue.Empty();
+	ActiveToolCalls.Empty();
 	SaveTabsToDisk();
 
 	// CRITICAL: Check if attempt_completion stopped the loop during tool execution.
@@ -2320,7 +2331,9 @@ void SAutonomixMainPanel::OnToolCallsRejected(const FAutonomixActionPlan& Plan)
 	UE_LOG(LogAutonomix, Log, TEXT("MainPanel: User rejected %d tool calls."), ToolCallQueue.Num());
 
 	// Send rejection as tool_result errors so Claude knows the tools were not executed
-	for (const FAutonomixToolCall& ToolCall : ToolCallQueue)
+	TArray<FAutonomixToolCall> ActiveToolCalls = MoveTemp(ToolCallQueue);
+	ToolCallQueue.Empty();
+	for (const FAutonomixToolCall& ToolCall : ActiveToolCalls)
 	{
 		FAutonomixMessage& ToolResultMsg = ConversationManager->AddToolResultMessage(
 			ToolCall.ToolUseId,
@@ -2329,7 +2342,7 @@ void SAutonomixMainPanel::OnToolCallsRejected(const FAutonomixActionPlan& Plan)
 		ToolResultMsg.ToolName = TEXT("error");
 	}
 
-	ToolCallQueue.Empty();
+	ActiveToolCalls.Empty();
 	SaveTabsToDisk();
 
 	FAutonomixMessage RejectedMsg(EAutonomixMessageRole::System,
