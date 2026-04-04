@@ -115,10 +115,13 @@ void FAutonomixClaudeClient::SendMessageInternal(
 	if (Settings)
 	{
 		CurrentRequest->SetTimeout(Settings->RequestTimeoutSeconds);
-		// NOTE: Do NOT set ActivityTimeout for SSE streaming requests. ActivityTimeout
-		// (CURLOPT_LOW_SPEED_TIME) kills connections during natural pauses in SSE data
-		// delivery (model thinking, generating tool JSON), causing premature completion
-		// with empty responses (stop_reason="", 0 tool calls, 0 tokens).
+
+		// CRITICAL: Explicitly disable activity timeout for SSE streaming.
+		// ActivityTimeout (CURLOPT_LOW_SPEED_TIME) kills connections during natural
+		// pauses in SSE data delivery (model thinking, generating tool JSON).
+		// Setting to 0 disables it. NOT calling SetActivityTimeout lets UE5's
+		// default (~30s from HttpActivityTimeout CVar) take effect and kill us.
+		CurrentRequest->SetActivityTimeout(0.0f);
 	}
 
 	CurrentRequest->OnRequestProgress64().BindRaw(this, &FAutonomixClaudeClient::HandleRequestProgress);
@@ -649,15 +652,21 @@ void FAutonomixClaudeClient::HandleRequestComplete(
 		ErrorReceivedDelegate.Broadcast(Err);
 	}
 
-	FinalizeResponse();
-	RequestCompletedDelegate.Broadcast(true);
-
+	// CRITICAL: Log BEFORE FinalizeResponse/Broadcast because the broadcast
+	// synchronously triggers the agentic loop, which calls SendMessageInternal
+	// and resets LastStopReason, PendingToolCalls, LastTokenUsage for the NEXT request.
 	UE_LOG(LogAutonomix, Log, TEXT("ClaudeClient: Request completed (stop_reason=%s). %d tool calls, %d input tokens, %d output tokens."),
 		*LastStopReason, PendingToolCalls.Num(), LastTokenUsage.InputTokens, LastTokenUsage.OutputTokens);
 
-	// Clear CurrentRequest to avoid holding a stale reference and to ensure
-	// future stale callbacks from this request are properly rejected
-	CurrentRequest.Reset();
+	FinalizeResponse();
+
+	// CRITICAL: Do NOT call CurrentRequest.Reset() after this broadcast!
+	// The broadcast synchronously triggers ChatSession -> agentic loop -> SendMessageInternal
+	// which sets CurrentRequest = Request B. If we Reset() after broadcast returns, we destroy
+	// Request B. Stale callback protection already works naturally: when Request B starts,
+	// CurrentRequest points to B, and any lingering Request A callbacks fail the
+	// "if (Request != CurrentRequest)" guard because Request A != Request B.
+	RequestCompletedDelegate.Broadcast(true);
 }
 
 void FAutonomixClaudeClient::RetryWithTrimmedHistory(const TArray<FAutonomixMessage>& TrimmedHistory)
