@@ -33,6 +33,35 @@ TArray<FAutonomixTodoItem> SAutonomixTodoList::ParseMarkdownChecklist(const FStr
 		FString Trimmed = Line.TrimStartAndEnd();
 		if (Trimmed.IsEmpty()) continue;
 
+		// Strip markdown bullet prefixes: "- ", "* ", "+ ", "1. ", "2. ", etc.
+		// Claude typically sends "- [x] Task" or "* [x] Task"
+		if (Trimmed.Len() >= 2)
+		{
+			TCHAR First = Trimmed[0];
+			if ((First == TEXT('-') || First == TEXT('*') || First == TEXT('+')) && Trimmed[1] == TEXT(' '))
+			{
+				Trimmed = Trimmed.Mid(2).TrimStart();
+			}
+			else if (FChar::IsDigit(First))
+			{
+				// Handle numbered lists like "1. [x] Task", "12. [x] Task"
+				int32 DotIdx = INDEX_NONE;
+				for (int32 c = 1; c < Trimmed.Len(); c++)
+				{
+					if (Trimmed[c] == TEXT('.'))
+					{
+						DotIdx = c;
+						break;
+					}
+					if (!FChar::IsDigit(Trimmed[c])) break;
+				}
+				if (DotIdx != INDEX_NONE && DotIdx + 1 < Trimmed.Len() && Trimmed[DotIdx + 1] == TEXT(' '))
+				{
+					Trimmed = Trimmed.Mid(DotIdx + 2).TrimStart();
+				}
+			}
+		}
+
 		EAutonomixTodoStatus Status = EAutonomixTodoStatus::Pending;
 		FString Content;
 
