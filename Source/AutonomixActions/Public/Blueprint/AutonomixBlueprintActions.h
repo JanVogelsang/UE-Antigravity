@@ -314,6 +314,26 @@ private:
 	 */
 	static FString BuildPinAuditReport(const TSet<UEdGraphNode*>& Nodes);
 
+	/**
+	 * Build a compact connection verification report for a set of nodes.
+	 *
+	 * Token-efficient replacement for FEdGraphUtilities::ExportNodesToText().
+	 * Walks UEdGraphNode objects in memory to produce a structured summary of:
+	 *   - Node inventory (name, title, position)
+	 *   - Execution chain (exec pin connections and broken chains with ⚠ warnings)
+	 *   - Data connections (non-exec pin wiring between nodes)
+	 *   - Non-default pin values on unwired input pins
+	 *   - Disconnected input pins with no value (potential authoring errors)
+	 *
+	 * Token savings: ~80-90% compared to ExportNodesToText()
+	 * (200-500 tokens vs 3,000-8,000 for a typical 5-node injection)
+	 *
+	 * @param Nodes      Set of nodes to report on
+	 * @param GraphName  Name of the containing graph (for the report header)
+	 * @return Formatted multi-line report string
+	 */
+	static FString BuildCompactConnectionReport(const TSet<UEdGraphNode*>& Nodes, const FString& GraphName);
+
 	/** Map a friendly event name to its Kismet function name and owning class. */
 	static bool ResolveEventMapping(const FString& EventName, FName& OutFunctionName, UClass*& OutOwnerClass);
 

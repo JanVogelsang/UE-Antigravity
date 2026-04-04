@@ -144,6 +144,21 @@ private:
 	/** Estimate tokens for a single message (rough: ~4 chars per token) */
 	static int32 EstimateMessageTokens(const FAutonomixMessage& Message);
 
+	/**
+	 * Token optimization: evict (summarize) old verbose tool results in a message array.
+	 *
+	 * Tool results that have already been processed by the AI (i.e., there is a
+	 * subsequent assistant message) and exceed the eviction threshold are replaced
+	 * with a compact one-line summary. The ToolUseId is preserved to maintain
+	 * API structural validity (Claude requires matching tool_use_id references).
+	 *
+	 * Only the Content field is modified; the original full results remain in
+	 * the stored History for export/replay.
+	 *
+	 * Called by GetEffectiveHistory() before returning the filtered array.
+	 */
+	static void EvictOldToolResults(TArray<FAutonomixMessage>& Messages);
+
 	/** Serialize a message to JSON */
 	static TSharedPtr<FJsonObject> MessageToJson(const FAutonomixMessage& Message);
 

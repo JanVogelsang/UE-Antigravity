@@ -100,6 +100,94 @@ void FAutonomixConversationManager::FinalizeStreamingMessage(const FGuid& Messag
 }
 
 // ============================================================================
+// Tool Result Eviction — Token Optimization (Phase 1D)
+// ============================================================================
+
+void FAutonomixConversationManager::EvictOldToolResults(TArray<FAutonomixMessage>& Messages)
+{
+	// Threshold: tool results larger than this (in chars) are eligible for eviction.
+	// ~500 tokens at 4 chars/token = 2000 chars. Only results that have been
+	// "consumed" (followed by an assistant message) are evicted.
+	static constexpr int32 EvictionThresholdChars = 2000;
+
+	// Walk backwards to find the LAST tool_result index that has a subsequent
+	// assistant message. We never evict the most recent tool_result because
+	// the AI hasn't responded to it yet.
+	int32 LastAssistantIdx = -1;
+	for (int32 i = Messages.Num() - 1; i >= 0; --i)
+	{
+		if (Messages[i].Role == EAutonomixMessageRole::Assistant)
+		{
+			LastAssistantIdx = i;
+			break;
+		}
+	}
+
+	if (LastAssistantIdx < 0) return; // No assistant messages — nothing to evict
+
+	int32 EvictedCount = 0;
+	int32 TokensSaved = 0;
+
+	for (int32 i = 0; i < LastAssistantIdx; ++i)
+	{
+		FAutonomixMessage& Msg = Messages[i];
+		if (Msg.Role != EAutonomixMessageRole::ToolResult) continue;
+		if (Msg.Content.Len() <= EvictionThresholdChars) continue;
+
+		// Check there's an assistant message after this tool result
+		// (i.e., the AI has already consumed this result)
+		bool bConsumed = false;
+		for (int32 j = i + 1; j <= LastAssistantIdx; ++j)
+		{
+			if (Messages[j].Role == EAutonomixMessageRole::Assistant)
+			{
+				bConsumed = true;
+				break;
+			}
+		}
+		if (!bConsumed) continue;
+
+		// Build a compact summary from the first ~200 chars
+		int32 OriginalLen = Msg.Content.Len();
+		FString Summary;
+
+		// Try to extract a meaningful first line
+		int32 NewlineIdx = INDEX_NONE;
+		Msg.Content.FindChar(TEXT('\n'), NewlineIdx);
+		if (NewlineIdx != INDEX_NONE && NewlineIdx < 200)
+		{
+			Summary = Msg.Content.Left(NewlineIdx);
+		}
+		else
+		{
+			Summary = Msg.Content.Left(200);
+			if (OriginalLen > 200) Summary += TEXT("...");
+		}
+
+		// Look for success/error indicators
+		bool bHasSuccess = Msg.Content.Contains(TEXT("SUCCESS")) || Msg.Content.Contains(TEXT("success"));
+		bool bHasError = Msg.Content.Contains(TEXT("ERROR")) || Msg.Content.Contains(TEXT("FAILED"));
+		FString StatusHint = bHasError ? TEXT(" [had errors]") : (bHasSuccess ? TEXT(" [succeeded]") : TEXT(""));
+
+		int32 EstTokensSaved = (OriginalLen - Summary.Len()) / ApproxCharsPerToken;
+		TokensSaved += EstTokensSaved;
+
+		Msg.Content = FString::Printf(
+			TEXT("[evicted — %d chars, ~%d tokens saved%s] %s"),
+			OriginalLen, EstTokensSaved, *StatusHint, *Summary);
+
+		EvictedCount++;
+	}
+
+	if (EvictedCount > 0)
+	{
+		UE_LOG(LogAutonomix, Log,
+			TEXT("ConversationManager: Evicted %d old tool result(s), saving ~%d tokens."),
+			EvictedCount, TokensSaved);
+	}
+}
+
+// ============================================================================
 // Context Management: GetEffectiveHistory (v3.0)
 // Ported from Roo Code's getEffectiveApiHistory() in condense/index.ts
 // ============================================================================
@@ -191,6 +279,7 @@ TArray<FAutonomixMessage> FAutonomixConversationManager::GetEffectiveHistory() c
 			Result.Add(Msg);
 		}
 
+		EvictOldToolResults(Result);
 		return Result;
 	}
 
@@ -323,6 +412,7 @@ TArray<FAutonomixMessage> FAutonomixConversationManager::GetEffectiveHistory() c
 		}
 	}
 
+	EvictOldToolResults(Result);
 	return Result;
 }
 
