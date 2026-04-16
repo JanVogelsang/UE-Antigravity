@@ -17,6 +17,7 @@
 void SAutonomixInputArea::Construct(const FArguments& InArgs)
 {
 	OnPromptSubmitted = InArgs._OnPromptSubmitted;
+	OnStopRequested = InArgs._OnStopRequested;
 
 	ChildSlot
 	[
@@ -56,7 +57,7 @@ void SAutonomixInputArea::Construct(const FArguments& InArgs)
 					.AutoHeight()
 					[
 						SNew(STextBlock)
-						.Text(FText::FromString(TEXT("@file /command  •  Ctrl+Enter to send")))
+						.Text(FText::FromString(TEXT("@file /command  •  Ctrl+Enter to send  •  Esc to stop")))
 						.ColorAndOpacity(FLinearColor(0.4f, 0.4f, 0.4f))
 						.Font(FCoreStyle::GetDefaultFontStyle("Regular", 8))
 					]
@@ -98,18 +99,50 @@ void SAutonomixInputArea::Construct(const FArguments& InArgs)
 					BuildAutoApproveToggle()
 				]
 
-				// Send button
+				// Send / Stop button overlay — only one is visible at a time
 				+ SVerticalBox::Slot()
 				.AutoHeight()
 				[
 					SAssignNew(SendButtonContainer, SBorder)
 					.Padding(0)
 					[
-						SNew(SButton)
-						.Text(FText::FromString(TEXT("▶ Send")))
-						.ToolTipText(FText::FromString(TEXT("Send prompt (Ctrl+Enter)")))
-						.OnClicked(FOnClicked::CreateSP(this, &SAutonomixInputArea::OnSendClicked))
-						.ButtonColorAndOpacity(FLinearColor(0.2f, 0.6f, 1.0f))
+						SNew(SOverlay)
+
+						// Send button — visible when Idle or Error
+						+ SOverlay::Slot()
+						[
+							SAssignNew(SendButton, SButton)
+							.Text(FText::FromString(TEXT("\u25B6 Send")))
+							.ToolTipText(FText::FromString(TEXT("Send prompt (Ctrl+Enter)")))
+							.OnClicked(FOnClicked::CreateSP(this, &SAutonomixInputArea::OnSendClicked))
+							.ButtonColorAndOpacity(FLinearColor(0.2f, 0.6f, 1.0f))
+							.Visibility_Lambda([this]()
+							{
+								return (CurrentConversationState == EConversationState::Idle
+									|| CurrentConversationState == EConversationState::Error)
+									? EVisibility::Visible : EVisibility::Collapsed;
+							})
+						]
+
+						// Stop button — visible when Streaming
+						+ SOverlay::Slot()
+						[
+							SAssignNew(StopButton, SButton)
+							.Text(FText::FromString(TEXT("\u23F9 Stop")))
+							.ToolTipText(FText::FromString(TEXT("Stop current request (Escape)")))
+							.OnClicked(FOnClicked::CreateSP(this, &SAutonomixInputArea::OnStopClicked))
+							.ButtonColorAndOpacity(FLinearColor(0.9f, 0.3f, 0.3f))
+							.Visibility_Lambda([this]()
+							{
+								return (CurrentConversationState == EConversationState::Streaming)
+									? EVisibility::Visible : EVisibility::Collapsed;
+							})
+							.IsEnabled_Lambda([this]()
+							{
+								// Disabled during Cancelling state to prevent double-stop
+								return CurrentConversationState == EConversationState::Streaming;
+							})
+						]
 					]
 				]
 			]
@@ -141,6 +174,14 @@ void SAutonomixInputArea::FocusInput()
 void SAutonomixInputArea::SetSendEnabled(bool bEnabled)
 {
 	bSendEnabled = bEnabled;
+}
+
+void SAutonomixInputArea::SetConversationState(EConversationState NewState)
+{
+	CurrentConversationState = NewState;
+
+	// Drive bSendEnabled from state so legacy callers still work
+	bSendEnabled = (NewState == EConversationState::Idle || NewState == EConversationState::Error);
 }
 
 void SAutonomixInputArea::SetQueuedMessageCount(int32 Count)
@@ -325,6 +366,12 @@ FReply SAutonomixInputArea::OnSendClicked()
 	return FReply::Handled();
 }
 
+FReply SAutonomixInputArea::OnStopClicked()
+{
+	OnStopRequested.ExecuteIfBound();
+	return FReply::Handled();
+}
+
 void SAutonomixInputArea::SubmitPrompt()
 {
 	if (!bSendEnabled || !InputTextBox.IsValid()) return;
@@ -377,14 +424,29 @@ FReply SAutonomixInputArea::OnKeyDown(const FGeometry& MyGeometry, const FKeyEve
 		return FReply::Handled();
 	}
 
-	// If popup is showing, handle navigation
-	if (bShowMentionPopup || bShowSlashPopup)
+	// Escape key: stop streaming if active, otherwise dismiss autocomplete
+	if (Key == EKeys::Escape)
 	{
-		if (Key == EKeys::Escape)
+		// If autocomplete popup is showing, close it first
+		if (bShowMentionPopup || bShowSlashPopup)
 		{
 			HideAutocompletePopup();
 			return FReply::Handled();
 		}
+
+		// If streaming, fire stop request
+		if (CurrentConversationState == EConversationState::Streaming)
+		{
+			OnStopRequested.ExecuteIfBound();
+			return FReply::Handled();
+		}
+
+		return FReply::Unhandled();
+	}
+
+	// If popup is showing, handle navigation
+	if (bShowMentionPopup || bShowSlashPopup)
+	{
 		if (Key == EKeys::Tab || Key == EKeys::Enter)
 		{
 			SelectPopupItem(PopupSelectedIndex);

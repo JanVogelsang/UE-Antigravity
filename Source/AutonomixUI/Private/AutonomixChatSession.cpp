@@ -25,6 +25,15 @@ FAutonomixChatSession::~FAutonomixChatSession()
 {
 }
 
+void FAutonomixChatSession::SetState(EConversationState NewState)
+{
+	if (CurrentState == NewState) return;
+
+	UE_LOG(LogAutonomix, Log, TEXT("ChatSession: State %d → %d"), (int32)CurrentState, (int32)NewState);
+	CurrentState = NewState;
+	OnConversationStateChanged.Broadcast(NewState);
+}
+
 void FAutonomixChatSession::Initialize(TSharedPtr<IAutonomixLLMClient> InLLMClient,
 									   TSharedPtr<FAutonomixConversationManager> InConvManager,
 									   TSharedPtr<FAutonomixActionRouter> InActionRouter,
@@ -88,6 +97,7 @@ void FAutonomixChatSession::ProcessToolCallQueue()
 
 	bInAgenticLoop = true;
 	bStopRequested = false;
+	SetState(EConversationState::Streaming);
 	AgenticLoopCount++;
 
 	// Record this batch in auto-approval tracking
@@ -123,9 +133,9 @@ void FAutonomixChatSession::ProcessToolCallQueue()
 				{
 					// User chose to stop
 					ActiveToolCalls.Empty();
-					bIsProcessing = false;
 					bInAgenticLoop = false;
 					AgenticLoopCount = 0;
+					SetState(EConversationState::Idle);
 					FAutonomixMessage StopMsg(EAutonomixMessageRole::System,
 						TEXT("⏹ Task stopped: AI repetition loop detected."));
 					OnMessageAdded.Broadcast(StopMsg);
@@ -192,7 +202,7 @@ void FAutonomixChatSession::ProcessToolCallQueue()
 			bStopRequested ? TEXT("stop requested") : TEXT("attempt_completion"));
 		bStopRequested = false;
 		bInAgenticLoop = false;
-		bIsProcessing = false;
+		SetState(EConversationState::Idle);
 		OnStatusUpdated.Broadcast(TEXT(""));
 		return;
 	}
@@ -202,18 +212,100 @@ void FAutonomixChatSession::ProcessToolCallQueue()
 
 void FAutonomixChatSession::StopAgenticLoop()
 {
-	UE_LOG(LogAutonomix, Log, TEXT("ChatSession: StopAgenticLoop() called. bInAgenticLoop=%d, bIsProcessing=%d"),
-		bInAgenticLoop, bIsProcessing);
+	UE_LOG(LogAutonomix, Log, TEXT("ChatSession: StopAgenticLoop() called. State=%d, bInAgenticLoop=%d"),
+		(int32)CurrentState, bInAgenticLoop);
 	
+	SetState(EConversationState::Cancelling);
+
 	bStopRequested = true;
 	bInAgenticLoop = false;
-	bIsProcessing = false;
 	AgenticLoopCount = 0;
 	ConsecutiveNoToolCount = 0;
 	ToolCallQueue.Empty();
 
+	SetState(EConversationState::Idle);
 	OnStatusUpdated.Broadcast(TEXT(""));
 	OnAgentFinished.Broadcast(TEXT("Stopped by user."));
+}
+
+void FAutonomixChatSession::ResumeTask(const FDateTime& InterruptedAt)
+{
+	if (!ConversationManager.IsValid() || !LLMClient.IsValid())
+	{
+		UE_LOG(LogAutonomix, Error, TEXT("ChatSession: ResumeTask() — ConversationManager or LLMClient is null."));
+		return;
+	}
+
+	UE_LOG(LogAutonomix, Log, TEXT("ChatSession: ResumeTask() — Resuming interrupted task."));
+
+	// Step 1: Inject synthetic tool_result messages for orphaned tool_use blocks.
+	// This prevents API errors from strict providers (Anthropic requires tool_result
+	// for every tool_use; OpenAI rejects orphaned function calls).
+	const int32 SyntheticCount = ConversationManager->InjectSyntheticToolResultsForOrphans();
+	if (SyntheticCount > 0)
+	{
+		FAutonomixMessage SyntheticNotice(EAutonomixMessageRole::System,
+			FString::Printf(TEXT("🔧 Injected %d synthetic tool result(s) for interrupted tool calls."), SyntheticCount));
+		OnMessageAdded.Broadcast(SyntheticNotice);
+	}
+
+	// Step 2: Build time-aware resumption prompt.
+	// Follows the Discovery Hypothesis Pattern — forces the AI to replan.
+	FString TimeAgoStr;
+	{
+		const FTimespan Elapsed = FDateTime::UtcNow() - InterruptedAt;
+		const double TotalMinutes = Elapsed.GetTotalMinutes();
+
+		if (TotalMinutes < 1.0)
+		{
+			TimeAgoStr = TEXT("moments");
+		}
+		else if (TotalMinutes < 60.0)
+		{
+			TimeAgoStr = FString::Printf(TEXT("%.0f minute(s)"), TotalMinutes);
+		}
+		else if (TotalMinutes < 1440.0) // 24 hours
+		{
+			const double Hours = TotalMinutes / 60.0;
+			TimeAgoStr = FString::Printf(TEXT("%.1f hour(s)"), Hours);
+		}
+		else
+		{
+			const double Days = TotalMinutes / 1440.0;
+			TimeAgoStr = FString::Printf(TEXT("%.1f day(s)"), Days);
+		}
+	}
+
+	FString ResumptionPrompt = FString::Printf(
+		TEXT("[TASK RESUMPTION] This task was interrupted %s ago. The project state may have changed since your last action.\n")
+		TEXT("1. Review your todo list to see remaining items.\n")
+		TEXT("2. If your last tool call did not receive a result, assume it failed.\n")
+		TEXT("3. Verify the current state of relevant files/assets before making changes.\n")
+		TEXT("Continue with the remaining work."),
+		*TimeAgoStr);
+
+	// Step 3: Inject the resumption prompt as a USER message (so the AI sees it
+	// as a continuation of the conversation, not system-level).
+	ConversationManager->AddUserMessage(ResumptionPrompt);
+
+	FAutonomixMessage ResumptionMsg(EAutonomixMessageRole::User, ResumptionPrompt);
+	OnMessageAdded.Broadcast(ResumptionMsg);
+
+	// Step 4: Reset loop state and start the agentic loop.
+	bInAgenticLoop = false;
+	bStopRequested = false;
+	AgenticLoopCount = 0;
+	ConsecutiveNoToolCount = 0;
+	ToolCallQueue.Empty();
+
+	OnSaveTabsToDisk.ExecuteIfBound();
+
+	// Step 5: Send the conversation to the LLM (same as initial prompt submission).
+	ContinueAgenticLoop();
+
+	UE_LOG(LogAutonomix, Log,
+		TEXT("ChatSession: ResumeTask() — Resumption prompt injected (%s ago). Agentic loop restarted."),
+		*TimeAgoStr);
 }
 
 void FAutonomixChatSession::ContinueAgenticLoop()
@@ -224,7 +316,7 @@ void FAutonomixChatSession::ContinueAgenticLoop()
 		UE_LOG(LogAutonomix, Log, TEXT("ChatSession: ContinueAgenticLoop() aborted — stop was requested."));
 		bStopRequested = false;
 		bInAgenticLoop = false;
-		bIsProcessing = false;
+		SetState(EConversationState::Idle);
 		OnStatusUpdated.Broadcast(TEXT(""));
 		return;
 	}
@@ -250,6 +342,42 @@ void FAutonomixChatSession::ContinueAgenticLoop()
 		ToolSchemas = bIsLocalLoop
 			? ToolSchemaRegistry->GetEssentialSchemas()
 			: ToolSchemaRegistry->GetTier1Schemas();
+
+		// PHASE 1 FIX: Append dynamically discovered tools (from get_tool_info / list_tools_in_category)
+		// This ensures strict-mode providers (OpenAI Responses API) can actually CALL the discovered tools.
+		if (DynamicallyLoadedTools.Num() > 0)
+		{
+			// Build a set of already-included tool names to avoid duplicates
+			TSet<FString> IncludedNames;
+			for (const auto& Schema : ToolSchemas)
+			{
+				FString Name;
+				if (Schema->TryGetStringField(TEXT("name"), Name))
+				{
+					IncludedNames.Add(Name);
+				}
+			}
+
+			int32 InjectedCount = 0;
+			for (const FString& DynToolName : DynamicallyLoadedTools)
+			{
+				if (!IncludedNames.Contains(DynToolName))
+				{
+					TSharedPtr<FJsonObject> DynSchema = ToolSchemaRegistry->GetSchemaByName(DynToolName);
+					if (DynSchema.IsValid())
+					{
+						ToolSchemas.Add(DynSchema);
+						InjectedCount++;
+					}
+				}
+			}
+
+			if (InjectedCount > 0)
+			{
+				UE_LOG(LogAutonomix, Log, TEXT("ChatSession: ContinueAgenticLoop injected %d dynamically-loaded tools (total tools: %d)."),
+					InjectedCount, ToolSchemas.Num());
+			}
+		}
 	}
 
 	// Use GetEffectiveHistory() -- respects condense/truncation tags
@@ -329,6 +457,53 @@ FString FAutonomixChatSession::ExecuteToolCall(const FAutonomixToolCall& ToolCal
 		return TEXT("");
 	}
 
+	// ---- Meta-tool: ask_followup_question (pauses the loop, presents question to user) ----
+	if (ToolCall.ToolName == TEXT("ask_followup_question"))
+	{
+		// Stop the agentic loop — the user needs to respond before continuing
+		bInAgenticLoop = false;
+
+		FString Question;
+		if (ToolCall.InputParams.IsValid())
+		{
+			ToolCall.InputParams->TryGetStringField(TEXT("question"), Question);
+		}
+
+		if (Question.IsEmpty())
+		{
+			Question = TEXT("The AI wants to ask a follow-up question but didn't provide one.");
+		}
+
+		// Build a formatted message with the question and suggested answers
+		FString FormattedQuestion = FString::Printf(TEXT("❓ %s"), *Question);
+
+		const TArray<TSharedPtr<FJsonValue>>* FollowUps = nullptr;
+		if (ToolCall.InputParams.IsValid() && ToolCall.InputParams->TryGetArrayField(TEXT("follow_up"), FollowUps))
+		{
+			FormattedQuestion += TEXT("\n\nSuggested answers:");
+			int32 Index = 1;
+			for (const TSharedPtr<FJsonValue>& FUVal : *FollowUps)
+			{
+				const TSharedPtr<FJsonObject>* FUObj = nullptr;
+				if (FUVal->TryGetObject(FUObj))
+				{
+					FString Text;
+					(*FUObj)->TryGetStringField(TEXT("text"), Text);
+					if (!Text.IsEmpty())
+					{
+						FormattedQuestion += FString::Printf(TEXT("\n  %d. %s"), Index++, *Text);
+					}
+				}
+			}
+		}
+
+		// Notify UI that the agent is waiting for user input
+		OnAgentFinished.Broadcast(TEXT("Waiting for user response."));
+
+		UE_LOG(LogAutonomix, Log, TEXT("ChatSession: ask_followup_question — pausing loop. Question: %s"), *Question);
+		return FormattedQuestion;
+	}
+
 	// ---- Phase 2 Meta-tool: switch_mode ----
 	if (ToolCall.ToolName == TEXT("switch_mode"))
 	{
@@ -352,6 +527,11 @@ FString FAutonomixChatSession::ExecuteToolCall(const FAutonomixToolCall& ToolCal
 	}
 
 	// ---- Discovery Meta-tools: get_tool_info / list_tools_in_category (Phase 3 token optimization) ----
+	// PHASE 1 FIX (GitHub Issue #20 discovery loop): When the model calls get_tool_info,
+	// we register the discovered tool in DynamicallyLoadedTools so it gets added to the
+	// actual tools array on the NEXT API call. This fixes the loop where strict-mode
+	// providers (OpenAI Responses API) could see the schema as text but couldn't call
+	// the tool because it wasn't in the tools array.
 	if (ToolCall.ToolName == TEXT("get_tool_info"))
 	{
 		if (ToolSchemaRegistry.IsValid() && ToolCall.InputParams.IsValid())
@@ -363,7 +543,19 @@ FString FAutonomixChatSession::ExecuteToolCall(const FAutonomixToolCall& ToolCal
 				bOutIsError = true;
 				return TEXT("Error: 'tool_name' parameter is required. Example: get_tool_info({\"tool_name\": \"create_material\"})");
 			}
-			return ToolSchemaRegistry->GetToolInfoString(RequestedTool);
+
+			// Register this tool for dynamic injection on the next API call
+			if (ToolSchemaRegistry->IsToolRegistered(RequestedTool) && ToolSchemaRegistry->IsToolEnabled(RequestedTool))
+			{
+				DynamicallyLoadedTools.Add(RequestedTool);
+				UE_LOG(LogAutonomix, Log, TEXT("ChatSession: Dynamically loaded tool '%s' — will be in tools array on next turn. (%d dynamic tools total)"),
+					*RequestedTool, DynamicallyLoadedTools.Num());
+			}
+
+			FString Result = ToolSchemaRegistry->GetToolInfoString(RequestedTool);
+			Result += TEXT("\n\n✅ This tool has been loaded and is now available for you to call directly on your next response. "
+				"Do NOT call get_tool_info again for this tool — just call it directly.");
+			return Result;
 		}
 		return TEXT("Error: ToolSchemaRegistry not available.");
 	}
@@ -379,7 +571,48 @@ FString FAutonomixChatSession::ExecuteToolCall(const FAutonomixToolCall& ToolCal
 				bOutIsError = true;
 				return TEXT("Error: 'category' parameter is required. Example: list_tools_in_category({\"category\": \"material\"})");
 			}
-			return ToolSchemaRegistry->ListToolsInCategoryString(Category);
+
+			FString Result = ToolSchemaRegistry->ListToolsInCategoryString(Category);
+
+			// Auto-load all tools in the listed category for dynamic injection
+			// This prevents the model from needing to call get_tool_info for each one
+			TArray<TSharedPtr<FJsonObject>> CategorySchemas = ToolSchemaRegistry->GetSchemasByCategory(Category);
+			int32 LoadedCount = 0;
+			for (const TSharedPtr<FJsonObject>& Schema : CategorySchemas)
+			{
+				FString ToolName;
+				if (Schema->TryGetStringField(TEXT("name"), ToolName) && ToolSchemaRegistry->IsToolEnabled(ToolName))
+				{
+					DynamicallyLoadedTools.Add(ToolName);
+					LoadedCount++;
+				}
+			}
+
+			// Also try pattern-based loading since GetSchemasByCategory uses the "category"
+			// field which may not be set on all schemas. Fall back to pattern matching.
+			if (LoadedCount == 0)
+			{
+				// Use the same pattern matching as ListToolsInCategoryString
+				for (const FString& ToolName : ToolSchemaRegistry->GetAllToolNames())
+				{
+					if (!ToolSchemaRegistry->IsToolEnabled(ToolName)) continue;
+					if (ToolName.Contains(Category, ESearchCase::IgnoreCase))
+					{
+						DynamicallyLoadedTools.Add(ToolName);
+						LoadedCount++;
+					}
+				}
+			}
+
+			if (LoadedCount > 0)
+			{
+				UE_LOG(LogAutonomix, Log, TEXT("ChatSession: Auto-loaded %d tools from category '%s'. (%d dynamic tools total)"),
+					LoadedCount, *Category, DynamicallyLoadedTools.Num());
+				Result += FString::Printf(TEXT("\n\n✅ All %d tools in this category have been loaded and are available for you to call directly on your next response. "
+					"Do NOT call get_tool_info — just call the tools directly."), LoadedCount);
+			}
+
+			return Result;
 		}
 		return TEXT("Error: ToolSchemaRegistry not available.");
 	}
@@ -538,7 +771,7 @@ void FAutonomixChatSession::OnMessageComplete(const FAutonomixMessage& Message)
 
 void FAutonomixChatSession::OnRequestStarted()
 {
-	bIsProcessing = true;
+	SetState(EConversationState::Streaming);
 	FString StatusText = bInAgenticLoop
 		? FString::Printf(TEXT("Executing tools... (iteration %d)"), AgenticLoopCount)
 		: TEXT("Thinking...");
@@ -551,8 +784,8 @@ void FAutonomixChatSession::OnRequestCompleted(bool bSuccess)
 	OnRequestCompletedDelegate.Broadcast(bSuccess);
 	if (!bSuccess)
 	{
-		bIsProcessing = false;
 		bInAgenticLoop = false;
+		SetState(EConversationState::Error);
 
 		OnAgentFinished.Broadcast(TEXT("API Request failed."));
 		OnStatusUpdated.Broadcast(TEXT("")); // Hide progress
@@ -755,6 +988,7 @@ void FAutonomixChatSession::OnRequestCompletedPostContextManagement()
 			return;
 		}
 
+		SetState(EConversationState::WaitingForToolApproval);
 		OnToolRequiresApproval.Broadcast(Plan);
 	}
 	else
@@ -811,10 +1045,10 @@ void FAutonomixChatSession::OnRequestCompletedPostContextManagement()
 		}
 
 		// Task is done (either not in agentic loop, or user chose to end/max nudges)
-		bIsProcessing = false;
 		bInAgenticLoop = false;
 		AgenticLoopCount = 0;
 		ConsecutiveNoToolCount = 0;
+		SetState(EConversationState::Idle);
 
 		OnStatusUpdated.Broadcast(TEXT(""));
 		OnAgentFinished.Broadcast(TEXT("Task ended (no tools returned)."));
@@ -839,7 +1073,7 @@ void FAutonomixChatSession::OnToolCallsRejected(const FAutonomixActionPlan& Plan
 
 	// End agentic loop
 	bInAgenticLoop = false;
-	bIsProcessing = false;
+	SetState(EConversationState::Idle);
 	OnStatusUpdated.Broadcast(TEXT(""));
 	OnAgentFinished.Broadcast(TEXT("Execution rejected by user."));
 }
@@ -864,9 +1098,9 @@ void FAutonomixChatSession::HandleAutoApprovalLimitReached(const FAutonomixAutoA
 	else
 	{
 		ToolCallQueue.Empty();
-		bIsProcessing = false;
 		bInAgenticLoop = false;
 		AgenticLoopCount = 0;
+		SetState(EConversationState::Idle);
 		OnStatusUpdated.Broadcast(TEXT(""));
 		OnAgentFinished.Broadcast(TEXT("Execution rejected by user."));
 	}

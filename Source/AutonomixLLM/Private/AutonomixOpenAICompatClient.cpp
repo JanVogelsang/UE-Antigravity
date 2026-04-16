@@ -1894,8 +1894,11 @@ void FAutonomixOpenAICompatClient::FinalizeResponse()
 		ContentBlocks.Add(MakeShared<FJsonValueObject>(ToolUseBlock));
 		bHasToolCalls = true;
 
-		// Add tool_name field for dispatcher
-		ArgsObj->SetStringField(TEXT("tool_name"), State.ToolName);
+		// Add _tool_name field for dispatcher (underscore prefix to avoid collision
+		// with the model's own parameters — e.g., get_tool_info has a "tool_name" param
+		// that gets overwritten if we use the same key).
+		// ActionRouter::RouteToolCall also uses "_tool_name" for this purpose.
+		ArgsObj->SetStringField(TEXT("_tool_name"), State.ToolName);
 
 		FAutonomixToolCall ToolCall;
 		ToolCall.ToolUseId = ToolUseId;

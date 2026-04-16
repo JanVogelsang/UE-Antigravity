@@ -3,6 +3,7 @@
 #include "AutonomixContextCondenser.h"
 #include "AutonomixInterfaces.h"
 #include "AutonomixConversationManager.h"
+#include "AutonomixTokenCounter.h"
 #include "AutonomixCoreModule.h"
 #include "Serialization/JsonSerializer.h"
 #include "Serialization/JsonWriter.h"
@@ -184,9 +185,16 @@ void FAutonomixContextCondenser::SummarizeConversation(
 			// Apply condensation to the conversation manager
 			ApplyCondensation(Summary, Result);
 
+			// Compute the new token count from effective history after condensation
+			if (ConversationManager.IsValid())
+			{
+				TArray<FAutonomixMessage> EffectiveAfter = ConversationManager->GetEffectiveHistory();
+				Result.NewContextTokens = FAutonomixTokenCounter::EstimateTokens(EffectiveAfter);
+			}
+
 			UE_LOG(LogAutonomix, Log,
-				TEXT("ContextCondenser: Condensed %d messages. Summary length: %d chars. CondenseId: %s"),
-				ConversationManager->GetMessageCount(), Summary.Len(), *Result.CondenseId);
+				TEXT("ContextCondenser: Condensed %d messages. Summary length: %d chars. New context: ~%d tokens. CondenseId: %s"),
+				ConversationManager->GetMessageCount(), Summary.Len(), Result.NewContextTokens, *Result.CondenseId);
 
 			// CRITICAL: Move callback to local before invoking.
 			// The callback may trigger state changes that destroy this condenser,

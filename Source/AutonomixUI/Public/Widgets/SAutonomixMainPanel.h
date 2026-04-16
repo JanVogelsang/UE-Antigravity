@@ -83,7 +83,9 @@ public:
     virtual ~SAutonomixMainPanel();
 
 private:
-    /** Per-tab state for multi-conversation sessions. */
+    /** Per-tab state for multi-conversation sessions.
+     *  v4.0: Added TaskStatus, CreatedAt, DynamicallyLoadedTools for per-task persistence.
+     *  v4.1: Added LastActivityAt for time-aware task resumption. */
     struct FAutonomixConversationTabState
     {
         FString TabId;
@@ -100,6 +102,12 @@ private:
 
         // Phase 2: per-tab agent mode
         EAutonomixAgentMode AgentMode = EAutonomixAgentMode::General;
+
+        // v4.0: Per-task persistence fields
+        EAutonomixTaskStatus TaskStatus = EAutonomixTaskStatus::Active;
+        FDateTime CreatedAt = FDateTime::UtcNow();
+        FDateTime LastActivityAt = FDateTime::UtcNow();
+        TSet<FString> DynamicallyLoadedTools;
     };
 
     // ---- Sub-widgets ----
@@ -109,7 +117,6 @@ private:
     TSharedPtr<SAutonomixPlanPreview> PlanPreview;
     TSharedPtr<SAutonomixProgress> ProgressOverlay;
     TSharedPtr<SAutonomixTodoList> TodoListWidget;
-    TSharedPtr<SButton> StopButton;
     TSharedPtr<SButton> CondenseButton;
 
     // ---- Backend components ----
@@ -248,6 +255,13 @@ private:
 
     /** Called when user clicks Delete on a history item */
     void OnDeleteHistoryTask(const FString& TabId);
+
+    /** Called when user renames a history item inline */
+    void OnRenameHistoryTask(const FString& TabId, const FString& NewTitle);
+
+    /** Generate an auto-title from the first user message and apply it to the active tab.
+     *  Called after the first user-assistant exchange completes. */
+    void TryAutoTitleActiveTab(const FString& FirstUserMessage);
 
     /** Update all live UI elements (context bar, file changes, etc.) */
     void UpdateLiveUI();
@@ -396,15 +410,21 @@ FString BuildEnvironmentDetailsString() const;
     /** The ID of the message currently being streamed */
     FGuid CurrentStreamingMessageId;
 
-    /** Whether the client is currently processing */
-    bool bIsProcessing = false;
-
     /** The active chat session for the current tab */
     TSharedPtr<class FAutonomixChatSession> ActiveChatSession;
 
+    /** Helper: query conversation state from active ChatSession (returns Idle if none) */
+    EConversationState GetCurrentConversationState() const;
+
+    /** Helper: backward-compat check — true when Streaming or Cancelling */
+    bool IsProcessing() const;
+
+    /** Called when the conversation state changes — forwards to InputArea */
+    void OnConversationStateChanged(EConversationState NewState);
+
     // ---- Message Queue (Roo Code's MessageQueueService concept) ----
 
-    /** Messages queued while bIsProcessing == true.
+    /** Messages queued while IsProcessing() == true.
      *  When the current task finishes, the next queued message is auto-started.
      *  Prevents the "already processing, please wait" UX problem. */
     TArray<FString> PendingMessageQueue;
@@ -438,4 +458,46 @@ FString BuildEnvironmentDetailsString() const;
     int32 GetNextAvailableTabNumber() const;
 
     FReply OnAddTabClicked();
+
+    // ---- v4.0: Per-Task Directory Model ----
+
+    /** Get base directory for per-task storage: Saved/Autonomix/Tasks/ */
+    static FString GetTasksBaseDir();
+
+    /** Get directory for a specific task: Saved/Autonomix/Tasks/<TaskId>/ */
+    static FString GetTaskDir(const FString& TaskId);
+
+    /** Get path to the task index file: Saved/Autonomix/task_index.json */
+    static FString GetTaskIndexPath();
+
+    /** Build metadata for a single tab (used when writing task_index.json) */
+    FAutonomixTaskMetadata BuildTaskMetadata(const FAutonomixConversationTabState& TabState) const;
+
+    /** Save task_index.json with metadata for all tabs */
+    void SaveTaskIndex();
+
+    /** Attempt to migrate from legacy Conversations/Tabs/ format to per-task directories.
+     *  Called once during LoadTabsFromDisk if new format is not found but legacy is present.
+     *  @return true if migration occurred */
+    bool MigrateFromLegacyFormat();
+
+    /** Set task status on the active tab and persist */
+    void SetActiveTaskStatus(EAutonomixTaskStatus NewStatus);
+
+    // ---- v4.1: Task Resumption ----
+
+    /** Called when the user clicks "Continue Task" on an interrupted task.
+     *  Injects synthetic tool_results, a resumption prompt, and restarts the agentic loop. */
+    void OnContinueInterruptedTask();
+
+    /** Called when the user clicks "End Task" on an interrupted task.
+     *  Marks the task as Completed, hides the resumption bar, and returns to idle. */
+    void OnEndInterruptedTask();
+
+    /** Check if the active tab has an interrupted task and show the resumption bar if so.
+     *  Called during RenderActiveConversation() and SwitchToTab(). */
+    void CheckAndShowResumptionBar();
+
+    /** Build a human-readable "X hours" / "X minutes" string from a timestamp */
+    static FString BuildTimeAgoText(const FDateTime& InterruptedAt);
 };

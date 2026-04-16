@@ -40,6 +40,24 @@ public:
 	/** Add a tool result message to the conversation */
 	FAutonomixMessage& AddToolResultMessage(const FString& ToolUseId, const FString& Content, bool bIsError = false);
 
+	/**
+	 * Detect orphaned tool_use blocks in the conversation history and inject synthetic
+	 * tool_result messages for each one.
+	 *
+	 * An orphaned tool_use is an assistant message containing tool_use content blocks
+	 * (in ContentBlocksJson) that have no matching tool_result message following them.
+	 * This happens when the editor is closed or the task is interrupted mid-agentic-loop.
+	 *
+	 * For each orphaned tool_use ID, a synthetic tool_result message is added:
+	 *   "Task was interrupted before this tool call could be completed."
+	 *
+	 * This prevents API errors from Anthropic (strict alternation) and OpenAI
+	 * (rejects orphaned function calls).
+	 *
+	 * @return Number of synthetic tool_result messages injected
+	 */
+	int32 InjectSyntheticToolResultsForOrphans();
+
 	/** Append streaming text to the current assistant message */
 	void AppendStreamingText(const FGuid& MessageId, const FString& DeltaText);
 
@@ -114,12 +132,18 @@ public:
 	// Conversation Persistence (v2.3)
 	// ============================================================================
 
-	/** Save the current conversation to a JSON file.
+	/** Save the current conversation to a JSON file (ui_messages.json — full UI state).
 	 *  Preserves all message fields including ContentBlocksJson for structural fidelity.
 	 *  @return true if saved successfully */
 	bool SaveSession(const FString& FilePath) const;
 
-	/** Load a conversation from a JSON file.
+	/** Save LLM-facing API history (api_history.json — Anthropic wire format).
+	 *  Only includes messages that would be sent to the API: user, assistant,
+	 *  and tool_result messages. Strips UI-only fields.
+	 *  @return true if saved successfully */
+	bool SaveApiHistory(const FString& FilePath) const;
+
+	/** Load a conversation from a JSON file (either ui_messages.json or legacy format).
 	 *  Replaces the current history with the loaded messages.
 	 *  @return true if loaded successfully */
 	bool LoadSession(const FString& FilePath);
@@ -130,6 +154,10 @@ public:
 
 	/** Get the default save directory for conversations */
 	static FString GetConversationSaveDir();
+
+	/** Get the base directory for the per-task directory model (v4.0).
+	 *  Returns: {ProjectSavedDir}/Autonomix/Tasks/ */
+	static FString GetTasksBaseDir();
 
 	/** Delegate: fired when a new message is added */
 	FOnAutonomixMessageAdded OnMessageAdded;

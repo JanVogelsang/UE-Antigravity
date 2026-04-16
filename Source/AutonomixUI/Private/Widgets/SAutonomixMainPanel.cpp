@@ -242,19 +242,7 @@ void SAutonomixMainPanel::Construct(const FArguments& InArgs)
                 .Text(FText::FromString(TEXT("📦 Condense")))
                 .ToolTipText(FText::FromString(TEXT("Manually condense the conversation context to free up token space")))
                 .OnClicked_Raw(this, &SAutonomixMainPanel::OnCondenseContextClicked)
-                .IsEnabled_Lambda([this]() { return !bIsProcessing && ContextUsagePercent > 0.0f; })
-            ]
-            // Stop button -- visible when processing
-            + SHorizontalBox::Slot()
-            .AutoWidth()
-            .VAlign(VAlign_Center)
-            .Padding(8.0f, 0.0f)
-            [
-                SAssignNew(StopButton, SButton)
-                .Text(FText::FromString(TEXT("⏹ Stop")))
-                .OnClicked_Raw(this, &SAutonomixMainPanel::OnStopClicked)
-                .IsEnabled_Lambda([this]() { return bIsProcessing; })
-                .Visibility_Lambda([this]() { return bIsProcessing ? EVisibility::Visible : EVisibility::Collapsed; })
+                .IsEnabled_Lambda([this]() { return !IsProcessing() && ContextUsagePercent > 0.0f; })
             ]
             // External API badge
             + SHorizontalBox::Slot()
@@ -288,7 +276,7 @@ void SAutonomixMainPanel::Construct(const FArguments& InArgs)
                 .Text(FText::FromString(TEXT("+ New Tab")))
                 .ToolTipText(FText::FromString(TEXT("Create a new conversation tab")))
                 .OnClicked_Raw(this, &SAutonomixMainPanel::OnAddTabClicked)
-                .IsEnabled_Lambda([this]() { return !bIsProcessing; })
+                .IsEnabled_Lambda([this]() { return !IsProcessing(); })
             ]
         ]
 
@@ -312,6 +300,8 @@ void SAutonomixMainPanel::Construct(const FArguments& InArgs)
         .FillHeight(1.0f)
         [
             SAssignNew(ChatView, SAutonomixChatView)
+            .OnContinueTask_Raw(this, &SAutonomixMainPanel::OnContinueInterruptedTask)
+            .OnEndTask_Raw(this, &SAutonomixMainPanel::OnEndInterruptedTask)
         ]
 
         // Progress overlay (hidden by default)
@@ -344,6 +334,7 @@ void SAutonomixMainPanel::Construct(const FArguments& InArgs)
         [
             SAssignNew(InputArea, SAutonomixInputArea)
             .OnPromptSubmitted_Raw(this, &SAutonomixMainPanel::OnPromptSubmitted)
+            .OnStopRequested_Lambda([this]() { OnStopClicked(); })
         ]
     ];
 
@@ -354,6 +345,16 @@ void SAutonomixMainPanel::Construct(const FArguments& InArgs)
 
 SAutonomixMainPanel::~SAutonomixMainPanel()
 {
+    // v4.0: Mark any active (non-completed) tasks as Interrupted before saving
+    // v4.1: Also stamp LastActivityAt so we can calculate time-aware resumption prompts
+    for (FAutonomixConversationTabState& Tab : ConversationTabs)
+    {
+        if (Tab.TaskStatus == EAutonomixTaskStatus::Active)
+        {
+            Tab.TaskStatus = EAutonomixTaskStatus::Interrupted;
+            Tab.LastActivityAt = FDateTime::UtcNow();
+        }
+    }
     SaveTabsToDisk();
 
     if (LLMClient.IsValid())
@@ -490,7 +491,8 @@ void SAutonomixMainPanel::InitializeBackend()
 
     HistoryPanel = SNew(SAutonomixHistoryPanel)
         .OnLoadTask(this, &SAutonomixMainPanel::OnLoadHistoryTask)
-        .OnDeleteTask(this, &SAutonomixMainPanel::OnDeleteHistoryTask);
+        .OnDeleteTask(this, &SAutonomixMainPanel::OnDeleteHistoryTask)
+        .OnRenameTask(this, &SAutonomixMainPanel::OnRenameHistoryTask);
 
     FollowUpBar = SNew(SAutonomixFollowUpBar)
         .OnFollowUpSelected(this, &SAutonomixMainPanel::OnFollowUpSelected);
@@ -524,17 +526,37 @@ const SAutonomixMainPanel::FAutonomixConversationTabState* SAutonomixMainPanel::
 
 FString SAutonomixMainPanel::GetTabsSessionDir()
 {
+    // Legacy path — kept for migration detection
     return FPaths::Combine(FAutonomixConversationManager::GetConversationSaveDir(), TEXT("Tabs"));
 }
 
 FString SAutonomixMainPanel::GetTabsManifestPath()
 {
+    // Legacy path — kept for migration detection
     return FPaths::Combine(GetTabsSessionDir(), TabsManifestFileName);
 }
 
 FString SAutonomixMainPanel::MakeTabConversationFileName(const FString& TabId)
 {
+    // Legacy naming — kept for migration
     return FString::Printf(TEXT("tab_%s.json"), *TabId);
+}
+
+// ---- v4.0: Per-Task Directory Model helpers ----
+
+FString SAutonomixMainPanel::GetTasksBaseDir()
+{
+    return FAutonomixConversationManager::GetTasksBaseDir();
+}
+
+FString SAutonomixMainPanel::GetTaskDir(const FString& TaskId)
+{
+    return FPaths::Combine(GetTasksBaseDir(), TaskId);
+}
+
+FString SAutonomixMainPanel::GetTaskIndexPath()
+{
+    return FPaths::Combine(FPaths::ProjectSavedDir(), TEXT("Autonomix"), TEXT("task_index.json"));
 }
 
 FString SAutonomixMainPanel::MakeDefaultTabTitle(int32 TabNumber)
@@ -595,9 +617,21 @@ void SAutonomixMainPanel::SyncRuntimeStateToActiveTab()
     ActiveTab->LastRequestCost = LastRequestCost;
     ActiveTab->CostTracker = CostTracker;
 
+    // v4.1: Update LastActivityAt whenever we sync (captures the most recent activity time)
+    if (ActiveTab->TaskStatus == EAutonomixTaskStatus::Active)
+    {
+        ActiveTab->LastActivityAt = FDateTime::UtcNow();
+    }
+
     if (TodoListWidget.IsValid())
     {
         ActiveTab->Todos = TodoListWidget->GetTodos();
+    }
+
+    // v4.0: Sync DynamicallyLoadedTools from ChatSession to tab state for persistence
+    if (ActiveTab->ChatSession.IsValid())
+    {
+        ActiveTab->DynamicallyLoadedTools = ActiveTab->ChatSession->GetDynamicallyLoadedTools();
     }
 }
 
@@ -639,6 +673,17 @@ void SAutonomixMainPanel::LoadRuntimeStateFromActiveTab()
         ActiveTab->ChatSession->OnHandleUpdateTodoList.BindSP(this, &SAutonomixMainPanel::HandleUpdateTodoList);
         ActiveTab->ChatSession->OnHandleAttemptCompletion.BindSP(this, &SAutonomixMainPanel::HandleAttemptCompletion);
         ActiveTab->ChatSession->OnHandleSwitchMode.BindSP(this, &SAutonomixMainPanel::HandleSwitchMode);
+
+        // Bind conversation state changes — drives InputArea Send/Stop swap
+        ActiveTab->ChatSession->GetOnConversationStateChanged().AddSP(this, &SAutonomixMainPanel::OnConversationStateChanged);
+
+        // v4.0: Restore DynamicallyLoadedTools from persisted tab state
+        if (ActiveTab->DynamicallyLoadedTools.Num() > 0)
+        {
+            ActiveTab->ChatSession->SetDynamicallyLoadedTools(ActiveTab->DynamicallyLoadedTools);
+            UE_LOG(LogAutonomix, Log, TEXT("MainPanel: Restored %d dynamically loaded tools for tab '%s'."),
+                ActiveTab->DynamicallyLoadedTools.Num(), *ActiveTab->Title);
+        }
     }
 
     ConversationManager = ActiveTab->ConversationManager;
@@ -702,6 +747,9 @@ void SAutonomixMainPanel::RenderActiveConversation()
             TEXT("Welcome to Autonomix. Configure your API key in Project Settings > Plugins > Autonomix, then start chatting to create and manage your UE project."));
         ChatView->AddMessage(WelcomeMsg);
     }
+
+    // v4.1: Check if this is an interrupted task and show the resumption bar
+    CheckAndShowResumptionBar();
 }
 
 void SAutonomixMainPanel::RefreshTabStrip()
@@ -756,7 +804,7 @@ void SAutonomixMainPanel::RefreshTabStrip()
                     SwitchToTab(TabIndex);
                     return FReply::Handled();
                 })
-                .IsEnabled_Lambda([this]() { return !bIsProcessing; })
+                .IsEnabled_Lambda([this]() { return !IsProcessing(); })
             ]
             + SHorizontalBox::Slot()
             .AutoWidth()
@@ -770,7 +818,7 @@ void SAutonomixMainPanel::RefreshTabStrip()
                     CloseTab(TabIndex);
                     return FReply::Handled();
                 })
-                .IsEnabled_Lambda([this]() { return !bIsProcessing; })
+                .IsEnabled_Lambda([this]() { return !IsProcessing(); })
                 .Visibility_Lambda([this]()
                 {
                     return ConversationTabs.Num() > 1 ? EVisibility::Visible : EVisibility::Collapsed;
@@ -836,7 +884,7 @@ void SAutonomixMainPanel::CloseTab(int32 TabIndex)
         return;
     }
 
-    if (bIsProcessing)
+    if (IsProcessing())
     {
         if (ChatView.IsValid())
         {
@@ -861,9 +909,6 @@ void SAutonomixMainPanel::CloseTab(int32 TabIndex)
     SyncRuntimeStateToActiveTab();
 
     const FString ClosedTabId = ConversationTabs[TabIndex].TabId;
-    const FString ClosedConversationPath = FPaths::Combine(
-        GetTabsSessionDir(),
-        MakeTabConversationFileName(ClosedTabId));
 
     ConversationTabs.RemoveAt(TabIndex);
 
@@ -892,7 +937,17 @@ void SAutonomixMainPanel::CloseTab(int32 TabIndex)
         ActiveTabIndex--;
     }
 
-    IFileManager::Get().Delete(*ClosedConversationPath, false, true, true);
+    // v4.0: Delete the per-task directory (Saved/Autonomix/Tasks/<TaskId>/)
+    const FString TaskDirPath = GetTaskDir(ClosedTabId);
+    if (IFileManager::Get().DirectoryExists(*TaskDirPath))
+    {
+        IFileManager::Get().DeleteDirectory(*TaskDirPath, false, true);
+        UE_LOG(LogAutonomix, Log, TEXT("MainPanel: Deleted task directory: %s"), *TaskDirPath);
+    }
+    // Also clean up legacy file if it exists
+    const FString LegacyPath = FPaths::Combine(GetTabsSessionDir(), MakeTabConversationFileName(ClosedTabId));
+    IFileManager::Get().Delete(*LegacyPath, false, true, true);
+
     RefreshTabStrip();
     SaveTabsToDisk();
 }
@@ -904,7 +959,7 @@ void SAutonomixMainPanel::SwitchToTab(int32 TabIndex)
         return;
     }
 
-    if (bIsProcessing)
+    if (IsProcessing())
     {
         if (ChatView.IsValid())
         {
@@ -937,7 +992,7 @@ void SAutonomixMainPanel::SwitchToTab(int32 TabIndex)
 
 FReply SAutonomixMainPanel::OnAddTabClicked()
 {
-    if (bIsProcessing)
+    if (IsProcessing())
     {
         if (ChatView.IsValid())
         {
@@ -958,16 +1013,31 @@ void SAutonomixMainPanel::LoadTabsFromDisk()
     ActiveTabIndex = INDEX_NONE;
     NextTabNumber = 1;
 
-    const FString ManifestPath = GetTabsManifestPath();
-    if (!FPaths::FileExists(ManifestPath))
+    // =========================================================================
+    // v4.0: Per-Task Directory Model
+    //
+    // Primary: load from task_index.json → per-task directories
+    // Fallback: migrate from legacy Conversations/Tabs/ format
+    // =========================================================================
+
+    const FString TaskIndexPath = GetTaskIndexPath();
+    if (!FPaths::FileExists(TaskIndexPath))
     {
+        // Try legacy migration
+        if (MigrateFromLegacyFormat())
+        {
+            UE_LOG(LogAutonomix, Log, TEXT("MainPanel: Successfully migrated from legacy format to per-task directories."));
+            // Migration populates ConversationTabs and sets ActiveTabIndex
+            return;
+        }
+        // No data at all — fresh install
         return;
     }
 
     FString JsonString;
-    if (!FFileHelper::LoadFileToString(JsonString, *ManifestPath))
+    if (!FFileHelper::LoadFileToString(JsonString, *TaskIndexPath))
     {
-        UE_LOG(LogAutonomix, Warning, TEXT("MainPanel: Failed to read tab manifest: %s"), *ManifestPath);
+        UE_LOG(LogAutonomix, Warning, TEXT("MainPanel: Failed to read task index: %s"), *TaskIndexPath);
         return;
     }
 
@@ -975,8 +1045,352 @@ void SAutonomixMainPanel::LoadTabsFromDisk()
     TSharedRef<TJsonReader<>> Reader = TJsonReaderFactory<>::Create(JsonString);
     if (!FJsonSerializer::Deserialize(Reader, Root) || !Root.IsValid())
     {
-        UE_LOG(LogAutonomix, Warning, TEXT("MainPanel: Failed to parse tab manifest JSON: %s"), *ManifestPath);
+        UE_LOG(LogAutonomix, Warning, TEXT("MainPanel: Failed to parse task index JSON: %s"), *TaskIndexPath);
         return;
+    }
+
+    Root->TryGetNumberField(TEXT("next_tab_number"), NextTabNumber);
+    NextTabNumber = FMath::Max(NextTabNumber, 1);
+
+    FString ActiveTabId;
+    Root->TryGetStringField(TEXT("active_tab_id"), ActiveTabId);
+
+    const TArray<TSharedPtr<FJsonValue>>* TasksArray = nullptr;
+    if (!Root->TryGetArrayField(TEXT("tasks"), TasksArray) || !TasksArray)
+    {
+        return;
+    }
+
+    for (const TSharedPtr<FJsonValue>& TaskValue : *TasksArray)
+    {
+        const TSharedPtr<FJsonObject>* TaskObj = nullptr;
+        if (!TaskValue->TryGetObject(TaskObj) || !TaskObj || !(*TaskObj).IsValid())
+        {
+            continue;
+        }
+
+        FAutonomixConversationTabState TabState;
+        (*TaskObj)->TryGetStringField(TEXT("task_id"), TabState.TabId);
+        (*TaskObj)->TryGetStringField(TEXT("title"), TabState.Title);
+
+        if (TabState.TabId.IsEmpty())
+        {
+            continue;
+        }
+        if (TabState.Title.IsEmpty())
+        {
+            TabState.Title = MakeDefaultTabTitle(GetNextAvailableTabNumber());
+        }
+
+        // Load task status
+        FString StatusStr;
+        if ((*TaskObj)->TryGetStringField(TEXT("status"), StatusStr))
+        {
+            if (StatusStr == TEXT("completed"))       TabState.TaskStatus = EAutonomixTaskStatus::Completed;
+            else if (StatusStr == TEXT("interrupted")) TabState.TaskStatus = EAutonomixTaskStatus::Interrupted;
+            else if (StatusStr == TEXT("errored"))     TabState.TaskStatus = EAutonomixTaskStatus::Errored;
+            else                                      TabState.TaskStatus = EAutonomixTaskStatus::Active;
+        }
+
+        // Load created timestamp
+        FString CreatedStr;
+        if ((*TaskObj)->TryGetStringField(TEXT("created_at"), CreatedStr))
+        {
+            FDateTime::ParseIso8601(*CreatedStr, TabState.CreatedAt);
+        }
+
+        // v4.1: Load last activity timestamp (for time-aware resumption)
+        FString LastActivityStr;
+        if ((*TaskObj)->TryGetStringField(TEXT("last_activity_at"), LastActivityStr))
+        {
+            FDateTime::ParseIso8601(*LastActivityStr, TabState.LastActivityAt);
+        }
+
+        // Load conversation from per-task directory
+        TabState.ConversationManager = MakeShared<FAutonomixConversationManager>();
+        const FString TaskDir = GetTaskDir(TabState.TabId);
+        const FString UiMessagesPath = FPaths::Combine(TaskDir, TEXT("ui_messages.json"));
+        TabState.ConversationManager->LoadSession(UiMessagesPath);
+        TabState.ContextManager = MakeShared<FAutonomixContextManager>(LLMClient, TabState.ConversationManager);
+
+        // Load token usage
+        const TSharedPtr<FJsonObject>* SessionUsageObj = nullptr;
+        if ((*TaskObj)->TryGetObjectField(TEXT("session_token_usage"), SessionUsageObj))
+        {
+            TabState.SessionTokenUsage = TokenUsageFromJson(*SessionUsageObj);
+        }
+
+        const TSharedPtr<FJsonObject>* LastUsageObj = nullptr;
+        if ((*TaskObj)->TryGetObjectField(TEXT("last_response_token_usage"), LastUsageObj))
+        {
+            TabState.LastResponseTokenUsage = TokenUsageFromJson(*LastUsageObj);
+        }
+
+        (*TaskObj)->TryGetNumberField(TEXT("context_usage_percent"), TabState.ContextUsagePercent);
+        (*TaskObj)->TryGetNumberField(TEXT("last_request_cost"), TabState.LastRequestCost);
+
+        // Load todos
+        const TArray<TSharedPtr<FJsonValue>>* TodosArray = nullptr;
+        if ((*TaskObj)->TryGetArrayField(TEXT("todos"), TodosArray) && TodosArray)
+        {
+            for (const TSharedPtr<FJsonValue>& TodoValue : *TodosArray)
+            {
+                const TSharedPtr<FJsonObject>* TodoObj = nullptr;
+                if (!TodoValue->TryGetObject(TodoObj) || !TodoObj || !(*TodoObj).IsValid())
+                {
+                    continue;
+                }
+
+                FAutonomixTodoItem Todo;
+                (*TodoObj)->TryGetStringField(TEXT("id"), Todo.Id);
+                (*TodoObj)->TryGetStringField(TEXT("content"), Todo.Content);
+
+                FString TodoStatusStr;
+                (*TodoObj)->TryGetStringField(TEXT("status"), TodoStatusStr);
+                Todo.Status = FAutonomixTodoItem::ParseStatus(TodoStatusStr);
+
+                if (!Todo.Content.IsEmpty())
+                {
+                    TabState.Todos.Add(Todo);
+                }
+            }
+        }
+
+        // v4.0: Load DynamicallyLoadedTools
+        const TArray<TSharedPtr<FJsonValue>>* DynToolsArray = nullptr;
+        if ((*TaskObj)->TryGetArrayField(TEXT("dynamically_loaded_tools"), DynToolsArray) && DynToolsArray)
+        {
+            for (const TSharedPtr<FJsonValue>& ToolValue : *DynToolsArray)
+            {
+                FString ToolName;
+                if (ToolValue->TryGetString(ToolName) && !ToolName.IsEmpty())
+                {
+                    TabState.DynamicallyLoadedTools.Add(ToolName);
+                }
+            }
+        }
+
+        TabState.CostTracker.Reset();
+
+        // Mark interrupted sessions: if status was Active but the editor is restarting,
+        // this session was not cleanly completed
+        if (TabState.TaskStatus == EAutonomixTaskStatus::Active &&
+            TabState.ConversationManager->GetMessageCount() > 0)
+        {
+            // Check if there's an incomplete agentic loop (last message is assistant with tool_use)
+            const FAutonomixMessage* LastMsg = TabState.ConversationManager->GetLastMessage();
+            if (LastMsg && LastMsg->Role == EAutonomixMessageRole::Assistant &&
+                !LastMsg->ContentBlocksJson.IsEmpty())
+            {
+                TabState.TaskStatus = EAutonomixTaskStatus::Interrupted;
+            }
+        }
+
+        ConversationTabs.Add(MoveTemp(TabState));
+    }
+
+    if (ConversationTabs.Num() == 0)
+    {
+        return;
+    }
+
+    // Restore active tab
+    ActiveTabIndex = 0;
+    if (!ActiveTabId.IsEmpty())
+    {
+        for (int32 i = 0; i < ConversationTabs.Num(); ++i)
+        {
+            if (ConversationTabs[i].TabId == ActiveTabId)
+            {
+                ActiveTabIndex = i;
+                break;
+            }
+        }
+    }
+
+    NextTabNumber = FMath::Max(NextTabNumber, ConversationTabs.Num() + 1);
+
+    UE_LOG(LogAutonomix, Log, TEXT("MainPanel: Loaded %d tasks from per-task directories."),
+        ConversationTabs.Num());
+}
+
+void SAutonomixMainPanel::SaveTabsToDisk()
+{
+    SyncRuntimeStateToActiveTab();
+
+    if (ConversationTabs.Num() == 0)
+    {
+        return;
+    }
+
+    // =========================================================================
+    // v4.0: Per-Task Directory Model
+    //
+    // For each tab, save:
+    //   Saved/Autonomix/Tasks/<TaskId>/ui_messages.json   (full UI state)
+    //   Saved/Autonomix/Tasks/<TaskId>/api_history.json   (LLM-facing only)
+    //
+    // Plus a task_index.json at the Autonomix root for quick browsing.
+    // =========================================================================
+
+    for (const FAutonomixConversationTabState& TabState : ConversationTabs)
+    {
+        if (!TabState.ConversationManager.IsValid())
+        {
+            continue;
+        }
+
+        const FString TaskDir = GetTaskDir(TabState.TabId);
+        IFileManager::Get().MakeDirectory(*TaskDir, true);
+
+        // Save dual files (Roo Code pattern)
+        const FString UiMessagesPath = FPaths::Combine(TaskDir, TEXT("ui_messages.json"));
+        TabState.ConversationManager->SaveSession(UiMessagesPath);
+
+        const FString ApiHistoryPath = FPaths::Combine(TaskDir, TEXT("api_history.json"));
+        TabState.ConversationManager->SaveApiHistory(ApiHistoryPath);
+    }
+
+    // Save task_index.json with metadata for all tabs
+    SaveTaskIndex();
+}
+
+// ============================================================================
+// v4.0: Task Index and Metadata
+// ============================================================================
+
+FAutonomixTaskMetadata SAutonomixMainPanel::BuildTaskMetadata(const FAutonomixConversationTabState& TabState) const
+{
+    FAutonomixTaskMetadata Meta;
+    Meta.TaskId = TabState.TabId;
+    Meta.Title = TabState.Title;
+    Meta.CreatedAt = TabState.CreatedAt;
+    Meta.LastActivityAt = FDateTime::UtcNow();
+    Meta.TotalTokensIn = TabState.SessionTokenUsage.InputTokens;
+    Meta.TotalTokensOut = TabState.SessionTokenUsage.OutputTokens;
+    Meta.TotalCost = TabState.CostTracker.GetSessionTotalCost();
+    Meta.Status = TabState.TaskStatus;
+    Meta.MessageCount = TabState.ConversationManager.IsValid()
+        ? TabState.ConversationManager->GetMessageCount() : 0;
+
+    // Get model ID from current settings
+    const UAutonomixDeveloperSettings* Settings = UAutonomixDeveloperSettings::Get();
+    if (Settings)
+    {
+        Meta.ModelId = Settings->GetModelDisplayName();
+    }
+
+    return Meta;
+}
+
+void SAutonomixMainPanel::SaveTaskIndex()
+{
+    TSharedPtr<FJsonObject> Root = MakeShared<FJsonObject>();
+    Root->SetStringField(TEXT("format_version"), TEXT("2.0.0"));
+    Root->SetStringField(TEXT("saved_at"), FDateTime::UtcNow().ToIso8601());
+    Root->SetNumberField(TEXT("next_tab_number"), NextTabNumber);
+
+    const FAutonomixConversationTabState* ActiveTab = GetActiveTabState();
+    Root->SetStringField(TEXT("active_tab_id"), ActiveTab ? ActiveTab->TabId : TEXT(""));
+
+    TArray<TSharedPtr<FJsonValue>> TasksArray;
+    for (const FAutonomixConversationTabState& TabState : ConversationTabs)
+    {
+        TSharedPtr<FJsonObject> TaskObj = MakeShared<FJsonObject>();
+        TaskObj->SetStringField(TEXT("task_id"), TabState.TabId);
+        TaskObj->SetStringField(TEXT("title"), TabState.Title);
+        TaskObj->SetStringField(TEXT("created_at"), TabState.CreatedAt.ToIso8601());
+        TaskObj->SetStringField(TEXT("last_activity_at"), TabState.LastActivityAt.ToIso8601());
+
+        // Task status
+        FString StatusStr;
+        switch (TabState.TaskStatus)
+        {
+        case EAutonomixTaskStatus::Completed:   StatusStr = TEXT("completed"); break;
+        case EAutonomixTaskStatus::Interrupted:  StatusStr = TEXT("interrupted"); break;
+        case EAutonomixTaskStatus::Errored:      StatusStr = TEXT("errored"); break;
+        default:                                 StatusStr = TEXT("active"); break;
+        }
+        TaskObj->SetStringField(TEXT("status"), StatusStr);
+
+        // Token usage and cost
+        TaskObj->SetObjectField(TEXT("session_token_usage"), TokenUsageToJson(TabState.SessionTokenUsage));
+        TaskObj->SetObjectField(TEXT("last_response_token_usage"), TokenUsageToJson(TabState.LastResponseTokenUsage));
+        TaskObj->SetNumberField(TEXT("context_usage_percent"), TabState.ContextUsagePercent);
+        TaskObj->SetNumberField(TEXT("last_request_cost"), TabState.LastRequestCost);
+        TaskObj->SetNumberField(TEXT("total_cost"), TabState.CostTracker.GetSessionTotalCost());
+        TaskObj->SetNumberField(TEXT("message_count"),
+            TabState.ConversationManager.IsValid() ? TabState.ConversationManager->GetMessageCount() : 0);
+
+        // Model ID
+        const UAutonomixDeveloperSettings* Settings = UAutonomixDeveloperSettings::Get();
+        if (Settings)
+        {
+            TaskObj->SetStringField(TEXT("model_id"), Settings->GetModelDisplayName());
+        }
+
+        // Todos
+        TArray<TSharedPtr<FJsonValue>> TodosArray;
+        for (const FAutonomixTodoItem& Todo : TabState.Todos)
+        {
+            TSharedPtr<FJsonObject> TodoObj = MakeShared<FJsonObject>();
+            TodoObj->SetStringField(TEXT("id"), Todo.Id);
+            TodoObj->SetStringField(TEXT("content"), Todo.Content);
+            TodoObj->SetStringField(TEXT("status"), FAutonomixTodoItem::StatusToString(Todo.Status));
+            TodosArray.Add(MakeShared<FJsonValueObject>(TodoObj));
+        }
+        TaskObj->SetArrayField(TEXT("todos"), TodosArray);
+
+        // v4.0: DynamicallyLoadedTools — persisted per task so they survive restarts
+        TArray<TSharedPtr<FJsonValue>> DynToolsArray;
+        for (const FString& ToolName : TabState.DynamicallyLoadedTools)
+        {
+            DynToolsArray.Add(MakeShared<FJsonValueString>(ToolName));
+        }
+        TaskObj->SetArrayField(TEXT("dynamically_loaded_tools"), DynToolsArray);
+
+        TasksArray.Add(MakeShared<FJsonValueObject>(TaskObj));
+    }
+
+    Root->SetArrayField(TEXT("tasks"), TasksArray);
+
+    FString OutString;
+    TSharedRef<TJsonWriter<>> Writer = TJsonWriterFactory<>::Create(&OutString);
+    FJsonSerializer::Serialize(Root.ToSharedRef(), Writer);
+
+    const FString TaskIndexPath = GetTaskIndexPath();
+    IFileManager::Get().MakeDirectory(*FPaths::GetPath(TaskIndexPath), true);
+    if (!FFileHelper::SaveStringToFile(OutString, *TaskIndexPath, FFileHelper::EEncodingOptions::ForceUTF8WithoutBOM))
+    {
+        UE_LOG(LogAutonomix, Warning, TEXT("MainPanel: Failed to save task index: %s"), *TaskIndexPath);
+    }
+}
+
+bool SAutonomixMainPanel::MigrateFromLegacyFormat()
+{
+    // Check if legacy format exists
+    const FString LegacyManifestPath = GetTabsManifestPath();
+    if (!FPaths::FileExists(LegacyManifestPath))
+    {
+        return false;
+    }
+
+    UE_LOG(LogAutonomix, Log, TEXT("MainPanel: Found legacy tab manifest at %s — migrating to per-task directories..."),
+        *LegacyManifestPath);
+
+    FString JsonString;
+    if (!FFileHelper::LoadFileToString(JsonString, *LegacyManifestPath))
+    {
+        UE_LOG(LogAutonomix, Warning, TEXT("MainPanel: Failed to read legacy manifest for migration."));
+        return false;
+    }
+
+    TSharedPtr<FJsonObject> Root;
+    TSharedRef<TJsonReader<>> Reader = TJsonReaderFactory<>::Create(JsonString);
+    if (!FJsonSerializer::Deserialize(Reader, Root) || !Root.IsValid())
+    {
+        UE_LOG(LogAutonomix, Warning, TEXT("MainPanel: Failed to parse legacy manifest JSON for migration."));
+        return false;
     }
 
     Root->TryGetNumberField(TEXT("next_tab_number"), NextTabNumber);
@@ -988,7 +1402,7 @@ void SAutonomixMainPanel::LoadTabsFromDisk()
     const TArray<TSharedPtr<FJsonValue>>* TabsArray = nullptr;
     if (!Root->TryGetArrayField(TEXT("tabs"), TabsArray) || !TabsArray)
     {
-        return;
+        return false;
     }
 
     for (const TSharedPtr<FJsonValue>& TabValue : *TabsArray)
@@ -1012,34 +1426,33 @@ void SAutonomixMainPanel::LoadTabsFromDisk()
             TabState.Title = MakeDefaultTabTitle(GetNextAvailableTabNumber());
         }
 
+        // Load from legacy location
         TabState.ConversationManager = MakeShared<FAutonomixConversationManager>();
-
         FString ConversationFileName;
         (*TabObj)->TryGetStringField(TEXT("conversation_file"), ConversationFileName);
         if (ConversationFileName.IsEmpty())
         {
             ConversationFileName = MakeTabConversationFileName(TabState.TabId);
         }
-
-        const FString ConversationPath = FPaths::Combine(GetTabsSessionDir(), ConversationFileName);
-        TabState.ConversationManager->LoadSession(ConversationPath);
+        const FString LegacyConversationPath = FPaths::Combine(GetTabsSessionDir(), ConversationFileName);
+        TabState.ConversationManager->LoadSession(LegacyConversationPath);
         TabState.ContextManager = MakeShared<FAutonomixContextManager>(LLMClient, TabState.ConversationManager);
 
+        // Load token usage from legacy format
         const TSharedPtr<FJsonObject>* SessionUsageObj = nullptr;
         if ((*TabObj)->TryGetObjectField(TEXT("session_token_usage"), SessionUsageObj))
         {
             TabState.SessionTokenUsage = TokenUsageFromJson(*SessionUsageObj);
         }
-
         const TSharedPtr<FJsonObject>* LastUsageObj = nullptr;
         if ((*TabObj)->TryGetObjectField(TEXT("last_response_token_usage"), LastUsageObj))
         {
             TabState.LastResponseTokenUsage = TokenUsageFromJson(*LastUsageObj);
         }
-
         (*TabObj)->TryGetNumberField(TEXT("context_usage_percent"), TabState.ContextUsagePercent);
         (*TabObj)->TryGetNumberField(TEXT("last_request_cost"), TabState.LastRequestCost);
 
+        // Load todos from legacy format
         const TArray<TSharedPtr<FJsonValue>>* TodosArray = nullptr;
         if ((*TabObj)->TryGetArrayField(TEXT("todos"), TodosArray) && TodosArray)
         {
@@ -1050,15 +1463,12 @@ void SAutonomixMainPanel::LoadTabsFromDisk()
                 {
                     continue;
                 }
-
                 FAutonomixTodoItem Todo;
                 (*TodoObj)->TryGetStringField(TEXT("id"), Todo.Id);
                 (*TodoObj)->TryGetStringField(TEXT("content"), Todo.Content);
-
-                FString StatusStr;
-                (*TodoObj)->TryGetStringField(TEXT("status"), StatusStr);
-                Todo.Status = FAutonomixTodoItem::ParseStatus(StatusStr);
-
+                FString TodoStatusStr;
+                (*TodoObj)->TryGetStringField(TEXT("status"), TodoStatusStr);
+                Todo.Status = FAutonomixTodoItem::ParseStatus(TodoStatusStr);
                 if (!Todo.Content.IsEmpty())
                 {
                     TabState.Todos.Add(Todo);
@@ -1067,15 +1477,18 @@ void SAutonomixMainPanel::LoadTabsFromDisk()
         }
 
         TabState.CostTracker.Reset();
+        TabState.CreatedAt = FDateTime::UtcNow(); // Best estimate for migrated tasks
+        TabState.TaskStatus = EAutonomixTaskStatus::Interrupted; // Was active in legacy format
 
         ConversationTabs.Add(MoveTemp(TabState));
     }
 
     if (ConversationTabs.Num() == 0)
     {
-        return;
+        return false;
     }
 
+    // Set active tab
     ActiveTabIndex = 0;
     if (!ActiveTabId.IsEmpty())
     {
@@ -1090,73 +1503,24 @@ void SAutonomixMainPanel::LoadTabsFromDisk()
     }
 
     NextTabNumber = FMath::Max(NextTabNumber, ConversationTabs.Num() + 1);
+
+    // Save in the new format immediately (creates per-task directories + task_index.json)
+    SaveTabsToDisk();
+
+    UE_LOG(LogAutonomix, Log,
+        TEXT("MainPanel: Migrated %d tabs from legacy format. New per-task directories created."),
+        ConversationTabs.Num());
+
+    return true;
 }
 
-void SAutonomixMainPanel::SaveTabsToDisk()
+void SAutonomixMainPanel::SetActiveTaskStatus(EAutonomixTaskStatus NewStatus)
 {
-    SyncRuntimeStateToActiveTab();
-
-    if (ConversationTabs.Num() == 0)
+    FAutonomixConversationTabState* ActiveTab = GetActiveTabState();
+    if (ActiveTab)
     {
-        return;
-    }
-
-    const FString TabsDir = GetTabsSessionDir();
-    IFileManager::Get().MakeDirectory(*TabsDir, true);
-
-    TSharedPtr<FJsonObject> Root = MakeShared<FJsonObject>();
-    Root->SetStringField(TEXT("format_version"), TEXT("1.0.0"));
-    Root->SetStringField(TEXT("saved_at"), FDateTime::UtcNow().ToIso8601());
-    Root->SetNumberField(TEXT("next_tab_number"), NextTabNumber);
-
-    const FAutonomixConversationTabState* ActiveTab = GetActiveTabState();
-    Root->SetStringField(TEXT("active_tab_id"), ActiveTab ? ActiveTab->TabId : TEXT(""));
-
-    TArray<TSharedPtr<FJsonValue>> TabsArray;
-    for (const FAutonomixConversationTabState& TabState : ConversationTabs)
-    {
-        if (!TabState.ConversationManager.IsValid())
-        {
-            continue;
-        }
-
-        const FString ConversationFileName = MakeTabConversationFileName(TabState.TabId);
-        const FString ConversationPath = FPaths::Combine(TabsDir, ConversationFileName);
-        TabState.ConversationManager->SaveSession(ConversationPath);
-
-        TSharedPtr<FJsonObject> TabObj = MakeShared<FJsonObject>();
-        TabObj->SetStringField(TEXT("id"), TabState.TabId);
-        TabObj->SetStringField(TEXT("title"), TabState.Title);
-        TabObj->SetStringField(TEXT("conversation_file"), ConversationFileName);
-        TabObj->SetObjectField(TEXT("session_token_usage"), TokenUsageToJson(TabState.SessionTokenUsage));
-        TabObj->SetObjectField(TEXT("last_response_token_usage"), TokenUsageToJson(TabState.LastResponseTokenUsage));
-        TabObj->SetNumberField(TEXT("context_usage_percent"), TabState.ContextUsagePercent);
-        TabObj->SetNumberField(TEXT("last_request_cost"), TabState.LastRequestCost);
-
-        TArray<TSharedPtr<FJsonValue>> TodosArray;
-        for (const FAutonomixTodoItem& Todo : TabState.Todos)
-        {
-            TSharedPtr<FJsonObject> TodoObj = MakeShared<FJsonObject>();
-            TodoObj->SetStringField(TEXT("id"), Todo.Id);
-            TodoObj->SetStringField(TEXT("content"), Todo.Content);
-            TodoObj->SetStringField(TEXT("status"), FAutonomixTodoItem::StatusToString(Todo.Status));
-            TodosArray.Add(MakeShared<FJsonValueObject>(TodoObj));
-        }
-        TabObj->SetArrayField(TEXT("todos"), TodosArray);
-
-        TabsArray.Add(MakeShared<FJsonValueObject>(TabObj));
-    }
-
-    Root->SetArrayField(TEXT("tabs"), TabsArray);
-
-    FString OutString;
-    TSharedRef<TJsonWriter<>> Writer = TJsonWriterFactory<>::Create(&OutString);
-    FJsonSerializer::Serialize(Root.ToSharedRef(), Writer);
-
-    const FString ManifestPath = GetTabsManifestPath();
-    if (!FFileHelper::SaveStringToFile(OutString, *ManifestPath, FFileHelper::EEncodingOptions::ForceUTF8WithoutBOM))
-    {
-        UE_LOG(LogAutonomix, Warning, TEXT("MainPanel: Failed to save tab manifest: %s"), *ManifestPath);
+        ActiveTab->TaskStatus = NewStatus;
+        SaveTabsToDisk();
     }
 }
 
@@ -1356,7 +1720,7 @@ bool SAutonomixMainPanel::CheckPrivacyDisclosure()
 void SAutonomixMainPanel::OnPromptSubmitted(const FString& PromptText)
 {
     // Concurrency guard: if already processing, queue the message instead of rejecting
-    if (bIsProcessing)
+    if (IsProcessing())
     {
         PendingMessageQueue.Add(PromptText);
         FAutonomixMessage QueueMsg(EAutonomixMessageRole::System,
@@ -1393,6 +1757,9 @@ void SAutonomixMainPanel::OnPromptSubmitted(const FString& PromptText)
     }
 
     // Reset agentic loop state
+
+    // v5.0: Auto-title the tab from the first user message
+    TryAutoTitleActiveTab(PromptText);
 
     // Phase 4: Check for slash commands — expand if found
     FString ProcessedPrompt = PromptText;
@@ -1437,6 +1804,18 @@ void SAutonomixMainPanel::OnPromptSubmitted(const FString& PromptText)
                 FString::Printf(TEXT("📎 Resolved %d reference(s) from input"), RefResult.ResolvedReferences.Num()));
             ChatView->AddMessage(RefMsg);
         }
+    }
+
+    // v4.0: Mark task as Active when user starts/resumes a conversation
+    if (FAutonomixConversationTabState* ActiveTab = GetActiveTabState())
+    {
+        ActiveTab->TaskStatus = EAutonomixTaskStatus::Active;
+    }
+
+    // v4.1: Hide the resumption bar if it was showing (user chose to type instead of clicking Continue)
+    if (ChatView.IsValid())
+    {
+        ChatView->HideResumptionBar();
     }
 
     // Add user message to conversation and UI
@@ -1502,9 +1881,8 @@ FReply SAutonomixMainPanel::OnStopClicked()
     }
 
     // CRITICAL: Tell the ChatSession to stop its agentic loop.
-    // Without this, the loop continues even after the HTTP request is cancelled,
-    // because tool execution happens synchronously and ContinueAgenticLoop()
-    // fires a new request after tools complete.
+    // StopAgenticLoop() calls SetState(Cancelling → Idle) which drives the UI
+    // via OnConversationStateChanged (InputArea Send/Stop swap, etc.)
     if (FAutonomixConversationTabState* ActiveTab = GetActiveTabState())
     {
         if (ActiveTab->ChatSession.IsValid())
@@ -1513,14 +1891,11 @@ FReply SAutonomixMainPanel::OnStopClicked()
         }
     }
 
-    bIsProcessing = false;
-
-    FAutonomixMessage StopMsg(EAutonomixMessageRole::System, TEXT("⏹ Request cancelled by user."));
+    FAutonomixMessage StopMsg(EAutonomixMessageRole::System, TEXT("\u23F9 Request cancelled by user."));
     ChatView->AddMessage(StopMsg);
 
     if (InputArea.IsValid())
     {
-        InputArea->SetSendEnabled(true);
         InputArea->FocusInput();
     }
     if (ProgressOverlay.IsValid())
@@ -1604,16 +1979,17 @@ FString SAutonomixMainPanel::BuildSystemPrompt() const
                 "You have tools to read/write files, search assets, and modify Blueprints.\n\n"
                 "CRITICAL RULES:\n"
                 "- You MUST use tools to complete tasks. NEVER say 'I cannot' or 'I don't have access'.\n"
-                "- You CAN create files (write_file), read files (read_file), edit files (apply_diff), "
-                "list directories (list_directory), search files (search_files), and search assets (search_assets).\n"
+                "- You CAN read files (read_file_snippet), create C++ classes (create_cpp_class), "
+                "modify C++ files (modify_cpp_file), list directories (list_directory), "
+                "search assets (search_assets), and inject Blueprint nodes (inject_blueprint_nodes_t3d).\n"
                 "- Use one tool per response. Wait for results before next step.\n"
                 "- When done, call attempt_completion with a summary.\n"
                 "- Read files before modifying them.\n"
                 "- Follow UE5 conventions: UCLASS, UPROPERTY, UFUNCTION macros.\n\n"
                 "TOOL FORMAT:\n"
                 "To call a tool, respond with a tool_calls message containing the function name and arguments as JSON.\n"
-                "Example: to read a file, call read_file with {\"file_path\": \"Source/MyGame/MyActor.h\"}\n"
-                "Example: to write a file, call write_file with {\"file_path\": \"...\", \"content\": \"...\"}\n"
+                "Example: to read a file, call read_file_snippet with {\"file_path\": \"Source/MyGame/MyActor.h\"}\n"
+                "Example: to create a C++ class, call create_cpp_class with {\"class_name\": \"MyActor\", \"parent_class\": \"Actor\", \"header_content\": \"...\", \"cpp_content\": \"...\"}\n"
                 "Example: to complete, call attempt_completion with {\"result\": \"Done: created MyActor.h\"}"
             );
 
@@ -1676,7 +2052,15 @@ FString SAutonomixMainPanel::BuildSystemPrompt() const
         "NEVER end a task by responding with plain text — always use attempt_completion.\n\n"
         "CRITICAL RULE: If you have nothing more to do, call attempt_completion. "
         "If there is more work, call the appropriate work tool. "
-        "There is NO valid reason to respond without calling a tool during an agentic task."
+        "There is NO valid reason to respond without calling a tool during an agentic task.\n\n"
+        "DYNAMIC TOOL LOADING:\n"
+        "You start with a core set of tools. If you need a specialized tool not in your current set, "
+        "use list_tools_in_category to discover available tools by domain (blueprint, material, widget, "
+        "animation, performance, etc.), or get_tool_info to load a specific tool by name.\n"
+        "After calling these discovery tools, the discovered tools are AUTOMATICALLY LOADED and become "
+        "available for you to call directly on your NEXT response. Do NOT call get_tool_info twice for "
+        "the same tool — it will be available immediately after the first call.\n"
+        "Only call tools that are currently in your available tool set."
     );
 
     // ---- TOOL USE GUIDELINES (from Roo Code's getToolUseGuidelinesSection) ----
@@ -1689,14 +2073,36 @@ FString SAutonomixMainPanel::BuildSystemPrompt() const
         "2. ONE TOOL AT A TIME: Use one tool per response step. Wait for results before proceeding. "
         "Do not batch unrelated operations.\n\n"
         "3. GATHER BEFORE ASKING: Never ask the user for information you can get yourself with tools. "
-        "Use read_file, list_files, and search_files to gather context.\n\n"
-        "4. READ BEFORE WRITE: When modifying files, ALWAYS read current content first. "
-        "Use apply_diff for targeted edits rather than full rewrites when possible.\n\n"
+        "Use read_file_snippet, list_directory, and search_assets to gather context.\n\n"
+        "4. READ BEFORE WRITE: When modifying files, ALWAYS read current content first with read_file_snippet. "
+        "For C++ changes, use modify_cpp_file for full rewrites or create_cpp_class for new files.\n\n"
         "5. HANDLE ERRORS: If a tool call fails, analyze the error and try an alternative. "
         "Do NOT proceed if a prerequisite tool call failed.\n\n"
         "6. VERIFY CHANGES: After writing a file, read it back to confirm the change was applied correctly.\n\n"
         "7. COMPLETE CLEANLY: When all work is done, call attempt_completion with a clear summary. "
         "NEVER end with a text response only during an agentic task."
+    );
+
+    // ---- CONTEXT MANAGEMENT section — tells the AI about auto-condense ----
+    const FString ContextManagementSection = TEXT(
+        "====\n\n"
+        "CONTEXT MANAGEMENT\n\n"
+        "Your conversation has a finite context window. The system monitors usage and will "
+        "automatically condense (summarize) the conversation when it reaches ~80% capacity.\n\n"
+        "How condensation works:\n"
+        "- The system sends the full conversation to an LLM for summarization\n"
+        "- Old messages are replaced with a concise summary (you get a fresh start)\n"
+        "- Your task progress, file changes, and key decisions are preserved in the summary\n"
+        "- After condensation, you continue working seamlessly\n\n"
+        "What YOU should do:\n"
+        "- Monitor the 'Context Window' section in environment_details for usage percentage\n"
+        "- When context is HIGH (>75%): be concise, skip explanations, focus on tool calls\n"
+        "- When context is CRITICAL (>90%): immediately call attempt_completion with partial progress\n"
+        "- If a task is too large for one context window: break it into phases, complete each with attempt_completion, "
+        "and the user can continue in the next conversation cycle\n"
+        "- NEVER say 'context is full' or 'I can't continue' — instead, summarize what's done and what remains "
+        "in attempt_completion so the user (or a resumed session) can pick up where you left off\n\n"
+        "The user also has a manual 'Condense' button they can click at any time."
     );
 
     // ---- OBJECTIVE section (from Roo Code's getObjectiveSection) ----
@@ -1796,6 +2202,7 @@ FString SAutonomixMainPanel::BuildSystemPrompt() const
     SystemPrompt += TEXT("\n\n") + ToolUseSection;
     SystemPrompt += TEXT("\n\n") + ToolUseGuidelinesSection;
     SystemPrompt += TEXT("\n\n") + RulesSection;
+    SystemPrompt += TEXT("\n\n") + ContextManagementSection;
     SystemPrompt += TEXT("\n\n") + ObjectiveSection;
 
     // Load any user-provided custom system prompt template (static per session)
@@ -1901,6 +2308,9 @@ FString SAutonomixMainPanel::HandleAttemptCompletion(const FAutonomixToolCall& T
         Result = TEXT("(Task completed — no result message provided)");
     }
 
+    // v4.0: Set task status to Completed
+    SetActiveTaskStatus(EAutonomixTaskStatus::Completed);
+
     // Display the completion result prominently in the chat
     FAutonomixMessage CompletionMsg(EAutonomixMessageRole::Assistant, Result);
     ChatView->AddMessage(CompletionMsg);
@@ -1924,18 +2334,44 @@ FString SAutonomixMainPanel::HandleAttemptCompletion(const FAutonomixToolCall& T
             HistoryItem.TotalCostUSD = CostTracker.GetSessionTotalCost();
             HistoryItem.MessageCount = ConversationManager.IsValid()
                 ? ConversationManager->GetHistory().Num() : 0;
+            HistoryItem.Status = ActiveTab->TaskStatus;
+            HistoryItem.CreatedAt = ActiveTab->CreatedAt;
+
+            // Get first user message for preview
+            if (ConversationManager.IsValid())
+            {
+                for (const FAutonomixMessage& Msg : ConversationManager->GetHistory())
+                {
+                    if (Msg.Role == EAutonomixMessageRole::User)
+                    {
+                        HistoryItem.FirstUserMessage = Msg.Content.Left(200);
+                        break;
+                    }
+                }
+            }
         }
         HistoryItem.LastActiveAt = FDateTime::UtcNow();
+
+        // Model ID from current settings
+        const UAutonomixDeveloperSettings* HistSettings = UAutonomixDeveloperSettings::Get();
+        if (HistSettings)
+        {
+            HistoryItem.ModelId = HistSettings->GetModelDisplayName();
+        }
+
         TaskHistory->RecordTask(HistoryItem);
+
+        // Refresh history panel
+        if (HistoryPanel.IsValid())
+        {
+            HistoryPanel->RefreshHistory(TaskHistory->GetHistory());
+        }
     }
 
-    // CRITICAL: Stop the agentic loop immediately
-    bIsProcessing = false;
-
-    // Re-enable input
+    // Note: ChatSession has already called SetState(Idle) via attempt_completion path,
+    // which drives InputArea state via OnConversationStateChanged.
     if (InputArea.IsValid())
     {
-        InputArea->SetSendEnabled(true);
         InputArea->FocusInput();
     }
     if (ProgressOverlay.IsValid())
@@ -1980,7 +2416,7 @@ FString SAutonomixMainPanel::HandleAttemptCompletion(const FAutonomixToolCall& T
 
 void SAutonomixMainPanel::ProcessNextQueuedMessage()
 {
-    if (PendingMessageQueue.Num() == 0 || bIsProcessing)
+    if (PendingMessageQueue.Num() == 0 || IsProcessing())
     {
         return;
     }
@@ -2190,8 +2626,15 @@ void SAutonomixMainPanel::HandleContextWindowExceeded(int32 RetryCount)
                 TEXT("❌ Context window is full and cannot be reduced further. Please start a new conversation."));
             ChatView->AddMessage(ErrorMsg);
 
-            bIsProcessing = false;
-            if (InputArea.IsValid()) { InputArea->SetSendEnabled(true); InputArea->FocusInput(); }
+            // ChatSession will transition to Error state which drives InputArea
+            if (FAutonomixConversationTabState* Tab = GetActiveTabState())
+            {
+                if (Tab->ChatSession.IsValid())
+                {
+                    Tab->ChatSession->SetState(EConversationState::Error);
+                }
+            }
+            if (InputArea.IsValid()) { InputArea->FocusInput(); }
             if (ProgressOverlay.IsValid()) ProgressOverlay->HideProgress();
         }
     }
@@ -2236,10 +2679,10 @@ FString SAutonomixMainPanel::BuildEnvironmentDetailsString() const
 
 FReply SAutonomixMainPanel::OnCondenseContextClicked()
 {
-    if (bIsProcessing)
+    if (IsProcessing())
     {
         FAutonomixMessage BusyMsg(EAutonomixMessageRole::System,
-            TEXT("⏳ Cannot condense while a request is in progress."));
+            TEXT("\u231B Cannot condense while a request is in progress."));
         ChatView->AddMessage(BusyMsg);
         return FReply::Handled();
     }
@@ -2254,7 +2697,7 @@ FReply SAutonomixMainPanel::OnCondenseContextClicked()
 
     // Show progress
     FAutonomixMessage StartMsg(EAutonomixMessageRole::System,
-        TEXT("📦 Condensing context... This sends the conversation to Claude for summarization."));
+        TEXT("📦 Condensing context... This sends the conversation to the AI for summarization."));
     ChatView->AddMessage(StartMsg);
 
     if (ProgressOverlay.IsValid())
@@ -2426,21 +2869,104 @@ void SAutonomixMainPanel::OnViewCheckpointDiff(const FString& CommitHash)
 void SAutonomixMainPanel::OnLoadHistoryTask(const FString& TabId)
 {
     if (!TaskHistory.IsValid()) return;
+
+    // Check if this task is already open in an existing tab — switch to it
+    for (int32 i = 0; i < ConversationTabs.Num(); i++)
+    {
+        if (ConversationTabs[i].TabId == TabId)
+        {
+            SwitchToTab(i);
+            return;
+        }
+    }
+
+    // Not open — load from history
     const FAutonomixTaskHistoryItem* Item = TaskHistory->GetTask(TabId);
     if (!Item) return;
     CreateNewTab(Item->Title);
-    ChatView->AddMessage(FAutonomixMessage(EAutonomixMessageRole::System,
-        FString::Printf(TEXT("📋 Loaded task: %s"), *Item->Title)));
+    if (ChatView.IsValid())
+    {
+        ChatView->AddMessage(FAutonomixMessage(EAutonomixMessageRole::System,
+            FString::Printf(TEXT("\xF0\x9F\x93\x8B Loaded task: %s"), *Item->Title)));
+    }
 }
 
 void SAutonomixMainPanel::OnDeleteHistoryTask(const FString& TabId)
 {
     if (!TaskHistory.IsValid()) return;
+
+    // Remove the per-task directory (Saved/Autonomix/Tasks/<TaskId>/)
+    const FString TaskDirPath = GetTaskDir(TabId);
+    if (IFileManager::Get().DirectoryExists(*TaskDirPath))
+    {
+        IFileManager::Get().DeleteDirectory(*TaskDirPath, false, true);
+    }
+
+    // Remove from history index
     TaskHistory->RemoveTask(TabId);
+
+    // Update task_index.json
+    SaveTaskIndex();
+
+    // Refresh the panel
     if (HistoryPanel.IsValid() && TaskHistory.IsValid())
     {
         HistoryPanel->RefreshHistory(TaskHistory->GetHistory());
     }
+}
+
+void SAutonomixMainPanel::OnRenameHistoryTask(const FString& TabId, const FString& NewTitle)
+{
+    if (!TaskHistory.IsValid()) return;
+
+    // Update the history store
+    TaskHistory->RenameTask(TabId, NewTitle);
+
+    // Also update any open tab with this ID
+    for (FAutonomixConversationTabState& TabState : ConversationTabs)
+    {
+        if (TabState.TabId == TabId)
+        {
+            TabState.Title = NewTitle;
+            RefreshTabStrip();
+            break;
+        }
+    }
+
+    // Persist
+    SaveTaskIndex();
+}
+
+void SAutonomixMainPanel::TryAutoTitleActiveTab(const FString& FirstUserMessage)
+{
+    FAutonomixConversationTabState* TabState = GetActiveTabState();
+    if (!TabState) return;
+
+    // Only auto-title if the tab still has a default title
+    int32 DummyNumber;
+    if (!TryParseDefaultTabNumber(TabState->Title, DummyNumber))
+    {
+        return; // Already has a custom title, don't override
+    }
+
+    // Generate title from first user message
+    const FString AutoTitle = SAutonomixHistoryPanel::GenerateAutoTitle(FirstUserMessage);
+    if (AutoTitle.IsEmpty() || AutoTitle == TEXT("New Task"))
+    {
+        return; // Not enough content to generate a meaningful title
+    }
+
+    // Apply
+    TabState->Title = AutoTitle;
+    RefreshTabStrip();
+
+    // Update history
+    if (TaskHistory.IsValid())
+    {
+        TaskHistory->RenameTask(TabState->TabId, AutoTitle);
+    }
+
+    SaveTaskIndex();
 }
 
 void SAutonomixMainPanel::OnMessageAdded(const FAutonomixMessage& Message)
@@ -2480,11 +3006,10 @@ void SAutonomixMainPanel::OnStatusUpdated(const FString& Status)
 
 void SAutonomixMainPanel::OnAgentFinished(const FString& Result)
 {
-    bIsProcessing = false;
-
+    // Note: ChatSession already transitioned to Idle via SetState() before broadcasting
+    // OnAgentFinished, so InputArea state is already updated via OnConversationStateChanged.
     if (InputArea.IsValid())
     {
-        InputArea->SetSendEnabled(true);
         InputArea->FocusInput();
     }
     if (ProgressOverlay.IsValid())
@@ -2509,11 +3034,20 @@ void SAutonomixMainPanel::OnToolRequiresApproval(const FAutonomixActionPlan& Pla
 
 void SAutonomixMainPanel::OnErrorReceived(const FAutonomixHTTPError& Error)
 {
-    bIsProcessing = false;
-
+    // Note: ChatSession transitions to Error state on request failure,
+    // driving InputArea via OnConversationStateChanged.
+    // For errors received directly from LLMClient, ensure state is set:
+    if (FAutonomixConversationTabState* Tab = GetActiveTabState())
+    {
+        if (Tab->ChatSession.IsValid() && Tab->ChatSession->GetConversationState() == EConversationState::Streaming)
+        {
+            Tab->ChatSession->SetState(EConversationState::Error);
+        }
+        // v4.0: Track error status in task metadata
+        Tab->TaskStatus = EAutonomixTaskStatus::Errored;
+    }
     if (InputArea.IsValid())
     {
-        InputArea->SetSendEnabled(true);
         InputArea->FocusInput();
     }
     if (ProgressOverlay.IsValid())
@@ -2570,11 +3104,7 @@ void SAutonomixMainPanel::OnTokenUsageUpdated(const FAutonomixTokenUsage& Usage)
 
 void SAutonomixMainPanel::OnRequestStarted()
 {
-    bIsProcessing = true;
-    if (InputArea.IsValid())
-    {
-        InputArea->SetSendEnabled(false);
-    }
+    // Note: ChatSession already called SetState(Streaming) which drives InputArea.
     if (ProgressOverlay.IsValid())
     {
         FString StatusText = TEXT("Thinking...");
@@ -2592,12 +3122,11 @@ void SAutonomixMainPanel::OnRequestStarted()
 
 void SAutonomixMainPanel::OnRequestCompleted(bool bSuccess)
 {
+    // Note: ChatSession handles state transitions (Error on failure, continues on success).
     if (!bSuccess)
     {
-        bIsProcessing = false;
         if (InputArea.IsValid())
         {
-            InputArea->SetSendEnabled(true);
             InputArea->FocusInput();
         }
         if (ProgressOverlay.IsValid())
@@ -2605,5 +3134,221 @@ void SAutonomixMainPanel::OnRequestCompleted(bool bSuccess)
             ProgressOverlay->HideProgress();
         }
         return;
+    }
+}
+
+// ============================================================================
+// Conversation State Helpers
+// ============================================================================
+
+EConversationState SAutonomixMainPanel::GetCurrentConversationState() const
+{
+    const FAutonomixConversationTabState* Tab = GetActiveTabState();
+    if (Tab && Tab->ChatSession.IsValid())
+    {
+        return Tab->ChatSession->GetConversationState();
+    }
+    return EConversationState::Idle;
+}
+
+bool SAutonomixMainPanel::IsProcessing() const
+{
+    const EConversationState State = GetCurrentConversationState();
+    return State == EConversationState::Streaming || State == EConversationState::Cancelling;
+}
+
+void SAutonomixMainPanel::OnConversationStateChanged(EConversationState NewState)
+{
+    // Forward state to InputArea for Send/Stop swap
+    if (InputArea.IsValid())
+    {
+        InputArea->SetConversationState(NewState);
+    }
+
+    // Hide/show progress overlay based on state
+    if (ProgressOverlay.IsValid())
+    {
+        if (NewState == EConversationState::Idle || NewState == EConversationState::Error)
+        {
+            ProgressOverlay->HideProgress();
+        }
+    }
+
+    // Re-enable input focus when returning to Idle
+    if (NewState == EConversationState::Idle && InputArea.IsValid())
+    {
+        InputArea->FocusInput();
+    }
+}
+
+// ============================================================================
+// v4.1: Task Resumption — Continue/End Buttons
+// ============================================================================
+
+void SAutonomixMainPanel::OnContinueInterruptedTask()
+{
+    FAutonomixConversationTabState* ActiveTab = GetActiveTabState();
+    if (!ActiveTab || ActiveTab->TaskStatus != EAutonomixTaskStatus::Interrupted)
+    {
+        return;
+    }
+
+    if (IsProcessing())
+    {
+        return;
+    }
+
+    UE_LOG(LogAutonomix, Log, TEXT("MainPanel: User clicked 'Continue Task' on interrupted tab '%s'."), *ActiveTab->Title);
+
+    // Re-read settings in case API key changed
+    ConfigureClientFromSettings();
+
+    const UAutonomixDeveloperSettings* Settings = UAutonomixDeveloperSettings::Get();
+    if (!Settings || !Settings->IsActiveProviderApiKeySet())
+    {
+        FString ProviderName = FAutonomixLLMClientFactory::GetActiveProviderDisplayName();
+        FAutonomixMessage ErrorMsg(EAutonomixMessageRole::Error,
+            FString::Printf(
+                TEXT("API key not configured for active provider (%s). "
+                     "Go to Project Settings > Plugins > Autonomix to set your API key."),
+                *ProviderName));
+        ChatView->AddMessage(ErrorMsg);
+        return;
+    }
+
+    // Privacy disclosure check
+    if (!CheckPrivacyDisclosure())
+    {
+        return;
+    }
+
+    // Hide the resumption bar
+    if (ChatView.IsValid())
+    {
+        ChatView->HideResumptionBar();
+    }
+
+    // Mark as Active
+    ActiveTab->TaskStatus = EAutonomixTaskStatus::Active;
+
+    // Show a system notification
+    FAutonomixMessage ResumeNotice(EAutonomixMessageRole::System,
+        TEXT("▶ Resuming interrupted task..."));
+    ChatView->AddMessage(ResumeNotice);
+
+    // Ensure ChatSession exists
+    if (!ActiveTab->ChatSession.IsValid())
+    {
+        LoadRuntimeStateFromActiveTab();
+    }
+
+    // Delegate to ChatSession::ResumeTask() which handles:
+    // 1. Synthetic tool_result injection
+    // 2. Resumption prompt injection
+    // 3. Agentic loop restart
+    if (ActiveTab->ChatSession.IsValid())
+    {
+        ActiveTab->ChatSession->ResumeTask(ActiveTab->LastActivityAt);
+    }
+
+    SaveTabsToDisk();
+}
+
+void SAutonomixMainPanel::OnEndInterruptedTask()
+{
+    FAutonomixConversationTabState* ActiveTab = GetActiveTabState();
+    if (!ActiveTab)
+    {
+        return;
+    }
+
+    UE_LOG(LogAutonomix, Log, TEXT("MainPanel: User clicked 'End Task' on interrupted tab '%s'."), *ActiveTab->Title);
+
+    // Mark as Completed
+    ActiveTab->TaskStatus = EAutonomixTaskStatus::Completed;
+
+    // Hide the resumption bar
+    if (ChatView.IsValid())
+    {
+        ChatView->HideResumptionBar();
+    }
+
+    // Show a system notification
+    FAutonomixMessage EndNotice(EAutonomixMessageRole::System,
+        TEXT("⏹ Task marked as completed."));
+    ChatView->AddMessage(EndNotice);
+
+    // Ensure the ChatSession is idle
+    if (ActiveTab->ChatSession.IsValid())
+    {
+        ActiveTab->ChatSession->SetState(EConversationState::Idle);
+    }
+
+    if (InputArea.IsValid())
+    {
+        InputArea->FocusInput();
+    }
+
+    SaveTabsToDisk();
+}
+
+void SAutonomixMainPanel::CheckAndShowResumptionBar()
+{
+    if (!ChatView.IsValid())
+    {
+        return;
+    }
+
+    const FAutonomixConversationTabState* ActiveTab = GetActiveTabState();
+    if (!ActiveTab)
+    {
+        ChatView->HideResumptionBar();
+        return;
+    }
+
+    if (ActiveTab->TaskStatus == EAutonomixTaskStatus::Interrupted &&
+        ActiveTab->ConversationManager.IsValid() &&
+        ActiveTab->ConversationManager->GetMessageCount() > 0)
+    {
+        const FString TimeAgoText = BuildTimeAgoText(ActiveTab->LastActivityAt);
+        ChatView->ShowResumptionBar(TimeAgoText);
+    }
+    else
+    {
+        ChatView->HideResumptionBar();
+    }
+}
+
+FString SAutonomixMainPanel::BuildTimeAgoText(const FDateTime& InterruptedAt)
+{
+    const FTimespan Elapsed = FDateTime::UtcNow() - InterruptedAt;
+    const double TotalMinutes = Elapsed.GetTotalMinutes();
+
+    if (TotalMinutes < 1.0)
+    {
+        return TEXT("moments");
+    }
+    else if (TotalMinutes < 60.0)
+    {
+        const int32 Minutes = FMath::RoundToInt32(TotalMinutes);
+        return FString::Printf(TEXT("%d minute%s"), Minutes, Minutes == 1 ? TEXT("") : TEXT("s"));
+    }
+    else if (TotalMinutes < 1440.0) // 24 hours
+    {
+        const double Hours = TotalMinutes / 60.0;
+        if (Hours < 2.0)
+        {
+            return TEXT("1 hour");
+        }
+        return FString::Printf(TEXT("%.0f hours"), Hours);
+    }
+    else
+    {
+        const double Days = TotalMinutes / 1440.0;
+        if (Days < 2.0)
+        {
+            return TEXT("1 day");
+        }
+        return FString::Printf(TEXT("%.0f days"), Days);
     }
 }

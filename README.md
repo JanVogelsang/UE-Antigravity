@@ -39,6 +39,15 @@ Think of it as **Cursor/Roo Code, but for Unreal Engine** — with deep engine i
 - **Token-Optimized Tool Results** — Blueprint readbacks use a compact connection verification format instead of raw T3D exports, reducing tool result tokens by **80-90%** per call while preserving full verification capability.
 - **Fuzzy Diff Applicator** — Levenshtein-distance fuzzy matching for code edits, preventing failures from minor whitespace or formatting differences.
 
+### 🛡️ Session & UX Improvements (v1.3)
+- **Stop Button** — Single-click cancel for any in-progress AI operation. Send button transforms into a Stop button during processing, driven by a unified `EConversationState` state machine (Idle → Streaming → WaitingForToolApproval → Cancelling → Error). Escape key also cancels.
+- **Conversation Persistence** — Every task auto-saves to `Saved/Autonomix/Tasks/<uuid>/` with dual files: `api_history.json` (full message history for API replay) and `ui_messages.json` (display-optimized messages for instant UI restore). A `task_index.json` metadata index tracks all tasks with titles, timestamps, token counts, and cost.
+- **Task Resumption** — Resume any previous task from the History Panel. The system injects synthetic `tool_result` messages for any orphaned `tool_use` blocks, adds a time-aware resumption prompt, and presents Continue/End buttons. The AI replans based on what was accomplished rather than blindly continuing.
+- **Conversation Beautification** — Tool calls render as collapsible sections with color-coded left borders (blue for tools, green for success, red for errors, amber for system messages). Streaming text is batched at 50ms intervals for smooth rendering.
+- **Enhanced History Panel** — Date-grouped conversation list (Today / Yesterday / This Week / Older) with auto-generated titles from the first user message, per-task token counts and cost display, full-text search, sort by date/cost/title, inline rename, and delete with confirmation.
+- **Dynamic Tool Injection** — When the AI calls `get_tool_info` or `list_tools_in_category`, the discovered tool schemas are automatically added to the `tools` array on the next API call. No more "tool not available" errors after discovery.
+- **Context-Aware AI** — The AI is explicitly taught about context management in its system prompt. Environment details provide graduated warnings at 50%/75%/90% context usage with actionable instructions (be concise → wrap up → call attempt_completion with partial progress).
+
 ### 🧠 Next-Gen Agentic Autonomy (v1.2)
 - **Multimodal Viewport Vision** — Autonomix isn't blind. Using Vision-Language Models (VLMs), the AI can trigger the `capture_viewport` tool to visually analyze the Editor. It can build a UI, "look" at the viewport, and autonomously correct misaligned anchor points or bad lighting setups.
 - **Automated PIE Playtesting** — The AI closes the QA loop. It can autonomously launch Play-In-Editor (PIE), simulate player inputs, read the runtime Message Log for `Accessed None` errors or C++ asserts, and iteratively fix its own bugs before you even touch the mouse.
@@ -58,14 +67,16 @@ Think of it as **Cursor/Roo Code, but for Unreal Engine** — with deep engine i
 ## Features
 
 ### 🎨 Editor Integration
-- **Dockable Chat Panel** — Full Slate-based chat UI with real-time SSE streaming, syntax-highlighted code blocks, unified diff viewer, and inline asset previews
-- **Multi-Tab Conversations** — Work on multiple tasks simultaneously with full state persistence across editor restarts
+- **Dockable Chat Panel** — Full Slate-based chat UI with real-time SSE streaming, syntax-highlighted code blocks, unified diff viewer, inline asset previews, and collapsible tool call sections with color-coded borders
+- **Multi-Tab Conversations** — Work on multiple tasks simultaneously with full state persistence across editor restarts. Each task saved to `Saved/Autonomix/Tasks/<uuid>/` with dual-file model (API history + UI messages)
+- **Stop Button** — Cancel any in-progress operation with one click or Escape key. Send/Stop buttons swap based on `EConversationState` state machine
 - **Context Bar** — Live progress bar showing context window usage, token counts (input/output/cache), running cost in USD, and one-click context condensation
 - **Slash Commands** — Type `/new-actor`, `/fix-errors`, `/optimize`, `/create-material`, `/refactor`, `/setup-input`, `/document`, `/add-component`, `/create-interface`, `/setup-replication` for instant workflow shortcuts with autocomplete
 - **@ References** — Type `@filename` or `@folder` to include files/folders in your message context, with autocomplete suggestions
 - **Task Todo List** — AI maintains a live checklist of planned steps, updated as work progresses
 - **Checkpoint Panel** — View all saved checkpoints, restore to any point, diff between checkpoints
-- **History Panel** — Browse past conversations with token counts, cost summaries, and one-click resume
+- **History Panel** — Browse past conversations with date grouping (Today/Yesterday/This Week/Older), auto-generated titles, token counts, cost summaries, full-text search, sort by date/cost/title, inline rename, delete with confirmation, and one-click resume
+- **Task Resumption** — Resume any previous task with intelligent context restoration: synthetic tool results for orphaned calls, time-aware resumption prompt, Continue/End buttons
 - **File Changes Panel** — See all files modified during the current session
 - **Follow-Up Suggestions** — AI suggests next actions after completing a task
 
@@ -82,10 +93,10 @@ Think of it as **Cursor/Roo Code, but for Unreal Engine** — with deep engine i
 ### 🧠 Context Management (Ported from Roo Code)
 - **Conversation Condensation** — When context reaches 80%, the conversation is summarized by the AI into a compact summary while preserving critical details. Auto-triggers or manual via the "Condense" button.
 - **Sliding-Window Truncation** — When condensation isn't enough, non-destructive truncation tags oldest messages (preserving them for rewind) while keeping API payloads within limits.
-- **Tool Result Eviction** — Old tool results (>2000 chars) that the AI has already processed are automatically replaced with compact summaries in the effective history, preventing conversation bloat during long agentic sessions.
+- **Tool Result Eviction** — Old tool results (>2000 chars) that the AI has already processed are automatically replaced with compact summaries in the effective history. Protected guards ensure the last 5 large results and results within the last 20 messages are never evicted, preventing critical data loss on resumed sessions.
 - **Compact Blueprint Readbacks** — `get_blueprint_info`, `inject_blueprint_nodes_t3d`, and `verify_blueprint_connections` return compact connection reports (exec chain, data connections, pin values, disconnected pins) instead of raw T3D exports, saving 80-90% tokens per call.
 - **Prompt Caching** — System prompt is split into a static prefix (role + rules + guidelines, ~7K tokens) with `cache_control: ephemeral` and a dynamic suffix (project context, recent actions). Anthropic caches the static prefix at 90% discount after the first call.
-- **Two-Tier Tool Loading** — Instead of sending 40-90 tool schemas on every call (~5-8K tokens), only ~15 core tools are sent. The AI discovers domain-specific tools on demand via `get_tool_info` and `list_tools_in_category` meta-tools. Schema overhead drops to ~1.5K tokens.
+- **Two-Tier Tool Loading with Dynamic Injection** — Instead of sending 40-90 tool schemas on every call (~5-8K tokens), only ~15 core tools are sent. The AI discovers domain-specific tools on demand via `get_tool_info` and `list_tools_in_category` meta-tools, and discovered schemas are **automatically injected** into the `tools` array on the next API call. Schema overhead drops to ~1.5K tokens.
 - **Schema Compression** — Property descriptions in `input_schema` are truncated to 80 characters. The AI has seen these parameter patterns during training and doesn't need full enumerations on every call.
 - **Orphan Tool Result Validation** — Multi-pass validator ensures all `tool_result` blocks reference valid `tool_use` IDs before every API call, preventing HTTP 400 errors after context truncation.
 - **Per-Message Environment Details** — Each message includes fresh project context (file tree, active level, selected actors, context window stats) so the AI always has current state.
@@ -565,7 +576,7 @@ Autonomix/
 │       ├── SAutonomixMessage        — Individual message rendering (markdown, thinking blocks)
 │       ├── SAutonomixCodeBlock      — Syntax-highlighted code display with copy button
 │       ├── SAutonomixDiffViewer     — Unified diff visualization
-│       ├── SAutonomixInputArea      — Multi-line input with @ and / autocomplete
+│       ├── SAutonomixInputArea      — Multi-line input with @ and / autocomplete + Send/Stop toggle
 │       ├── SAutonomixContextBar     — Progress bar + token/cost display
 │       ├── SAutonomixCheckpointPanel— Checkpoint list, restore, diff buttons
 │       ├── SAutonomixHistoryPanel   — Past conversation browser

@@ -724,29 +724,30 @@ TArray<TSharedPtr<FJsonObject>> FAutonomixToolSchemaRegistry::GetEssentialSchema
 	// This method returns only the ~15 core tools needed for useful work.
 	// Token cost: ~750 tokens (vs ~5,000 for full set, ~35K for untruncated).
 	//
-	// The tools selected mirror Roo Code's core tool set:
-	//   - File system: read_file, write_file, apply_diff, list_directory, search_files
-	//   - Context: search_assets, get_blueprint_info
-	//   - Meta: attempt_completion, ask_followup_question, update_todo_list, switch_mode, new_task
+	// CRITICAL: Tool names here MUST exactly match the "name" field in the
+	// corresponding Resources/ToolSchemas/*.json files. Any mismatch means
+	// the tool won't be found in ToolSchemas and the model gets 0 tools.
+	// (Fix for GitHub Issue #20 — "AI has no access to the necessary tools")
 	// =========================================================================
 	static const TSet<FString> EssentialToolNames = {
-		// File operations (core agentic workflow)
-		TEXT("read_file"),
-		TEXT("write_file"),
-		TEXT("apply_diff"),
+		// File/context operations (actual names from context_tools.json)
+		TEXT("read_file_snippet"),
 		TEXT("list_directory"),
-		TEXT("search_files"),
-
-		// Asset/context queries
 		TEXT("search_assets"),
+
+		// C++ file operations (actual names from cpp_tools.json)
+		TEXT("create_cpp_class"),
+		TEXT("modify_cpp_file"),
+		TEXT("trigger_compile"),
+
+		// Asset/context queries (actual names from blueprint_tools.json)
 		TEXT("get_blueprint_info"),
-		TEXT("get_project_context"),
 
 		// Blueprint basics (most common UE task)
 		TEXT("inject_blueprint_nodes_t3d"),
 		TEXT("connect_blueprint_pins"),
 
-		// Meta-tools (always needed)
+		// Meta-tools (actual names from meta_tools.json + task_tools.json)
 		TEXT("attempt_completion"),
 		TEXT("ask_followup_question"),
 		TEXT("update_todo_list"),
@@ -781,30 +782,36 @@ TArray<TSharedPtr<FJsonObject>> FAutonomixToolSchemaRegistry::GetTier1Schemas() 
 	// These are the core tools the AI needs for basic operation plus
 	// two discovery tools (get_tool_info, list_tools_in_category) to load
 	// domain-specific tools on demand.
+	// CRITICAL: Tool names here MUST exactly match the "name" field in the
+	// corresponding Resources/ToolSchemas/*.json files. Any mismatch means
+	// the tool won't be found in ToolSchemas and the model gets fewer tools.
+	// (Fix for GitHub Issue #20 — "AI has no access to the necessary tools")
 	static const TSet<FString> Tier1ToolNames = {
-		// File operations (core agentic workflow)
-		TEXT("read_file"),
-		TEXT("write_file"),
-		TEXT("apply_diff"),
+		// File/context operations (actual names from context_tools.json)
+		TEXT("read_file_snippet"),
 		TEXT("list_directory"),
-		TEXT("search_files"),
-
-		// Asset/context queries
 		TEXT("search_assets"),
+
+		// C++ file operations (actual names from cpp_tools.json)
+		TEXT("create_cpp_class"),
+		TEXT("modify_cpp_file"),
+		TEXT("trigger_compile"),
+
+		// Asset/context queries (actual names from blueprint_tools.json)
 		TEXT("get_blueprint_info"),
 
 		// Blueprint basics (most common UE task)
 		TEXT("inject_blueprint_nodes_t3d"),
 		TEXT("connect_blueprint_pins"),
 
-		// Meta-tools (always needed)
+		// Meta-tools (actual names from meta_tools.json + task_tools.json)
 		TEXT("attempt_completion"),
 		TEXT("ask_followup_question"),
 		TEXT("update_todo_list"),
 		TEXT("switch_mode"),
 		TEXT("new_task"),
 
-		// Discovery tools (Phase 3 — on-demand loading)
+		// Discovery tools (Phase 3 — on-demand loading, from discovery_tools.json)
 		TEXT("get_tool_info"),
 		TEXT("list_tools_in_category"),
 	};

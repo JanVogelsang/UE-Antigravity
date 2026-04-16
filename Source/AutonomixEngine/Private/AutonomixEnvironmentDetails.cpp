@@ -207,17 +207,35 @@ FString FAutonomixEnvironmentDetails::GetCompileErrorsSection() const
 FString FAutonomixEnvironmentDetails::GetContextWindowSection(float UsagePercent) const
 {
 	FString Status;
+	FString Advice;
+
 	if (UsagePercent >= 90.0f)
 	{
 		Status = TEXT("⚠️ CRITICAL");
+		Advice = TEXT(
+			"\n⚠️ CRITICAL: Context window is almost full! You MUST:"
+			"\n  1. Immediately wrap up your current step and call attempt_completion with partial progress."
+			"\n  2. The system will auto-condense the conversation to free space."
+			"\n  3. Do NOT start any new multi-step operations — there is not enough room."
+			"\n  4. Keep responses extremely concise. Omit explanations."
+		);
 	}
 	else if (UsagePercent >= 75.0f)
 	{
 		Status = TEXT("⚠️ High");
+		Advice = TEXT(
+			"\nNOTE: Context window is filling up. The system will auto-condense at ~80%."
+			"\n  - Be concise in your responses. Avoid verbose explanations."
+			"\n  - Prioritize completing the current task. Call attempt_completion soon."
+			"\n  - If the task needs more steps, finish what you can and summarize remaining work in attempt_completion."
+		);
 	}
 	else if (UsagePercent >= 50.0f)
 	{
 		Status = TEXT("Moderate");
+		Advice = TEXT(
+			"\nContext is at moderate usage. Keep responses focused and avoid unnecessary verbosity."
+		);
 	}
 	else
 	{
@@ -228,9 +246,7 @@ FString FAutonomixEnvironmentDetails::GetContextWindowSection(float UsagePercent
 		TEXT("# Context Window\n%.1f%% used (%s)%s"),
 		UsagePercent,
 		*Status,
-		UsagePercent >= 75.0f
-			? TEXT("\nNOTE: Context is filling up. Be concise. Consider using attempt_completion soon.")
-			: TEXT("")
+		*Advice
 	);
 }
 

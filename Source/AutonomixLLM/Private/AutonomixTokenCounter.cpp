@@ -1,6 +1,8 @@
 // Copyright Autonomix. All Rights Reserved.
 
 #include "AutonomixTokenCounter.h"
+#include "AutonomixSettings.h"
+#include "AutonomixModelRegistry.h"
 #include "Serialization/JsonSerializer.h"
 #include "Serialization/JsonWriter.h"
 
@@ -55,6 +57,53 @@ int32 FAutonomixTokenCounter::EstimateTokens(const TArray<TSharedPtr<FJsonValue>
 
 int32 FAutonomixTokenCounter::GetContextWindowTokens(bool bExtended)
 {
+	// Provider-aware context window lookup.
+	// The old hardcoded 200K/1M only worked for Anthropic.
+	// Now we check the active provider + model from settings and use the model registry.
+	const UAutonomixDeveloperSettings* Settings = UAutonomixDeveloperSettings::Get();
+	if (Settings)
+	{
+		// For Anthropic, honor the explicit ContextWindow setting (Standard_200K / Extended_1M)
+		if (Settings->ActiveProvider == EAutonomixProvider::Anthropic)
+		{
+			return bExtended ? 1000000 : 200000;
+		}
+
+		// For all other providers, look up the model's actual context window from the registry
+		FString ModelId;
+		switch (Settings->ActiveProvider)
+		{
+		case EAutonomixProvider::OpenAI:      ModelId = Settings->OpenAiModelId; break;
+		case EAutonomixProvider::Google:       ModelId = Settings->GeminiModelId; break;
+		case EAutonomixProvider::DeepSeek:     ModelId = Settings->DeepSeekModelId; break;
+		case EAutonomixProvider::Mistral:      ModelId = Settings->MistralModelId; break;
+		case EAutonomixProvider::xAI:          ModelId = Settings->xAIModelId; break;
+		case EAutonomixProvider::OpenRouter:   ModelId = Settings->OpenRouterModelId; break;
+		case EAutonomixProvider::Ollama:       ModelId = Settings->OllamaModelId; break;
+		case EAutonomixProvider::LMStudio:     ModelId = Settings->LMStudioModelId; break;
+		case EAutonomixProvider::Custom:       ModelId = Settings->CustomEndpointModelId; break;
+		case EAutonomixProvider::Azure:         ModelId = Settings->AzureDeploymentName; break;
+		case EAutonomixProvider::GitHubCopilot: ModelId = Settings->CopilotModelId; break;
+		default: break;
+		}
+
+		if (!ModelId.IsEmpty())
+		{
+			FAutonomixModelInfo Info = FAutonomixModelRegistry::GetModelInfo(Settings->ActiveProvider, ModelId);
+			if (Info.ContextWindow > 0)
+			{
+				return Info.ContextWindow;
+			}
+		}
+
+		// For Ollama, use the configured context size if no registry entry
+		if (Settings->ActiveProvider == EAutonomixProvider::Ollama && Settings->OllamaContextSize > 0)
+		{
+			return Settings->OllamaContextSize;
+		}
+	}
+
+	// Fallback: Anthropic-style default
 	return bExtended ? 1000000 : 200000;
 }
 

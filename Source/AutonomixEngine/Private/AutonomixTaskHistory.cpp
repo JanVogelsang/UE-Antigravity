@@ -71,6 +71,19 @@ void FAutonomixTaskHistory::RemoveTask(const FString& TabId)
 	SaveToDisk();
 }
 
+void FAutonomixTaskHistory::RenameTask(const FString& TabId, const FString& NewTitle)
+{
+	for (FAutonomixTaskHistoryItem& Item : HistoryItems)
+	{
+		if (Item.TabId == TabId)
+		{
+			Item.Title = NewTitle;
+			SaveToDisk();
+			return;
+		}
+	}
+}
+
 TArray<FAutonomixTaskHistoryItem> FAutonomixTaskHistory::GetHistory() const
 {
 	return HistoryItems;
@@ -145,6 +158,17 @@ void FAutonomixTaskHistory::LoadFromDisk()
 		Obj->TryGetNumberField(TEXT("message_count"), Item.MessageCount);
 		Obj->TryGetStringField(TEXT("first_message"), Item.FirstUserMessage);
 		Obj->TryGetStringField(TEXT("conversation_file"), Item.ConversationFilePath);
+		Obj->TryGetStringField(TEXT("model_id"), Item.ModelId);
+
+		// Status
+		FString StatusStr;
+		if (Obj->TryGetStringField(TEXT("status"), StatusStr))
+		{
+			if (StatusStr == TEXT("completed"))       Item.Status = EAutonomixTaskStatus::Completed;
+			else if (StatusStr == TEXT("interrupted")) Item.Status = EAutonomixTaskStatus::Interrupted;
+			else if (StatusStr == TEXT("errored"))     Item.Status = EAutonomixTaskStatus::Errored;
+			else                                      Item.Status = EAutonomixTaskStatus::Active;
+		}
 
 		FString CreatedStr;
 		if (Obj->TryGetStringField(TEXT("created_at"), CreatedStr))
@@ -189,6 +213,18 @@ void FAutonomixTaskHistory::SaveToDisk() const
 		Obj->SetStringField(TEXT("conversation_file"), Item.ConversationFilePath);
 		Obj->SetStringField(TEXT("created_at"), Item.CreatedAt.ToIso8601());
 		Obj->SetStringField(TEXT("last_active"), Item.LastActiveAt.ToIso8601());
+		Obj->SetStringField(TEXT("model_id"), Item.ModelId);
+
+		// Status
+		FString StatusStr;
+		switch (Item.Status)
+		{
+		case EAutonomixTaskStatus::Completed:   StatusStr = TEXT("completed"); break;
+		case EAutonomixTaskStatus::Interrupted:  StatusStr = TEXT("interrupted"); break;
+		case EAutonomixTaskStatus::Errored:      StatusStr = TEXT("errored"); break;
+		default:                                 StatusStr = TEXT("active"); break;
+		}
+		Obj->SetStringField(TEXT("status"), StatusStr);
 
 		TSharedPtr<FJsonObject> UsageObj = MakeShared<FJsonObject>();
 		UsageObj->SetNumberField(TEXT("input"), Item.TotalTokenUsage.InputTokens);

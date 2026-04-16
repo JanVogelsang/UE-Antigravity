@@ -42,6 +42,12 @@ struct AUTONOMIXENGINE_API FAutonomixTaskHistoryItem
 	/** Path to the saved conversation JSON file */
 	FString ConversationFilePath;
 
+	/** Task completion status */
+	EAutonomixTaskStatus Status = EAutonomixTaskStatus::Active;
+
+	/** Model ID used (e.g. "claude-sonnet-4-6") */
+	FString ModelId;
+
 	FAutonomixTaskHistoryItem()
 		: CreatedAt(FDateTime::UtcNow())
 		, LastActiveAt(FDateTime::UtcNow())
@@ -80,6 +86,9 @@ public:
 
 	/** Remove a task from history */
 	void RemoveTask(const FString& TabId);
+
+	/** Rename a task's title */
+	void RenameTask(const FString& TabId, const FString& NewTitle);
 
 	/** Get all history items, most recent first */
 	TArray<FAutonomixTaskHistoryItem> GetHistory() const;

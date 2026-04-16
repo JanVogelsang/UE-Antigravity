@@ -130,6 +130,12 @@ FAutonomixActionResult FAutonomixActionRouter::RouteToolCall(const FAutonomixToo
 		}
 	}
 	ParamsWithToolName->SetStringField(TEXT("_tool_name"), ToolCall.ToolName);
+	// Also set "tool_name" for backward compatibility with executors that read it
+	// (15+ executors use tool_name as a fallback for action routing).
+	// This is safe here because ActionRouter only handles domain tools — meta-tools
+	// like get_tool_info (which have a user-facing "tool_name" parameter) are
+	// intercepted in ChatSession::ExecuteToolCall() before reaching ActionRouter.
+	ParamsWithToolName->SetStringField(TEXT("tool_name"), ToolCall.ToolName);
 
 	return Executor->ExecuteAction(ParamsWithToolName);
 }

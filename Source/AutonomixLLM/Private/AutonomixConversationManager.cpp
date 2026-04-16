@@ -81,6 +81,80 @@ FAutonomixMessage& FAutonomixConversationManager::AddToolResultMessage(const FSt
 	return Msg;
 }
 
+int32 FAutonomixConversationManager::InjectSyntheticToolResultsForOrphans()
+{
+	// Collect all tool_use IDs from assistant messages (from ContentBlocksJson)
+	// and all tool_result IDs from ToolResult messages.
+	// Any tool_use ID without a matching tool_result gets a synthetic result.
+
+	TSet<FString> AllToolUseIds;
+	TSet<FString> AllToolResultIds;
+
+	for (const FAutonomixMessage& Msg : History)
+	{
+		if (Msg.Role == EAutonomixMessageRole::Assistant && !Msg.ContentBlocksJson.IsEmpty())
+		{
+			// Parse ContentBlocksJson to extract tool_use IDs
+			TArray<TSharedPtr<FJsonValue>> ContentBlocks;
+			TSharedRef<TJsonReader<>> Reader = TJsonReaderFactory<>::Create(Msg.ContentBlocksJson);
+			if (FJsonSerializer::Deserialize(Reader, ContentBlocks))
+			{
+				for (const TSharedPtr<FJsonValue>& Block : ContentBlocks)
+				{
+					const TSharedPtr<FJsonObject>* BlockObj = nullptr;
+					if (!Block->TryGetObject(BlockObj)) continue;
+
+					FString BlockType;
+					(*BlockObj)->TryGetStringField(TEXT("type"), BlockType);
+					if (BlockType == TEXT("tool_use"))
+					{
+						FString Id;
+						(*BlockObj)->TryGetStringField(TEXT("id"), Id);
+						if (!Id.IsEmpty())
+						{
+							AllToolUseIds.Add(Id);
+						}
+					}
+				}
+			}
+		}
+		else if (Msg.Role == EAutonomixMessageRole::ToolResult && !Msg.ToolUseId.IsEmpty())
+		{
+			AllToolResultIds.Add(Msg.ToolUseId);
+		}
+	}
+
+	// Find orphaned tool_use IDs (no matching tool_result)
+	int32 InjectedCount = 0;
+	for (const FString& UseId : AllToolUseIds)
+	{
+		if (!AllToolResultIds.Contains(UseId))
+		{
+			// Inject a synthetic tool_result
+			FAutonomixMessage& SyntheticMsg = History.AddDefaulted_GetRef();
+			SyntheticMsg.MessageId = FGuid::NewGuid();
+			SyntheticMsg.Role = EAutonomixMessageRole::ToolResult;
+			SyntheticMsg.Content = TEXT("Task was interrupted before this tool call could be completed.");
+			SyntheticMsg.ToolUseId = UseId;
+			SyntheticMsg.Timestamp = FDateTime::UtcNow();
+			InjectedCount++;
+
+			UE_LOG(LogAutonomix, Log,
+				TEXT("ConversationManager: Injected synthetic tool_result for orphaned tool_use id='%s'."),
+				*UseId);
+		}
+	}
+
+	if (InjectedCount > 0)
+	{
+		UE_LOG(LogAutonomix, Log,
+			TEXT("ConversationManager: Injected %d synthetic tool_result(s) for orphaned tool_use blocks."),
+			InjectedCount);
+	}
+
+	return InjectedCount;
+}
+
 void FAutonomixConversationManager::AppendStreamingText(const FGuid& MessageId, const FString& DeltaText)
 {
 	FAutonomixMessage* Msg = GetMessageById(MessageId);
@@ -110,9 +184,19 @@ void FAutonomixConversationManager::EvictOldToolResults(TArray<FAutonomixMessage
 	// "consumed" (followed by an assistant message) are evicted.
 	static constexpr int32 EvictionThresholdChars = 2000;
 
-	// Walk backwards to find the LAST tool_result index that has a subsequent
-	// assistant message. We never evict the most recent tool_result because
-	// the AI hasn't responded to it yet.
+	// ---- PROTECTION GUARDS (fix for overly aggressive eviction) ----
+	// The last N large tool_result messages are NEVER evicted, even if they've
+	// been "consumed." This prevents recently-fetched results (e.g.,
+	// get_blueprint_info on a resumed session) from being stripped before the
+	// AI can act on them.
+	static constexpr int32 ProtectedRecentResults = 5;
+
+	// Tool results within the last N messages of the conversation are never
+	// evicted, giving the model a working window of recent context.
+	static constexpr int32 MinDistanceFromEnd = 20;
+
+	// Walk backwards to find the LAST assistant message index. We never evict
+	// the most recent tool_result because the AI hasn't responded to it yet.
 	int32 LastAssistantIdx = -1;
 	for (int32 i = Messages.Num() - 1; i >= 0; --i)
 	{
@@ -125,6 +209,29 @@ void FAutonomixConversationManager::EvictOldToolResults(TArray<FAutonomixMessage
 
 	if (LastAssistantIdx < 0) return; // No assistant messages — nothing to evict
 
+	// Collect indices of all large tool_results to identify the "recent" ones
+	TArray<int32> LargeToolResultIndices;
+	for (int32 i = 0; i < Messages.Num(); ++i)
+	{
+		if (Messages[i].Role == EAutonomixMessageRole::ToolResult
+			&& Messages[i].Content.Len() > EvictionThresholdChars
+			&& !Messages[i].Content.StartsWith(TEXT("[evicted"))) // already evicted
+		{
+			LargeToolResultIndices.Add(i);
+		}
+	}
+
+	// Build a set of protected indices (last N large tool results)
+	TSet<int32> ProtectedIndices;
+	const int32 ProtectStart = FMath::Max(0, LargeToolResultIndices.Num() - ProtectedRecentResults);
+	for (int32 k = ProtectStart; k < LargeToolResultIndices.Num(); ++k)
+	{
+		ProtectedIndices.Add(LargeToolResultIndices[k]);
+	}
+
+	// Nothing beyond this ceiling is eligible for eviction
+	const int32 EvictionCeiling = Messages.Num() - MinDistanceFromEnd;
+
 	int32 EvictedCount = 0;
 	int32 TokensSaved = 0;
 
@@ -133,6 +240,13 @@ void FAutonomixConversationManager::EvictOldToolResults(TArray<FAutonomixMessage
 		FAutonomixMessage& Msg = Messages[i];
 		if (Msg.Role != EAutonomixMessageRole::ToolResult) continue;
 		if (Msg.Content.Len() <= EvictionThresholdChars) continue;
+		if (Msg.Content.StartsWith(TEXT("[evicted"))) continue; // already processed
+
+		// GUARD 1: Protect the last N large tool results
+		if (ProtectedIndices.Contains(i)) continue;
+
+		// GUARD 2: Protect results close to the end of the conversation
+		if (i >= EvictionCeiling) continue;
 
 		// Check there's an assistant message after this tool result
 		// (i.e., the AI has already consumed this result)
@@ -182,8 +296,10 @@ void FAutonomixConversationManager::EvictOldToolResults(TArray<FAutonomixMessage
 	if (EvictedCount > 0)
 	{
 		UE_LOG(LogAutonomix, Log,
-			TEXT("ConversationManager: Evicted %d old tool result(s), saving ~%d tokens."),
-			EvictedCount, TokensSaved);
+			TEXT("ConversationManager: Evicted %d old tool result(s), saving ~%d tokens. "
+			     "(%d large results protected, ceiling at msg %d/%d)"),
+			EvictedCount, TokensSaved,
+			ProtectedIndices.Num(), EvictionCeiling, Messages.Num());
 	}
 }
 
@@ -622,6 +738,11 @@ FString FAutonomixConversationManager::GetConversationSaveDir()
 	return FPaths::Combine(FPaths::ProjectSavedDir(), TEXT("Autonomix"), TEXT("Conversations"));
 }
 
+FString FAutonomixConversationManager::GetTasksBaseDir()
+{
+	return FPaths::Combine(FPaths::ProjectSavedDir(), TEXT("Autonomix"), TEXT("Tasks"));
+}
+
 TSharedPtr<FJsonObject> FAutonomixConversationManager::MessageToJson(const FAutonomixMessage& Message)
 {
 	TSharedPtr<FJsonObject> Obj = MakeShared<FJsonObject>();
@@ -753,6 +874,85 @@ bool FAutonomixConversationManager::SaveSession(const FString& FilePath) const
 	else
 	{
 		UE_LOG(LogAutonomix, Error, TEXT("ConversationManager: Failed to save to %s"), *FilePath);
+	}
+
+	return bSuccess;
+}
+
+bool FAutonomixConversationManager::SaveApiHistory(const FString& FilePath) const
+{
+	// Ensure directory exists
+	FString Dir = FPaths::GetPath(FilePath);
+	IFileManager::Get().MakeDirectory(*Dir, true);
+
+	// Build JSON — only API-relevant messages (user, assistant, tool_result)
+	TSharedPtr<FJsonObject> Root = MakeShared<FJsonObject>();
+	Root->SetStringField(TEXT("format_version"), TEXT("1.0.0"));
+	Root->SetStringField(TEXT("saved_at"), FDateTime::UtcNow().ToIso8601());
+
+	TArray<TSharedPtr<FJsonValue>> MessagesArray;
+	for (const FAutonomixMessage& Msg : History)
+	{
+		// Skip streaming/internal messages
+		if (Msg.bIsStreaming) continue;
+
+		// Only include API-relevant roles
+		if (Msg.Role != EAutonomixMessageRole::User &&
+			Msg.Role != EAutonomixMessageRole::Assistant &&
+			Msg.Role != EAutonomixMessageRole::ToolResult)
+		{
+			continue;
+		}
+
+		TSharedPtr<FJsonObject> MsgJson = MakeShared<FJsonObject>();
+
+		// Minimal Anthropic-format fields
+		FString RoleStr;
+		switch (Msg.Role)
+		{
+		case EAutonomixMessageRole::User:      RoleStr = TEXT("user"); break;
+		case EAutonomixMessageRole::Assistant:  RoleStr = TEXT("assistant"); break;
+		case EAutonomixMessageRole::ToolResult: RoleStr = TEXT("tool_result"); break;
+		default: continue;
+		}
+		MsgJson->SetStringField(TEXT("role"), RoleStr);
+		MsgJson->SetStringField(TEXT("content"), Msg.Content);
+
+		if (!Msg.ToolUseId.IsEmpty())
+		{
+			MsgJson->SetStringField(TEXT("tool_use_id"), Msg.ToolUseId);
+		}
+		if (!Msg.ContentBlocksJson.IsEmpty())
+		{
+			MsgJson->SetStringField(TEXT("content_blocks_json"), Msg.ContentBlocksJson);
+		}
+		if (!Msg.ReasoningContent.IsEmpty())
+		{
+			MsgJson->SetStringField(TEXT("reasoning_content"), Msg.ReasoningContent);
+		}
+
+		MessagesArray.Add(MakeShared<FJsonValueObject>(MsgJson));
+	}
+
+	Root->SetNumberField(TEXT("message_count"), MessagesArray.Num());
+	Root->SetArrayField(TEXT("messages"), MessagesArray);
+
+	// Serialize
+	FString OutputString;
+	TSharedRef<TJsonWriter<>> Writer = TJsonWriterFactory<>::Create(&OutputString);
+	FJsonSerializer::Serialize(Root.ToSharedRef(), Writer);
+
+	bool bSuccess = FFileHelper::SaveStringToFile(OutputString, *FilePath,
+		FFileHelper::EEncodingOptions::ForceUTF8WithoutBOM);
+
+	if (bSuccess)
+	{
+		UE_LOG(LogAutonomix, Log, TEXT("ConversationManager: Saved %d API messages to %s"),
+			MessagesArray.Num(), *FilePath);
+	}
+	else
+	{
+		UE_LOG(LogAutonomix, Error, TEXT("ConversationManager: Failed to save API history to %s"), *FilePath);
 	}
 
 	return bSuccess;

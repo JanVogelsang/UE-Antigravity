@@ -334,6 +334,24 @@ enum class EAutonomixHTTPErrorType : uint8
 	Unknown
 };
 
+/** Conversation state for UI-driven Stop/Send button swap and unified state management.
+ *  Replaces the dual bIsProcessing flags that existed in both FAutonomixChatSession and SAutonomixMainPanel.
+ *  The ChatSession owns the single source of truth; UI widgets poll via TAttribute. */
+UENUM()
+enum class EConversationState : uint8
+{
+	/** Send visible, input enabled — no request in flight */
+	Idle,
+	/** Stop visible, input disabled — API request in flight or tools executing */
+	Streaming,
+	/** Approve/Reject visible — tools awaiting user approval */
+	WaitingForToolApproval,
+	/** Stop disabled, cleanup in progress after user clicked Stop */
+	Cancelling,
+	/** Send visible, error state — recoverable error occurred */
+	Error
+};
+
 // ============================================================================
 // Structures
 // ============================================================================
@@ -918,6 +936,85 @@ struct AUTONOMIXCORE_API FAutonomixTodoItem
 	}
 };
 
+// ============================================================================
+// Task Persistence Types (v4.0 — Per-Task Directory Model)
+// ============================================================================
+
+/** Task completion status for persistence.
+ *  Explicitly tracked (not inferred from last message).
+ *  Modeled after Roo Code's TaskState. */
+UENUM(BlueprintType)
+enum class EAutonomixTaskStatus : uint8
+{
+	/** Task is active / in progress */
+	Active		UMETA(DisplayName = "Active"),
+
+	/** Task completed successfully via attempt_completion */
+	Completed	UMETA(DisplayName = "Completed"),
+
+	/** Task was interrupted (editor closed, crash, user stopped mid-stream) */
+	Interrupted	UMETA(DisplayName = "Interrupted"),
+
+	/** Task ended with an unrecoverable error */
+	Errored		UMETA(DisplayName = "Errored")
+};
+
+/** Lightweight metadata for a single task, stored in task_index.json.
+ *  Modeled after Roo Code's HistoryItem / TaskMetadata.
+ *  task_index.json stores an array of these for quick browsing without
+ *  loading full conversation histories. */
+USTRUCT(BlueprintType)
+struct AUTONOMIXCORE_API FAutonomixTaskMetadata
+{
+	GENERATED_BODY()
+
+	/** Stable task ID (UUID, persists across editor restarts) */
+	UPROPERTY(BlueprintReadOnly, Category = "Autonomix")
+	FString TaskId;
+
+	/** Human-readable title (auto-generated or user-renamed) */
+	UPROPERTY(BlueprintReadOnly, Category = "Autonomix")
+	FString Title;
+
+	/** When the task was first created */
+	UPROPERTY(BlueprintReadOnly, Category = "Autonomix")
+	FDateTime CreatedAt;
+
+	/** When the task was last actively used */
+	UPROPERTY(BlueprintReadOnly, Category = "Autonomix")
+	FDateTime LastActivityAt;
+
+	/** Cumulative input tokens across all API calls in this task */
+	UPROPERTY(BlueprintReadOnly, Category = "Autonomix")
+	int32 TotalTokensIn = 0;
+
+	/** Cumulative output tokens across all API calls in this task */
+	UPROPERTY(BlueprintReadOnly, Category = "Autonomix")
+	int32 TotalTokensOut = 0;
+
+	/** Cumulative cost (USD) across all API calls in this task */
+	UPROPERTY(BlueprintReadOnly, Category = "Autonomix")
+	float TotalCost = 0.0f;
+
+	/** Model ID used for this task (e.g. "claude-sonnet-4-6") */
+	UPROPERTY(BlueprintReadOnly, Category = "Autonomix")
+	FString ModelId;
+
+	/** Current task status — explicitly set, not inferred from messages */
+	UPROPERTY(BlueprintReadOnly, Category = "Autonomix")
+	EAutonomixTaskStatus Status = EAutonomixTaskStatus::Active;
+
+	/** Total number of messages in the conversation */
+	UPROPERTY(BlueprintReadOnly, Category = "Autonomix")
+	int32 MessageCount = 0;
+
+	FAutonomixTaskMetadata()
+		: CreatedAt(FDateTime::UtcNow())
+		, LastActivityAt(FDateTime::UtcNow())
+	{
+	}
+};
+
 /** Token usage info from Claude response headers */
 USTRUCT(BlueprintType)
 struct AUTONOMIXCORE_API FAutonomixTokenUsage
@@ -967,3 +1064,6 @@ DECLARE_MULTICAST_DELEGATE_OneParam(FOnAutonomixErrorReceived, const FAutonomixH
 
 /** Broadcast with token usage info after each response */
 DECLARE_MULTICAST_DELEGATE_OneParam(FOnAutonomixTokenUsageUpdated, const FAutonomixTokenUsage& /*Usage*/);
+
+/** Broadcast when conversation state changes (Idle/Streaming/WaitingForToolApproval/Cancelling/Error) */
+DECLARE_MULTICAST_DELEGATE_OneParam(FOnConversationStateChanged, EConversationState);
