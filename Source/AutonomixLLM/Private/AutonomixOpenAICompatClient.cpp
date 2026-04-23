@@ -299,47 +299,54 @@ void FAutonomixOpenAICompatClient::SendMessage(
 	// =========================================================================
 	// TIMEOUT CONFIGURATION
 	//
-	// Local model inference on consumer GPUs can take 60-600+ seconds for
-	// large prompts. The default 120s timeout is far too short for Ollama/LMStudio.
-	// Users with 8B+ models on consumer GPUs (3060, 3090) regularly see 120-300s+
-	// inference times, especially with Autonomix's large system prompt + tools.
+	// FIX (Issue #24): SSE streaming connections are long-lived — the server
+	// keeps the connection open, sending chunks progressively. UE5's default
+	// HTTP timeout will kill the stream prematurely. Anthropic, OpenAI, and
+	// local models can all pause for 30+ seconds during reasoning/tool-call
+	// generation. SetTimeout(0) disables the timeout entirely for streaming.
 	//
-	// FIX (GitHub Issues #15, #16, #18): Users report "Could not connect to Ollama"
-	// which is actually a timeout — the inference simply takes too long.
+	// FIX (Issues #15, #16, #18): Local model inference on consumer GPUs can
+	// take 60-600+ seconds. For non-streaming requests, we use a generous
+	// timeout. For streaming, 0 (disabled) is always correct.
 	//
 	// SetTimeout() = total request timeout (CURLOPT_TIMEOUT)
 	// SetActivityTimeout() = max seconds with 0 bytes received (CURLOPT_LOW_SPEED_TIME)
-	//
-	// For NON-STREAMING local requests (Ollama sends the entire response at once),
-	// the server sends ZERO bytes during inference, so the activity timeout fires
-	// even though the server is happily computing. We must disable it (set to 0)
-	// for non-streaming local requests.
 	// =========================================================================
-	float TimeoutSec = (float)(Settings ? Settings->RequestTimeoutSeconds : 120);
-	if (bIsLocalProvider)
+	if (bStreamingEnabled)
 	{
-		// Enforce minimum 600s for local providers — inference can be very slow
-		if (TimeoutSec < 600.0f)
-		{
-			TimeoutSec = 600.0f;
-		}
-		UE_LOG(LogAutonomix, Log, TEXT("OpenAICompatClient: Local provider total timeout = %.0fs."), TimeoutSec);
-	}
-	CurrentRequest->SetTimeout(TimeoutSec);
-
-	// Activity timeout: for non-streaming local providers, DISABLE it entirely.
-	// Ollama's /v1/chat/completions with stream:false sends 0 bytes during inference,
-	// then sends the complete response all at once. Any activity timeout would kill
-	// the request prematurely during the computation phase.
-	if (bIsLocalProvider && !bStreamingEnabled)
-	{
-		// SetActivityTimeout(0) disables the low-speed check (CURLOPT_LOW_SPEED_TIME=0)
+		// SSE streams: disable both timeouts — the connection is deliberately
+		// long-lived and may pause during model reasoning. The "Payload is
+		// incomplete" warning in UE logs is normal and expected for SSE.
+		CurrentRequest->SetTimeout(0.0f);
 		CurrentRequest->SetActivityTimeout(0.0f);
-		UE_LOG(LogAutonomix, Log, TEXT("OpenAICompatClient: Activity timeout disabled for non-streaming local provider."));
+		UE_LOG(LogAutonomix, Log, TEXT("OpenAICompatClient: Streaming mode — timeouts disabled for SSE."));
 	}
 	else
 	{
-		CurrentRequest->SetActivityTimeout(TimeoutSec);
+		// Non-streaming: use generous timeouts
+		float TimeoutSec = (float)(Settings ? Settings->RequestTimeoutSeconds : 120);
+		if (bIsLocalProvider)
+		{
+			// Enforce minimum 600s for local providers — inference can be very slow
+			if (TimeoutSec < 600.0f)
+			{
+				TimeoutSec = 600.0f;
+			}
+		}
+		CurrentRequest->SetTimeout(TimeoutSec);
+
+		// For non-streaming local providers, DISABLE activity timeout.
+		// Ollama sends ZERO bytes during inference, then the complete response.
+		if (bIsLocalProvider)
+		{
+			CurrentRequest->SetActivityTimeout(0.0f);
+			UE_LOG(LogAutonomix, Log, TEXT("OpenAICompatClient: Non-streaming local — total timeout=%.0fs, activity timeout disabled."), TimeoutSec);
+		}
+		else
+		{
+			CurrentRequest->SetActivityTimeout(TimeoutSec);
+			UE_LOG(LogAutonomix, Log, TEXT("OpenAICompatClient: Non-streaming — timeout=%.0fs."), TimeoutSec);
+		}
 	}
 
 	CurrentMessageId = FGuid::NewGuid();
@@ -1042,7 +1049,17 @@ TSharedPtr<FJsonObject> FAutonomixOpenAICompatClient::BuildChatCompletionsBody(
 	TSharedPtr<FJsonObject> Body = MakeShared<FJsonObject>();
 	Body->SetStringField(TEXT("model"), ModelId);
 	Body->SetNumberField(TEXT("max_tokens"), (double)MaxTokens);
-	Body->SetBoolField(TEXT("stream"), bStreamingEnabled);
+
+	// =========================================================================
+	// FIX (Issue #23): LM Studio has a known bug where explicitly sending
+	// "stream": false causes request failures. The workaround is to omit
+	// the stream field entirely when not streaming (LM Studio defaults to
+	// non-streaming). For other providers, always include stream.
+	// =========================================================================
+	if (bStreamingEnabled || Provider != EAutonomixProvider::LMStudio)
+	{
+		Body->SetBoolField(TEXT("stream"), bStreamingEnabled);
+	}
 
 	// Opt in to streaming usage
 	if (bStreamingEnabled)
@@ -1078,9 +1095,16 @@ TSharedPtr<FJsonObject> FAutonomixOpenAICompatClient::BuildChatCompletionsBody(
 	// responses or immediate context overflow errors.
 	//
 	// Roo Code native-ollama.ts passes this via: options: { num_ctx: N }
-	// Ollama's OpenAI-compatible endpoint accepts it in the same place.
+	//
+	// FIX (Issue #23): Only send options.num_ctx to Ollama — NOT LM Studio.
+	// LM Studio's OpenAI-compatible API does not document or support the
+	// "options" field. Sending unknown root-level fields to LM Studio can
+	// cause parse failures or "Channel Error" crashes. LM Studio's context
+	// size is configured in its UI, not per-request.
+	// Other OpenAI-compatible servers (vLLM, LocalAI, oobabooga) also
+	// reject or ignore this Ollama-specific extension.
 	// =========================================================================
-	if (OllamaNumCtx > 0 && (Provider == EAutonomixProvider::Ollama || Provider == EAutonomixProvider::LMStudio))
+	if (OllamaNumCtx > 0 && Provider == EAutonomixProvider::Ollama)
 	{
 		TSharedPtr<FJsonObject> OllamaOptions = MakeShared<FJsonObject>();
 		OllamaOptions->SetNumberField(TEXT("num_ctx"), (double)OllamaNumCtx);
@@ -1579,7 +1603,46 @@ void FAutonomixOpenAICompatClient::HandleRequestComplete(
 
 	if (Code != 200)
 	{
-		FAutonomixHTTPError Err = FAutonomixHTTPError::FromStatusCode(Code, Response->GetContentAsString(), GetProviderDisplayName(Provider));
+		FString ResponseBody = Response->GetContentAsString();
+		const FString ProviderName = GetProviderDisplayName(Provider);
+		const bool bIsLocal = (Provider == EAutonomixProvider::Ollama ||
+		                       Provider == EAutonomixProvider::LMStudio ||
+		                       Provider == EAutonomixProvider::Custom);
+
+		// =========================================================================
+		// FIX (Issue #23): Detect common local model errors and provide actionable
+		// messages instead of generic HTTP error codes.
+		// "Channel Error" = LM Studio's inference engine crashed (OOM, context overflow,
+		// or model unloaded). "context length" / "truncating input" = Ollama context
+		// overflow. "failed to allocate" = KV cache allocation failure.
+		// =========================================================================
+		FString BodyLower = ResponseBody.ToLower();
+		if (bIsLocal && (BodyLower.Contains(TEXT("channel error")) ||
+		                 BodyLower.Contains(TEXT("context length")) ||
+		                 BodyLower.Contains(TEXT("truncating input")) ||
+		                 BodyLower.Contains(TEXT("failed to allocate")) ||
+		                 BodyLower.Contains(TEXT("out of memory"))))
+		{
+			FAutonomixHTTPError Err;
+			Err.Type = EAutonomixHTTPErrorType::InvalidResponse;
+			Err.StatusCode = Code;
+			Err.UserFriendlyMessage = FString::Printf(
+				TEXT("%s returned an error (HTTP %d) that indicates a context overflow or memory issue.\n\n")
+				TEXT("This typically means:\n")
+				TEXT("  \u2022 The prompt + tools + history exceeded the model's context window\n")
+				TEXT("  \u2022 The model ran out of GPU memory (VRAM)\n\n")
+				TEXT("Try:\n")
+				TEXT("  \u2022 Increase the model's context size in %s settings\n")
+				TEXT("  \u2022 Start a new conversation (shorter history = fewer tokens)\n")
+				TEXT("  \u2022 Use a smaller model (e.g. 7B/8B instead of 14B+)\n")
+				TEXT("  \u2022 Reduce the number of tools (Project Settings > Autonomix > Tools)"),
+				*ProviderName, Code, *ProviderName);
+			ErrorReceivedDelegate.Broadcast(Err);
+			RequestCompletedDelegate.Broadcast(false);
+			return;
+		}
+
+		FAutonomixHTTPError Err = FAutonomixHTTPError::FromStatusCode(Code, ResponseBody, ProviderName);
 		ErrorReceivedDelegate.Broadcast(Err);
 		RequestCompletedDelegate.Broadcast(false);
 		return;
@@ -1885,7 +1948,12 @@ void FAutonomixOpenAICompatClient::FinalizeResponse()
 		FString ToolUseId = State.ToolUseId.IsEmpty() ?
 			FGuid::NewGuid().ToString(EGuidFormats::Digits) : State.ToolUseId;
 
-		// Build Anthropic-style tool_use block for ContentBlocksJson
+		// Build Anthropic-style tool_use block for ContentBlocksJson.
+		// IMPORTANT: Use the ORIGINAL ArgsObj (without _tool_name) for
+		// ContentBlocksJson — this is what gets replayed in conversation
+		// history. The _tool_name field must NOT appear in the history
+		// because it confuses local models (Qwen, Llama) which attempt
+		// to reproduce it in future tool calls, violating the JSON schema.
 		TSharedPtr<FJsonObject> ToolUseBlock = MakeShared<FJsonObject>();
 		ToolUseBlock->SetStringField(TEXT("type"), TEXT("tool_use"));
 		ToolUseBlock->SetStringField(TEXT("id"), ToolUseId);
@@ -1894,16 +1962,23 @@ void FAutonomixOpenAICompatClient::FinalizeResponse()
 		ContentBlocks.Add(MakeShared<FJsonValueObject>(ToolUseBlock));
 		bHasToolCalls = true;
 
-		// Add _tool_name field for dispatcher (underscore prefix to avoid collision
-		// with the model's own parameters — e.g., get_tool_info has a "tool_name" param
-		// that gets overwritten if we use the same key).
-		// ActionRouter::RouteToolCall also uses "_tool_name" for this purpose.
-		ArgsObj->SetStringField(TEXT("_tool_name"), State.ToolName);
+		// FIX (Issue #23): Create a SEPARATE copy of ArgsObj for the
+		// dispatcher with _tool_name injected. This keeps the internal
+		// routing field out of conversation history (ContentBlocksJson)
+		// where it would pollute the model's context and confuse local
+		// LLMs that rely on strict schema matching.
+		TSharedPtr<FJsonObject> DispatchArgs = MakeShared<FJsonObject>();
+		// Copy all fields from original args
+		for (const auto& Pair : ArgsObj->Values)
+		{
+			DispatchArgs->SetField(Pair.Key, Pair.Value);
+		}
+		DispatchArgs->SetStringField(TEXT("_tool_name"), State.ToolName);
 
 		FAutonomixToolCall ToolCall;
 		ToolCall.ToolUseId = ToolUseId;
 		ToolCall.ToolName = State.ToolName;
-		ToolCall.InputParams = ArgsObj;
+		ToolCall.InputParams = DispatchArgs;
 
 		UE_LOG(LogAutonomix, Log, TEXT("OpenAICompatClient: Tool call: %s (id=%s)"),
 			*State.ToolName, *ToolCall.ToolUseId);

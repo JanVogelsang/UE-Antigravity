@@ -3165,10 +3165,12 @@ void SAutonomixMainPanel::OnConversationStateChanged(EConversationState NewState
         InputArea->SetConversationState(NewState);
     }
 
-    // Hide/show progress overlay based on state
+    // Hide progress overlay for any non-streaming state.
+    // Previously only hid on Idle/Error, which left the blue progress bar
+    // visible during WaitingForToolApproval and after task completion.
     if (ProgressOverlay.IsValid())
     {
-        if (NewState == EConversationState::Idle || NewState == EConversationState::Error)
+        if (NewState != EConversationState::Streaming)
         {
             ProgressOverlay->HideProgress();
         }
