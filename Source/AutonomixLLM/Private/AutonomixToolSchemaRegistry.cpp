@@ -734,6 +734,7 @@ TArray<TSharedPtr<FJsonObject>> FAutonomixToolSchemaRegistry::GetEssentialSchema
 		TEXT("read_file_snippet"),
 		TEXT("list_directory"),
 		TEXT("search_assets"),
+		TEXT("search_files"),
 
 		// C++ file operations (actual names from cpp_tools.json)
 		TEXT("create_cpp_class"),
@@ -743,9 +744,20 @@ TArray<TSharedPtr<FJsonObject>> FAutonomixToolSchemaRegistry::GetEssentialSchema
 		// Asset/context queries (actual names from blueprint_tools.json)
 		TEXT("get_blueprint_info"),
 
-		// Blueprint basics (most common UE task)
+		// Blueprint creation + logic (most common UE task)
+		// FIX (GitHub Issue #28): create_blueprint_actor was missing — local models
+		// could not create Blueprints at all, only inject into existing ones.
+		// This caused them to loop searching for non-existent Blueprints.
+		TEXT("create_blueprint_actor"),
+		TEXT("add_blueprint_component"),
+		TEXT("add_blueprint_variable"),
+		TEXT("add_blueprint_event"),
 		TEXT("inject_blueprint_nodes_t3d"),
 		TEXT("connect_blueprint_pins"),
+		TEXT("compile_blueprint"),
+
+		// Level tools (basic actor spawning)
+		TEXT("spawn_actor"),
 
 		// Meta-tools (actual names from meta_tools.json + task_tools.json)
 		TEXT("attempt_completion"),
@@ -753,6 +765,10 @@ TArray<TSharedPtr<FJsonObject>> FAutonomixToolSchemaRegistry::GetEssentialSchema
 		TEXT("update_todo_list"),
 		TEXT("switch_mode"),
 		TEXT("new_task"),
+
+		// Discovery meta-tools (allow local models to find specialized tools)
+		TEXT("get_tool_info"),
+		TEXT("list_tools_in_category"),
 	};
 
 	TArray<TSharedPtr<FJsonObject>> Result;

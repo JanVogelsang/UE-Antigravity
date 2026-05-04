@@ -95,8 +95,21 @@ void FAutonomixChatSession::ProcessToolCallQueue()
 		// Should also do FAutonomixBackupManager things here if implemented
 	}
 
+	// FIX (GitHub Issue #28): Guard against late arrivals after StopAgenticLoop().
+	// In non-streaming mode (Ollama/LM Studio), the HTTP response arrives 30-60s
+	// after Stop was pressed. Without this guard, the stop state gets overwritten.
+	if (bStopRequested)
+	{
+		UE_LOG(LogAutonomix, Log, TEXT("ChatSession: ProcessToolCallQueue() — stop was requested before processing. Aborting."));
+		bStopRequested = false;
+		bInAgenticLoop = false;
+		ToolCallQueue.Empty();
+		SetState(EConversationState::Idle);
+		OnStatusUpdated.Broadcast(TEXT(""));
+		return;
+	}
+
 	bInAgenticLoop = true;
-	bStopRequested = false;
 	SetState(EConversationState::Streaming);
 	AgenticLoopCount++;
 
@@ -222,6 +235,18 @@ void FAutonomixChatSession::StopAgenticLoop()
 	AgenticLoopCount = 0;
 	ConsecutiveNoToolCount = 0;
 	ToolCallQueue.Empty();
+
+	// FIX (GitHub Issue #28): Cancel the in-flight HTTP request.
+	// Without this, non-streaming local providers (Ollama/LM Studio) keep the
+	// request running for 30-60s after the user clicks Stop. When the response
+	// finally arrives, OnToolCallReceived() adds new tool calls, and
+	// ProcessToolCallQueue() resets bStopRequested=false — overwriting the stop.
+	// CancelRequest() aborts the HTTP request immediately, preventing late callbacks.
+	if (LLMClient.IsValid() && LLMClient->IsRequestInFlight())
+	{
+		UE_LOG(LogAutonomix, Log, TEXT("ChatSession: Cancelling in-flight LLM request."));
+		LLMClient->CancelRequest();
+	}
 
 	SetState(EConversationState::Idle);
 	OnStatusUpdated.Broadcast(TEXT(""));
