@@ -21,6 +21,15 @@ FAutonomixContextManager::~FAutonomixContextManager()
 {
 }
 
+void FAutonomixContextManager::SetLLMClient(TSharedPtr<IAutonomixLLMClient> InLLMClient)
+{
+	LLMClient = InLLMClient;
+	if (Condenser.IsValid())
+	{
+		Condenser->SetLLMClient(InLLMClient);
+	}
+}
+
 // ============================================================================
 // ManageContext — Called after each successful API response
 // Ported from Roo Code's manageContext() in context-management/index.ts

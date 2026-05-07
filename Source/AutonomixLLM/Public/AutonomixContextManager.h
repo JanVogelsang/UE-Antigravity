@@ -73,6 +73,9 @@ public:
 		const FAutonomixTokenUsage& LastTokenUsage,
 		TFunction<void(const FAutonomixContextManagementResult&)> OnComplete);
 
+	/** Update the LLM client (called when settings change) */
+	void SetLLMClient(TSharedPtr<IAutonomixLLMClient> InLLMClient);
+
 	/** True if context management is currently in progress */
 	bool IsManaging() const { return bIsManaging; }
 

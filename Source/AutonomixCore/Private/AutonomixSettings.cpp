@@ -4,6 +4,8 @@
 #include "AutonomixCoreModule.h"
 #include "Misc/MessageDialog.h"
 
+FAutonomixSettingsChangedDelegate UAutonomixDeveloperSettings::OnSettingsChanged;
+
 static const FString DefaultApiEndpoint = TEXT("https://api.anthropic.com/v1/messages");
 
 UAutonomixDeveloperSettings::UAutonomixDeveloperSettings()
@@ -476,6 +478,8 @@ void UAutonomixDeveloperSettings::PostEditChangeProperty(FPropertyChangedEvent& 
 			}
 		}
 	}
+
+	OnSettingsChanged.Broadcast(PropName);
 }
 #endif
 

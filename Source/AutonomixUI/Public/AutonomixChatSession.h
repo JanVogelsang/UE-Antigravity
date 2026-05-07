@@ -152,6 +152,9 @@ public:
     /** Restore dynamically loaded tools from persisted state (called during tab load) */
     void SetDynamicallyLoadedTools(const TSet<FString>& InTools) { DynamicallyLoadedTools = InTools; }
 
+    /** Update the LLM client (called when settings change) */
+    void SetLLMClient(TSharedPtr<IAutonomixLLMClient> InLLMClient) { LLMClient = InLLMClient; }
+
 private:
     // Dependencies
     TSharedPtr<IAutonomixLLMClient> LLMClient;

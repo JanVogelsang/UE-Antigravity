@@ -381,6 +381,9 @@ void SAutonomixMainPanel::InitializeBackend()
     // ConfigureClientFromSettings() handles both creation and delegate binding.
     ConfigureClientFromSettings();
 
+    // Listen for settings changes to immediately respect provider/model/key updates without restart.
+    UAutonomixDeveloperSettings::OnSettingsChanged.AddSP(this, &SAutonomixMainPanel::ConfigureClientFromSettings);
+
     ToolSchemaRegistry = MakeShared<FAutonomixToolSchemaRegistry>();
     ToolSchemaRegistry->LoadAllSchemas();
 
@@ -1602,7 +1605,7 @@ void SAutonomixMainPanel::RegisterExecutors()
         ActionRouter->RegisterExecutor(MakeShared<FAutonomixGASActions>());
 }
 
-void SAutonomixMainPanel::ConfigureClientFromSettings()
+void SAutonomixMainPanel::ConfigureClientFromSettings(FName PropertyName)
 {
     const UAutonomixDeveloperSettings* Settings = UAutonomixDeveloperSettings::Get();
     if (!Settings) return;
@@ -1648,7 +1651,36 @@ void SAutonomixMainPanel::ConfigureClientFromSettings()
         Claude->OnContextWindowExceeded.BindSP(this, &SAutonomixMainPanel::HandleContextWindowExceeded);
     }
 
-    UE_LOG(LogAutonomix, Log, TEXT("MainPanel: LLM client created: %s"),
+    // Propagation: update the client reference in all active tab sessions and context managers.
+    // Without this, tabs created before the settings change would still use the old provider/key.
+    for (FAutonomixConversationTabState& Tab : ConversationTabs)
+    {
+        if (Tab.ChatSession.IsValid())
+        {
+            Tab.ChatSession->SetLLMClient(LLMClient);
+        }
+        if (Tab.ContextManager.IsValid())
+        {
+            Tab.ContextManager->SetLLMClient(LLMClient);
+        }
+    }
+
+    // If the changed property is related to tool availability or security mode, refresh the tool registry.
+    bool bRefreshTools = PropertyName.IsNone() || 
+                        PropertyName.ToString().StartsWith(TEXT("bEnable")) || 
+                        PropertyName == GET_MEMBER_NAME_CHECKED(UAutonomixDeveloperSettings, SecurityMode);
+
+    if (bRefreshTools && ActionRouter.IsValid() && ToolSchemaRegistry.IsValid())
+    {
+        ActionRouter->ClearExecutors();
+        RegisterExecutors();
+        ToolSchemaRegistry->SyncWithRegisteredTools(ActionRouter->GetRegisteredToolNames());
+        
+        UE_LOG(LogAutonomix, Log, TEXT("MainPanel: Tools refreshed after settings change. %d tools active."), 
+            ToolSchemaRegistry->GetToolCount());
+    }
+
+    UE_LOG(LogAutonomix, Log, TEXT("MainPanel: LLM client configured: %s"),
         *FAutonomixLLMClientFactory::GetActiveProviderDisplayName());
 }
 

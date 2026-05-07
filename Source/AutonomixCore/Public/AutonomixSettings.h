@@ -15,6 +15,8 @@
  *
  * Access at runtime via: GetDefault<UAutonomixDeveloperSettings>()
  */
+DECLARE_MULTICAST_DELEGATE_OneParam(FAutonomixSettingsChangedDelegate, FName /*PropertyName*/);
+
 UCLASS(config = EditorPerProjectUserSettings, meta = (DisplayName = "Autonomix"))
 class AUTONOMIXCORE_API UAutonomixDeveloperSettings : public UDeveloperSettings
 {
@@ -22,6 +24,8 @@ class AUTONOMIXCORE_API UAutonomixDeveloperSettings : public UDeveloperSettings
 
 public:
 	UAutonomixDeveloperSettings();
+
+	static FAutonomixSettingsChangedDelegate OnSettingsChanged;
 
 	// ============================================================================
 	// Provider Selection

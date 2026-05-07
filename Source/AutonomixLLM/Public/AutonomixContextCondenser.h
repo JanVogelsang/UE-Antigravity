@@ -76,6 +76,9 @@ public:
 	/** True if a condensation request is currently in flight */
 	bool IsCondensing() const { return bIsCondensing; }
 
+	/** Update the LLM client (called when settings change) */
+	void SetLLMClient(TSharedPtr<IAutonomixLLMClient> InLLMClient) { LLMClient = InLLMClient; }
+
 	/** The summary prompt text (CRITICAL: no tool calls, text only) */
 	static const FString SummaryPrompt;
 
