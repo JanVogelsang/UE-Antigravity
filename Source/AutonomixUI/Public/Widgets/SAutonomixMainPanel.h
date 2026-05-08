@@ -392,7 +392,7 @@ FString BuildEnvironmentDetailsString() const;
 
     /** Configure the LLM client from developer settings.
      *  Recreates the client when the active provider changes. */
-    void ConfigureClientFromSettings();
+    void ConfigureClientFromSettings(FName PropertyName = NAME_None);
 
     /**
      * Get a typed pointer to the active LLM client downcast as FAutonomixClaudeClient.

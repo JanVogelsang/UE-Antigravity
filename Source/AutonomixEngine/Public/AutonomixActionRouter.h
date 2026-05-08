@@ -18,6 +18,9 @@ public:
 	/** Register an action executor */
 	void RegisterExecutor(TSharedRef<IAutonomixActionExecutor> Executor);
 
+	/** Clear all registered executors */
+	void ClearExecutors();
+
 	/** Route a tool call to the appropriate executor */
 	FAutonomixActionResult RouteToolCall(const FAutonomixToolCall& ToolCall);
 

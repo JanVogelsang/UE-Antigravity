@@ -16,6 +16,11 @@ void FAutonomixActionRouter::RegisterExecutor(TSharedRef<IAutonomixActionExecuto
 	}
 }
 
+void FAutonomixActionRouter::ClearExecutors()
+{
+	ExecutorMap.Empty();
+}
+
 // ============================================================================
 // Centralized asset_path validation
 // ============================================================================
