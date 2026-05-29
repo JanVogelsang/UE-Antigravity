@@ -6,6 +6,20 @@ Exposed as a Model Context Protocol (MCP) server, it enables Antigravity to inte
 
 ---
 
+## Key Features
+
+Exposes **70+ advanced editor tools** categorized into specialized domains:
+
+* **Blueprint Generation**: Create Blueprint actors, add variables/functions, connect pins, and inject node graphs.
+* **Widget & UMG Editor**: Retrieve widget hierarchies, modify widget slots, set fonts, and bind interactive events.
+* **C++ Integration**: Create classes, modify header and implementation source files, and trigger Live Coding compilation.
+* **Python Editor Scripting**: Write and execute native Unreal Python scripts inside the editor process.
+* **Performance & Scalability**: Read/write cvars, analyze asset sizes, run CSV profiling, and capture rendering metrics.
+* **Enhanced Input**: Define input actions, manage input mapping contexts, and bind hardware mappings.
+* **Gameplay AI & World Tools**: Edit Blackboard/Behavior Tree graphs, configure NavMesh bounds, and spawn actors.
+
+---
+
 ## Repository Structure
 
 This repository contains two distinct components that work together, separated into their own directories for easy distribution:
