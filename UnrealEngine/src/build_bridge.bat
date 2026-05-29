@@ -29,3 +29,14 @@ if %errorlevel% neq 0 (
 )
 
 echo Bridge compiled successfully.
+
+:: Get absolute path to bridge.exe and escape backslashes for JSON
+for %%i in ("%~dp0..\bridge.exe") do set "BRIDGE_PATH=%%~fi"
+set "ESCAPED_PATH=%BRIDGE_PATH:\=\\%"
+
+:: Rewrite mcp_config.json with the absolute path
+powershell -Command "(Get-Content -Raw ..\mcp_config.json) -replace '\"command\":\s*\"[^\"]+\"', '\"command\": \"%ESCAPED_PATH%\"' | Set-Content ..\mcp_config.json"
+if %errorlevel% equ 0 (
+    echo Configured mcp_config.json with absolute path.
+)
+

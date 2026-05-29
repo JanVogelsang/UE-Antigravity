@@ -26,9 +26,11 @@ To make the Unreal Engine tools available across all of your projects, copy this
 * **Windows:** `C:\Users\<Username>\.gemini\config\plugins\UnrealEngine`
 * **Mac/Linux:** `~/.gemini/config/plugins/UnrealEngine`
 
-## Auto-Compilation (Sidecar)
+## Compilation
 
-On startup, Antigravity will discover the `bridge-builder` sidecar defined in the plugin configuration. 
-1. It automatically finds your Visual Studio C++ Compiler using `vswhere.exe`.
-2. It compiles the bridge source (`src/main.cpp`) into `bridge.exe`.
-3. The bridge starts immediately, pinging port `18777` to register tools with the AI once Unreal Engine is running.
+The bridge uses a lightweight C++ executable (`bridge.exe`) to proxy requests. The agent is configured to automatically compile this binary using `src/build_bridge.bat` when it first boots and detects the binary is missing. 
+
+Alternatively, you can compile it manually:
+1. Open a terminal in the plugin directory.
+2. Run `src/build_bridge.bat` (requires Visual Studio C++ build tools installed).
+
