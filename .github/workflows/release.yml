@@ -1,0 +1,36 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - 'v*'
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      
+    steps:
+    - name: Checkout Repository
+      uses: actions/checkout@v4
+
+    - name: Package Unreal Engine Plugin (Fab)
+      run: |
+        # Ensure no generated artifacts are present just in case
+        rm -rf Antigravity/Binaries Antigravity/Intermediate Antigravity/Saved
+        zip -r UE-Antigravity-Plugin.zip Antigravity/
+
+    - name: Package Antigravity Agent Plugin
+      run: |
+        # Remove any pre-built bridge if it was accidentally committed
+        rm -f UnrealEngine/bridge.exe
+        zip -r Antigravity-Agent-Plugin.zip UnrealEngine/
+
+    - name: Create GitHub Release
+      uses: softprops/action-gh-release@v2
+      with:
+        files: |
+          UE-Antigravity-Plugin.zip
+          Antigravity-Agent-Plugin.zip
+        generate_release_notes: true

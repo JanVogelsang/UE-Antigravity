@@ -1,0 +1,7 @@
+{
+  "mcpServers": {
+    "unrealengine": {
+      "command": "bridge.exe"
+    }
+  }
+}

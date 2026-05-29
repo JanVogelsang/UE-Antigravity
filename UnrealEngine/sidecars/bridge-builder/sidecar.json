@@ -1,0 +1,9 @@
+{
+  "description": "Auto-compiles the Antigravity C++ bridge on startup if missing.",
+  "command": "cmd.exe",
+  "args": [
+    "/c",
+    "if not exist bridge.exe (call src\\build_bridge.bat)"
+  ],
+  "restart_policy": "never"
+}
