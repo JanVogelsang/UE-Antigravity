@@ -1,7 +1,7 @@
 {
   "mcpServers": {
     "unrealengine": {
-      "command": "bridge.exe"
+      "command": "C:\\Users\\janv1\\Documents\\Unreal Projects\\UE-Antigravity\\UnrealEngine\\bridge.exe"
     }
   }
 }

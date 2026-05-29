@@ -18,7 +18,7 @@ std::mutex QueueMutex;
 std::condition_variable QueueCV;
 
 std::string SendHttpRequest(const std::wstring& Path, const std::string& Method, const std::string& Payload = "") {
-    HINTERNET hSession = WinHttpOpen(L"UnrealEngineBridge/1.0", WINHTTP_ACCESS_TYPE_DEFAULT_PROXY, WINHTTP_NO_PROXY_NAME, WINHTTP_NO_PROXY_BYPASS, 0);
+    HINTERNET hSession = WinHttpOpen(L"UnrealEngineBridge/1.0", WINHTTP_ACCESS_TYPE_NO_PROXY, WINHTTP_NO_PROXY_NAME, WINHTTP_NO_PROXY_BYPASS, 0);
     if (!hSession) return "";
 
     HINTERNET hConnect = WinHttpConnect(hSession, L"127.0.0.1", 18777, 0);
@@ -177,10 +177,7 @@ int main() {
             Response["id"] = Req["id"];
             
             if (ResultStr.empty()) {
-                Response["error"] = {
-                    {"code", -32603},
-                    {"message", "Unreal Engine Editor is not running"}
-                };
+                Response["result"] = { {"tools", json::array()} };
             } else {
                 json UE_Tools = json::parse(ResultStr, nullptr, false);
                 if (UE_Tools.is_discarded()) {

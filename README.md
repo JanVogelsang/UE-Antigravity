@@ -38,27 +38,31 @@ graph TD
 
 ## Installation & Setup
 
-You must install both components to use the integration.
+You must install both components to use the integration. 
+
+First, download the ZIP archives from the [latest release page](https://github.com/JanVogelsang/UE-Antigravity/releases/latest).
 
 ### 1. Unreal Engine Plugin (Antigravity)
 
 1. Create a `Plugins` directory at the root of your Unreal Engine project if it doesn't already exist.
-2. Copy the `Antigravity` folder from this repository into your project's `Plugins` directory.
+2. Extract the downloaded `Antigravity` archive and copy the `Antigravity` folder into your project's `Plugins` directory.
 3. Open your project in Unreal Editor, click **Yes** if prompted to rebuild, and ensure the plugin is enabled in **Edit > Plugins**.
 
 *For more details on the Unreal Engine plugin, please see the [Antigravity README](./Antigravity/README.md).*
 
 ### 2. Antigravity Agent Plugin (UnrealEngine)
 
+Extract the downloaded `UnrealEngine` archive and copy the `UnrealEngine` folder into one of the following locations:
+
 **Workspace Level (Recommended)**
 Copy the `UnrealEngine` folder into the `.agents/plugins/` directory at the root of your active project workspace:
 ```bash
 mkdir -p .agents/plugins
-cp -r UnrealEngine .agents/plugins/
+# Extract/copy the UnrealEngine folder here
 ```
 
 **Global Level**
-Alternatively, for global installation, copy it to your user profile's global configuration directory:
+Alternatively, for global installation, copy the folder to your user profile's global configuration directory:
 * **Windows:** `C:\Users\<Username>\.gemini\config\plugins\UnrealEngine`
 * **Mac/Linux:** `~/.gemini/config/plugins/UnrealEngine`
 
