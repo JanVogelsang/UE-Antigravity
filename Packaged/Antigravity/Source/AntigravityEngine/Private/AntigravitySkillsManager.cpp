@@ -4,10 +4,7 @@
 #include "HAL/FileManager.h"
 #include "Misc/FileHelper.h"
 #include "Misc/Paths.h"
-#include "Misc/ScopeLock.h"
 
-FCriticalSection FAntigravitySkillsManager::ActiveSkillMutex;
-FString FAntigravitySkillsManager::TrackedLastLoadedSkillName;
 
 FAntigravitySkillsManager::FAntigravitySkillsManager()
 {
@@ -190,32 +187,21 @@ bool FAntigravitySkillsManager::GetSkillContent(
 	return false;
 }
 
-FString FAntigravitySkillsManager::HandleSkillToolCall(
-	const FString& SkillName,
-	const FString& Args
-) const
+FString FAntigravitySkillsManager::GetAllSkillsContextString() const
 {
-	FString Content;
-	if (!GetSkillContent(SkillName, Args, Content))
+	FString Output = TEXT("=== Unreal Engine Built-in Skills ===\n");
+	Output += TEXT("The following skills are available for you to reference. Use them to understand project-specific workflows or standard UE best practices.\n\n");
+
+	for (const FAntigravitySkill& Skill : Skills)
 	{
-		// Build a helpful error with available skill names
-		TArray<FString> Names = GetSkillNames();
-		return FString::Printf(
-			TEXT("Error: Skill '%s' not found.\n\nAvailable skills:\n%s"),
-			*SkillName,
-			*FString::Join(Names, TEXT("\n"))
-		);
+		Output += FString::Printf(TEXT("# Skill: %s\n"), *Skill.DisplayName);
+		Output += FString::Printf(TEXT("## Description\n%s\n"), *Skill.Description);
+		Output += TEXT("## Workflow\n");
+		Output += Skill.Content;
+		Output += TEXT("\n\n---\n\n");
 	}
 
-	SetLastLoadedSkillName(SkillName);
-
-	return FString::Printf(
-		TEXT("# Skill Loaded: %s\n\nArgs: %s\n\n---\n\n%s\n\n---\n\n"
-		     "Follow the above skill instructions to complete the task."),
-		*SkillName,
-		Args.IsEmpty() ? TEXT("(none)") : *Args,
-		*Content
-	);
+	return Output;
 }
 
 TArray<FString> FAntigravitySkillsManager::GetSkillNames() const
@@ -241,21 +227,5 @@ TArray<FAntigravitySkill> FAntigravitySkillsManager::GetSuggestions(const FStrin
 	return Suggestions;
 }
 
-FString FAntigravitySkillsManager::GetLastLoadedSkillName()
-{
-	FScopeLock Lock(&ActiveSkillMutex);
-	return TrackedLastLoadedSkillName;
-}
 
-void FAntigravitySkillsManager::SetLastLoadedSkillName(const FString& SkillName)
-{
-	FScopeLock Lock(&ActiveSkillMutex);
-	TrackedLastLoadedSkillName = SkillName;
-}
-
-void FAntigravitySkillsManager::ClearLastLoadedSkill()
-{
-	FScopeLock Lock(&ActiveSkillMutex);
-	TrackedLastLoadedSkillName.Empty();
-}
 

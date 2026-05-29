@@ -35,12 +35,14 @@
 #include "PIE/AntigravityPIEActions.h"
 #include "Performance/AntigravityPerformanceActions.h"
 #include "Python/AntigravityPythonActions.h"
+#include "Niagara/AntigravityNiagaraActions.h"
 #include "Sequencer/AntigravitySequencerActions.h"
 #include "Settings/AntigravitySettingsActions.h"
 #include "SourceControl/AntigravitySourceControlActions.h"
 #include "Validation/AntigravityValidationActions.h"
 #include "Viewport/AntigravityViewportActions.h"
 #include "Widget/AntigravityWidgetActions.h"
+#include "DataAsset/AntigravityDataAssetActions.h"
 
 TSharedPtr<FAntigravityActionRouter> FAntigravityHttpServer::ActionRouter = nullptr;
 uint32 FAntigravityHttpServer::Port = 18777;
@@ -55,6 +57,7 @@ void FAntigravityHttpServer::Start()
 	{
 		Router->BindRoute(FHttpPath(TEXT("/api/tools")), EHttpServerRequestVerbs::VERB_GET, FHttpRequestHandler::CreateStatic(&FAntigravityHttpServer::HandleListToolsRequest));
 		Router->BindRoute(FHttpPath(TEXT("/api/execute_tool")), EHttpServerRequestVerbs::VERB_POST, FHttpRequestHandler::CreateStatic(&FAntigravityHttpServer::HandleExecuteToolRequest));
+		Router->BindRoute(FHttpPath(TEXT("/api/skills")), EHttpServerRequestVerbs::VERB_GET, FHttpRequestHandler::CreateStatic(&FAntigravityHttpServer::HandleGetSkillsRequest));
 		FHttpServerModule::Get().StartAllListeners();
 	}
 }
@@ -86,6 +89,7 @@ void FAntigravityHttpServer::RegisterAllExecutors(TSharedRef<FAntigravityActionR
 	InRouter->RegisterExecutor(MakeShared<FAntigravityMaterialActions>());
 	InRouter->RegisterExecutor(MakeShared<FAntigravityMediaActions>());
 	InRouter->RegisterExecutor(MakeShared<FAntigravityMeshActions>());
+	InRouter->RegisterExecutor(MakeShared<FAntigravityNiagaraActions>());
 	InRouter->RegisterExecutor(MakeShared<FAntigravityPCGActions>());
 	InRouter->RegisterExecutor(MakeShared<FAntigravityPIEActions>());
 	InRouter->RegisterExecutor(MakeShared<FAntigravityPerformanceActions>());
@@ -96,6 +100,7 @@ void FAntigravityHttpServer::RegisterAllExecutors(TSharedRef<FAntigravityActionR
 	InRouter->RegisterExecutor(MakeShared<FAntigravityValidationActions>());
 	InRouter->RegisterExecutor(MakeShared<FAntigravityViewportActions>());
 	InRouter->RegisterExecutor(MakeShared<FAntigravityWidgetActions>());
+	InRouter->RegisterExecutor(MakeShared<FAntigravityDataAssetActions>());
 }
 
 bool FAntigravityHttpServer::HandleListToolsRequest(const FHttpServerRequest& Request, const FHttpResultCallback& OnComplete)
@@ -164,15 +169,12 @@ bool FAntigravityHttpServer::HandleExecuteToolRequest(const FHttpServerRequest& 
 	}
 
 	FAntigravityToolCall ToolCall;
-	ToolCall.ToolUseId = FGuid::NewGuid().ToString();
+	ToolCall.ToolCallId = FGuid::NewGuid().ToString();
 	ToolCall.ToolName = RequestObj->GetStringField(TEXT("name"));
 	ToolCall.InputParams = RequestObj->GetObjectField(TEXT("arguments"));
 
 	AsyncTask(ENamedThreads::GameThread, [ToolCall, OnComplete]() {
-		if (ToolCall.ToolName == TEXT("attempt_completion"))
-		{
-			FAntigravitySkillsManager::ClearLastLoadedSkill();
-		}
+
 
 		FAntigravityActionResult Result;
 		if (ActionRouter.IsValid())
@@ -185,26 +187,7 @@ bool FAntigravityHttpServer::HandleExecuteToolRequest(const FHttpServerRequest& 
 			Result.ResultMessage = TEXT("Action Router not available");
 		}
 
-		// Self-Improvement Loop detection
-		const UAntigravityDeveloperSettings* Settings = GetDefault<UAntigravityDeveloperSettings>();
-		if (Settings && Settings->bEnableSkillsSelfImprovementLoop)
-		{
-			FString ActiveSkillName = FAntigravitySkillsManager::GetLastLoadedSkillName();
-			if (!ActiveSkillName.IsEmpty())
-			{
-				if (!Result.bSuccess || Result.Errors.Num() > 0)
-				{
-					FString AlertMessage = FString::Printf(
-						TEXT("[Antigravity Self-Improvement Loop] Alert: Suboptimal outcome detected while using skill '%s'. ")
-						TEXT("Tool '%s' failed or returned errors. Consider reporting this to the maintainers to improve the skill definition."),
-						*ActiveSkillName,
-						*ToolCall.ToolName
-					);
-					Result.Warnings.Add(AlertMessage);
-					UE_LOG(LogAntigravity, Warning, TEXT("%s"), *AlertMessage);
-				}
-			}
-		}
+
 
 		TSharedPtr<FJsonObject> ResultObj = MakeShared<FJsonObject>();
 		ResultObj->SetBoolField(TEXT("bSuccess"), Result.bSuccess);
@@ -226,5 +209,24 @@ bool FAntigravityHttpServer::HandleExecuteToolRequest(const FHttpServerRequest& 
 		OnComplete(MoveTemp(Response));
 	});
 
+	return true;
+}
+
+bool FAntigravityHttpServer::HandleGetSkillsRequest(const FHttpServerRequest& Request, const FHttpResultCallback& OnComplete)
+{
+	FAntigravitySkillsManager SkillsManager;
+	SkillsManager.Initialize();
+
+	FString SkillsContext = SkillsManager.GetAllSkillsContextString();
+
+	TSharedPtr<FJsonObject> ResponseObj = MakeShared<FJsonObject>();
+	ResponseObj->SetStringField(TEXT("skills_context"), SkillsContext);
+
+	FString ResponseString;
+	TSharedRef<TJsonWriter<>> Writer = TJsonWriterFactory<>::Create(&ResponseString);
+	FJsonSerializer::Serialize(ResponseObj.ToSharedRef(), Writer);
+
+	TUniquePtr<FHttpServerResponse> Response = FHttpServerResponse::Create(ResponseString, TEXT("application/json"));
+	OnComplete(MoveTemp(Response));
 	return true;
 }

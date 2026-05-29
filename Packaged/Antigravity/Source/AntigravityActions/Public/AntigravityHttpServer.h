@@ -16,6 +16,7 @@ public:
 private:
 	static bool HandleExecuteToolRequest(const FHttpServerRequest& Request, const FHttpResultCallback& OnComplete);
 	static bool HandleListToolsRequest(const FHttpServerRequest& Request, const FHttpResultCallback& OnComplete);
+	static bool HandleGetSkillsRequest(const FHttpServerRequest& Request, const FHttpResultCallback& OnComplete);
 	static void RegisterAllExecutors(TSharedRef<FAntigravityActionRouter> InRouter);
 
 	static TSharedPtr<FAntigravityActionRouter> ActionRouter;

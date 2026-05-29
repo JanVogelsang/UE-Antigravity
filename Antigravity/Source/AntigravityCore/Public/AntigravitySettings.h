@@ -73,6 +73,16 @@ public:
 	bool bEnableSkillsSelfImprovementLoop;
 
 	// ============================================================================
+	// Tool Selection
+	// ============================================================================
+
+	/** Enable Niagara-related authoring and graph-editing tools. */
+	UPROPERTY(Config, EditAnywhere, BlueprintReadOnly, Category = "Tool Selection",
+		meta = (DisplayName = "Enable Niagara Tools",
+		ToolTip = "When enabled, Antigravity is allowed to create, modify, and inspect Niagara Systems and Emitters."))
+	bool bEnableNiagaraTools;
+
+	// ============================================================================
 	// Utility
 	// ============================================================================
 

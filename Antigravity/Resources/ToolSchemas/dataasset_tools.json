@@ -1,0 +1,57 @@
+{
+  "schema_version": "1.0.0",
+  "domain": "data_asset_tools",
+  "min_plugin_version": "1.1.0",
+  "tools": [
+    {
+      "name": "create_data_asset",
+      "description": "Create a new Data Asset instance of a specific class (e.g. UPrimaryDataAsset or a custom Blueprint data asset class). Useful for structural game data like item properties, character stats, or ability definitions.",
+      "input_schema": {
+        "type": "object",
+        "properties": {
+          "asset_path": {
+            "type": "string",
+            "description": "Content path for the new Data Asset (e.g. '/Game/Data/DA_IceSword')"
+          },
+          "class_name": {
+            "type": "string",
+            "description": "Class name or path of the Data Asset subclass (e.g. 'UMyItemData' or '/Game/Blueprints/BP_ItemData.BP_ItemData_C')"
+          }
+        },
+        "required": ["asset_path", "class_name"]
+      }
+    },
+    {
+      "name": "set_data_asset_properties",
+      "description": "Set property values on an existing Data Asset via reflection. Property values are parsed as strings (e.g. '120.5', 'true', '(R=1,G=0,B=0,A=1)' for color, or asset path strings for object references).",
+      "input_schema": {
+        "type": "object",
+        "properties": {
+          "asset_path": {
+            "type": "string",
+            "description": "Content path of the target Data Asset (e.g. '/Game/Data/DA_IceSword')"
+          },
+          "properties": {
+            "type": "object",
+            "description": "Key-value pairs of exact property names and their string-serialized values."
+          }
+        },
+        "required": ["asset_path", "properties"]
+      }
+    },
+    {
+      "name": "get_data_asset_info",
+      "description": "Inspect and retrieve the current properties, types, and values of a Data Asset as JSON. Use this to understand the structure of a class instance before editing properties.",
+      "input_schema": {
+        "type": "object",
+        "properties": {
+          "asset_path": {
+            "type": "string",
+            "description": "Content path of the Data Asset to inspect"
+          }
+        },
+        "required": ["asset_path"]
+      }
+    }
+  ]
+}

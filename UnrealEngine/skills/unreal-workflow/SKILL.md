@@ -45,5 +45,12 @@ description: Best practices for interacting with the Unreal Engine Editor via An
    - **CRITICAL**: Whenever an Unreal Engine tool requires an `asset_path`, it expects the internal Unreal package path (e.g., `/Game/Blueprints/BP_MyActor`), **NOT** a Windows file system path (e.g., `C:/Projects/.../BP_MyActor.uasset`).
    - If you only have a filesystem path, use `search_assets` with the basename to discover the correct `/Game/...` asset path before calling tools like `spawn_actor` or `set_component_properties`.
 
+8. **SOP: Data Asset Creation and Authoring**
+   - **Step 1**: Use `create_data_asset` to instantiate a data asset. Provide the full package path and class name (use `_C` suffix for Blueprint-defined classes).
+   - **Step 2**: Use `get_data_asset_info` if you need to inspect the available fields on an existing Data Asset.
+   - **Step 3**: Use `set_data_asset_properties` to populate fields. Parse values as strings exactly matching C++ reflection formats (e.g., vectors as `"(X=100.0,Y=0.0,Z=2.0)"`, soft asset paths for assets).
+   - **Best Practice**: Prefer **Soft References** (`TSoftObjectPtr`) for heavy assets (meshes, textures, sound cues) when creating/modifying Data Asset definitions to avoid cascade loading memory bottlenecks.
+   - **Rule**: Never use Python scripts to modify Data Assets if these native tools are available.
+
 
 

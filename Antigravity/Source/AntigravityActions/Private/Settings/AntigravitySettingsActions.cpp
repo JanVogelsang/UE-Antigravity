@@ -21,9 +21,7 @@ bool FAntigravitySettingsActions::UndoAction() { return false; }
 
 TArray<FString> FAntigravitySettingsActions::GetSupportedToolNames() const
 {
-	// CRITICAL: These must match the tool names in settings_tools.json exactly.
-	// Previously mismatched (read_ini_setting vs read_config_value) causing
-	// "No executor registered for tool: write_config_value"
+	// These must match the tool names in settings_tools.json exactly.
 	return {
 		TEXT("read_config_value"),
 		TEXT("write_config_value"),
@@ -67,10 +65,36 @@ FAntigravityActionResult FAntigravitySettingsActions::ExecuteAction(const TShare
 	Params->TryGetStringField(TEXT("config_file"), ConfigFile);
 	Params->TryGetStringField(TEXT("section"), Section);
 	Params->TryGetStringField(TEXT("key"), Key);
-	Params->TryGetStringField(TEXT("value"), Value);
-
-	// Detect read vs write: if "value" is present, it's a write; otherwise a read.
+	
+	// Robust parsing for "value" (handle string, number, or boolean)
 	bool bIsWrite = Params->HasField(TEXT("value"));
+	if (bIsWrite)
+	{
+		TSharedPtr<FJsonValue> ValueField = Params->TryGetField(TEXT("value"));
+		if (ValueField.IsValid() && !ValueField->IsNull())
+		{
+			if (ValueField->Type == EJson::String)
+			{
+				Value = ValueField->AsString();
+			}
+			else if (ValueField->Type == EJson::Number)
+			{
+				double NumValue = ValueField->AsNumber();
+				if (FMath::TruncToDouble(NumValue) == NumValue)
+				{
+					Value = FString::Printf(TEXT("%lld"), static_cast<int64>(NumValue));
+				}
+				else
+				{
+					Value = FString::SanitizeFloat(NumValue);
+				}
+			}
+			else if (ValueField->Type == EJson::Boolean)
+			{
+				Value = ValueField->AsBool() ? TEXT("True") : TEXT("False");
+			}
+		}
+	}
 
 	if (Section.IsEmpty() || Key.IsEmpty())
 	{
@@ -106,7 +130,7 @@ FAntigravityActionResult FAntigravitySettingsActions::ExecuteAction(const TShare
 	{
 		// WRITE CONFIG VALUE
 
-		// CRITICAL FIX (ChatGPT): INI write restrictions in Advanced mode
+		// INI write restrictions in Advanced mode
 		const UAntigravityDeveloperSettings* Settings = UAntigravityDeveloperSettings::Get();
 		if (Settings && !Settings->IsIniSectionAllowed(Section))
 		{
@@ -122,7 +146,7 @@ FAntigravityActionResult FAntigravitySettingsActions::ExecuteAction(const TShare
 		else if (ConfigFile.Contains(TEXT("Input"))) TargetIni = GInputIni;
 		else if (ConfigFile.Contains(TEXT("Editor"))) TargetIni = GEditorIni;
 
-		// CRITICAL FIX (Gemini): Use Reflection + PostEditChangeProperty instead of raw GConfig
+		// Use Reflection + PostEditChangeProperty instead of raw GConfig
 		bool bUsedReflection = false;
 
 		if (FModuleManager::Get().IsModuleLoaded(TEXT("Settings")))
@@ -256,7 +280,7 @@ FAntigravityActionResult FAntigravitySettingsActions::ExecuteMacroEnsureProjectP
 			return Result;
 		}
 
-		Result.ResultMessage = FString::Printf(TEXT("Enabled %d missing plugins. [AI HINT: CRITICAL: You must inform the user to restart the Editor for these plugins to load.]"), EnabledCount);
+		Result.ResultMessage = FString::Printf(TEXT("Enabled %d missing plugins. [AI HINT: You must inform the user to restart the Editor for these plugins to load.]"), EnabledCount);
 	}
 	else
 	{
