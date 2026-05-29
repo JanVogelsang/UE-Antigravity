@@ -76,7 +76,11 @@ public class AntigravityActions : ModuleRules
 			"GameplayAbilities",
 			"GameplayTags",
 			"GameplayTagsEditor",
-			"GameplayAbilitiesEditor"
+			"GameplayAbilitiesEditor",
+			// Niagara Support
+			"Niagara",
+			"NiagaraCore",
+			"NiagaraEditor"
 		});
 
 		// Conditionally add Python support

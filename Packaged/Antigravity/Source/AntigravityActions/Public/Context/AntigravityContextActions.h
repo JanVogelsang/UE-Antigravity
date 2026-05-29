@@ -6,15 +6,11 @@
 #include "AntigravityInterfaces.h"
 
 /**
- * Context-as-tools executor.
+ * UE-Specific Context Executor.
  * 
- * Instead of front-loading the entire project context into the system prompt
- * (which can blow past token limits on large projects), this executor provides
- * on-demand tools that Claude calls to explore the project:
+ * Provides on-demand tools for Antigravity (Gemini) to explore the project.
  * 
- * - list_directory: List files/folders in a project-relative path
  * - search_assets: Search the asset registry by class, name, or path
- * - read_file_snippet: Read a section of a source file (with line range)
  * 
  * These tools are always available regardless of security mode (read-only).
  */
@@ -36,10 +32,5 @@ public:
     virtual bool ValidateParams(const TSharedRef<FJsonObject>& Params, TArray<FString>& OutErrors) const override;
 
 private:
-    FAntigravityActionResult ExecuteListDirectory(const TSharedRef<FJsonObject>& Params, FAntigravityActionResult& Result);
     FAntigravityActionResult ExecuteSearchAssets(const TSharedRef<FJsonObject>& Params, FAntigravityActionResult& Result);
-    FAntigravityActionResult ExecuteReadFileSnippet(const TSharedRef<FJsonObject>& Params, FAntigravityActionResult& Result);
-
-    /** Validate that a path doesn't escape the project directory */
-    bool IsPathSafe(const FString& RelativePath) const;
 };

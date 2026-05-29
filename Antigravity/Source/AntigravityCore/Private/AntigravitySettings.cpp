@@ -13,6 +13,9 @@ UAntigravityDeveloperSettings::UAntigravityDeveloperSettings()
 
 	// Skills defaults
 	bEnableSkillsSelfImprovementLoop = false;
+
+	// Tool defaults
+	bEnableNiagaraTools = true;
 }
 
 const UAntigravityDeveloperSettings* UAntigravityDeveloperSettings::Get()

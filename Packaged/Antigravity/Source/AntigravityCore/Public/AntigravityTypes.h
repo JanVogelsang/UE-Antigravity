@@ -79,41 +79,7 @@ enum class EAntigravitySecurityMode : uint8
 	Developer	UMETA(DisplayName = "Developer")
 };
 
-/**
- * AI behavioral mode for the current conversation tab.
- * Each mode provides a different role definition and restricts the available tool set.
- * The AI can switch modes via the switch_mode tool.
- * Ported and adapted from Roo Code's modes.ts (code/architect/ask/debug modes).
- */
-UENUM(BlueprintType)
-enum class EAntigravityAgentMode : uint8
-{
-	/** All tools available. Default mode for general UE development. */
-	General		UMETA(DisplayName = "General"),
 
-	/** Blueprint tools only. No C++ write access. Best for pure Blueprint work. */
-	Blueprint	UMETA(DisplayName = "Blueprint"),
-
-	/** Full C++ code tools + build tools. No Blueprint/asset writes. */
-	CppCode		UMETA(DisplayName = "C++ Code"),
-
-	/** Read-only analysis mode. No write tools. Planning, explaining, reviewing. */
-	Architect	UMETA(DisplayName = "Architect"),
-
-	/** Read + execute (run tests/builds). For diagnosing compile errors + crashes. */
-	Debug		UMETA(DisplayName = "Debug"),
-
-	/** Asset-focused tools: materials, textures, meshes, audio. No code tools. */
-	Asset		UMETA(DisplayName = "Asset"),
-
-	/**
-	 * Orchestrator mode: coordinates complex multi-step projects by breaking them
-	 * into sub-tasks and delegating to other modes via the new_task tool.
-	 * Has access to all read tools + new_task + switch_mode. No direct write tools.
-	 * Ported from Roo Code's ðŸªƒ Orchestrator mode.
-	 */
-	Orchestrator UMETA(DisplayName = "Orchestrator"),
-};
 
 
 
@@ -129,9 +95,9 @@ struct ANTIGRAVITYCORE_API FAntigravityToolCall
 {
 	GENERATED_BODY()
 
-	/** The tool use ID from Claude's response */
+	/** The unique tool call ID from Antigravity/Gemini */
 	UPROPERTY(BlueprintReadOnly, Category = "Antigravity")
-	FString ToolUseId;
+	FString ToolCallId;
 
 	/** Name of the tool being called */
 	UPROPERTY(BlueprintReadOnly, Category = "Antigravity")
@@ -319,9 +285,9 @@ struct ANTIGRAVITYCORE_API FAntigravityActionExecutionRecord
 	UPROPERTY(BlueprintReadOnly, Category = "Antigravity")
 	FString ToolName;
 
-	/** The tool_use_id from Claude's response */
+	/** The unique tool call ID from Antigravity/Gemini */
 	UPROPERTY(BlueprintReadOnly, Category = "Antigravity")
-	FString ToolUseId;
+	FString ToolCallId;
 
 	/** Raw JSON input parameters (serialized) */
 	UPROPERTY(BlueprintReadOnly, Category = "Antigravity")

@@ -38,6 +38,11 @@
 			"Name": "GameplayAbilities",
 			"Enabled": true,
 			"Optional": true
+		},
+		{
+			"Name": "Niagara",
+			"Enabled": true,
+			"Optional": true
 		}
 	],
 	"Modules": [

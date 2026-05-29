@@ -140,35 +140,20 @@ FAntigravityActionResult FAntigravityViewportActions::ExecuteCaptureViewport(
 	Params->TryGetNumberField(TEXT("quality"), JpegQuality);
 	JpegQuality = FMath::Clamp(JpegQuality, 30, 95);
 
-	FString Base64Image = EncodePixelsToBase64(Pixels, Width, Height, MaxDimension, JpegQuality);
-	if (Base64Image.IsEmpty())
+	FString FilePath = SavePixelsToDisk(Pixels, Width, Height, MaxDimension, JpegQuality);
+	if (FilePath.IsEmpty())
 	{
-		Result.Errors.Add(TEXT("Failed to encode viewport capture to JPEG."));
+		Result.Errors.Add(TEXT("Failed to save viewport capture to JPEG."));
 		return Result;
 	}
 
-	// Log the base64 size for debugging context window issues
-	int32 Base64Len = Base64Image.Len();
-	int32 EstimatedTokens = Base64Len / 4; // ~4 chars per token
-	UE_LOG(LogAntigravity, Log, TEXT("ViewportActions: Base64 output: %d chars (~%d tokens)"), Base64Len, EstimatedTokens);
-
-	// Warn if the image is large relative to typical context windows
-	if (EstimatedTokens > 50000)
-	{
-		UE_LOG(LogAntigravity, Warning,
-			TEXT("ViewportActions: Large image (%d tokens). Consider reducing max_dimension or quality."),
-			EstimatedTokens);
-	}
-
-	// Return the Base64 image data
-	// The MainPanel/LLM layer detects the [IMAGE:base64:...] prefix and sends it as
-	// an image content block to VLM-capable models.
+	// Return the image path
 	Result.bSuccess = true;
 	Result.ResultMessage = FString::Printf(
-		TEXT("[IMAGE:base64:data:image/jpeg;base64,%s]\n\n"
-			 "Viewport captured successfully (%dx%d, resized to max %dpx, JPEG quality %d, ~%d tokens). "
-			 "The image shows the current editor viewport."),
-		*Base64Image, Width, Height, MaxDimension, JpegQuality, EstimatedTokens);
+		TEXT("[IMAGE:%s]\n\n"
+			 "Viewport captured successfully (%dx%d, resized to max %dpx, JPEG quality %d). "
+			 "The image shows the current editor viewport and has been saved to the path above."),
+		*FilePath, Width, Height, MaxDimension, JpegQuality);
 
 	return Result;
 }
@@ -177,7 +162,7 @@ FAntigravityActionResult FAntigravityViewportActions::ExecuteCaptureViewport(
 // Image Encoding (JPEG default â€” much smaller than PNG for viewport content)
 // ============================================================================
 
-FString FAntigravityViewportActions::EncodePixelsToBase64(
+FString FAntigravityViewportActions::SavePixelsToDisk(
 	const TArray<FColor>& Pixels,
 	int32 Width,
 	int32 Height,
@@ -257,7 +242,96 @@ FString FAntigravityViewportActions::EncodePixelsToBase64(
 	UE_LOG(LogAntigravity, Log, TEXT("ViewportActions: JPEG encoded %dx%d Q%d -> %d bytes (vs PNG would be ~%dx larger)"),
 		OutWidth, OutHeight, JpegQuality, CompressedData.Num(), 5);
 
-	// Base64 encode
+	FString SaveDirectory = FPaths::Combine(FPaths::ProjectDir(), TEXT(".antigravity"), TEXT("scratch"));
+	IFileManager::Get().MakeDirectory(*SaveDirectory, true);
+	FString FilePath = FPaths::Combine(SaveDirectory, TEXT("viewport_capture.jpg"));
+	
+	if (FFileHelper::SaveArrayToFile(CompressedData, *FilePath))
+	{
+		return FPaths::ConvertRelativePathToFull(FilePath);
+	}
+	
+	UE_LOG(LogAntigravity, Error, TEXT("ViewportActions: Failed to save JPEG to disk at %s"), *FilePath);
+	return FString();
+}
+
+FString FAntigravityViewportActions::EncodePixelsToBase64(
+	const TArray<FColor>& Pixels,
+	int32 Width,
+	int32 Height,
+	int32 MaxDimension,
+	int32 JpegQuality)
+{
+	if (Pixels.Num() == 0 || Width <= 0 || Height <= 0) return FString();
+
+	// Determine if we need to resize
+	int32 OutWidth = Width;
+	int32 OutHeight = Height;
+	int32 LongestEdge = FMath::Max(Width, Height);
+
+	TArray<FColor> ResizedPixels;
+	const TArray<FColor>* PixelsToEncode = &Pixels;
+
+	if (LongestEdge > MaxDimension)
+	{
+		float Scale = static_cast<float>(MaxDimension) / static_cast<float>(LongestEdge);
+		OutWidth = FMath::Max(1, FMath::RoundToInt(Width * Scale));
+		OutHeight = FMath::Max(1, FMath::RoundToInt(Height * Scale));
+
+		// Simple bilinear downscale
+		ResizedPixels.SetNumUninitialized(OutWidth * OutHeight);
+		for (int32 Y = 0; Y < OutHeight; ++Y)
+		{
+			for (int32 X = 0; X < OutWidth; ++X)
+			{
+				float SrcX = static_cast<float>(X) * Width / OutWidth;
+				float SrcY = static_cast<float>(Y) * Height / OutHeight;
+				int32 SX = FMath::Clamp(FMath::FloorToInt(SrcX), 0, Width - 1);
+				int32 SY = FMath::Clamp(FMath::FloorToInt(SrcY), 0, Height - 1);
+				ResizedPixels[Y * OutWidth + X] = Pixels[SY * Width + SX];
+			}
+		}
+		PixelsToEncode = &ResizedPixels;
+	}
+
+	// Use JPEG encoding
+	IImageWrapperModule& ImageWrapperModule = FModuleManager::LoadModuleChecked<IImageWrapperModule>(TEXT("ImageWrapper"));
+	TSharedPtr<IImageWrapper> ImageWrapper = ImageWrapperModule.CreateImageWrapper(EImageFormat::JPEG);
+
+	if (!ImageWrapper.IsValid())
+	{
+		UE_LOG(LogAntigravity, Error, TEXT("ViewportActions: Failed to create JPEG ImageWrapper for Base64 encoding"));
+		return FString();
+	}
+
+	// Set raw BGRA data
+	TArray<uint8> RawData;
+	RawData.SetNumUninitialized(OutWidth * OutHeight * 4);
+	for (int32 i = 0; i < PixelsToEncode->Num(); ++i)
+	{
+		const FColor& C = (*PixelsToEncode)[i];
+		RawData[i * 4 + 0] = C.B;
+		RawData[i * 4 + 1] = C.G;
+		RawData[i * 4 + 2] = C.R;
+		RawData[i * 4 + 3] = C.A;
+	}
+
+	if (!ImageWrapper->SetRaw(RawData.GetData(), RawData.Num(), OutWidth, OutHeight, ERGBFormat::BGRA, 8))
+	{
+		UE_LOG(LogAntigravity, Error, TEXT("ViewportActions: Failed to set raw pixel data on ImageWrapper for Base64 encoding"));
+		return FString();
+	}
+
+	// Get compressed JPEG data
+	TArray<uint8> CompressedData;
+	CompressedData = ImageWrapper->GetCompressed(JpegQuality);
+
+	if (CompressedData.Num() == 0)
+	{
+		UE_LOG(LogAntigravity, Error, TEXT("ViewportActions: JPEG compression returned empty data for Base64 encoding"));
+		return FString();
+	}
+
 	return FBase64::Encode(CompressedData);
 }
 

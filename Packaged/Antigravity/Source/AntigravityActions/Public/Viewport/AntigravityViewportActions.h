@@ -8,12 +8,12 @@
 /**
  * FAntigravityViewportActions
  *
- * Provides the capture_viewport tool â€” gives the AI "eyes" by capturing
- * the active editor viewport as a screenshot and encoding it to Base64 JPEG.
+ * Provides the capture_viewport tool - gives the AI "eyes" by capturing
+ * the active editor viewport as a screenshot.
  *
- * The captured image is returned as the tool_result content, which the LLM client
- * layer can then include as an image content block for Vision-Language Models
- * (Claude Opus/Sonnet with vision, GPT-4o, Gemini Pro Vision).
+ * The captured image is saved to disk and its path is returned, allowing Antigravity
+ * to natively ingest the image using its multimodal capabilities without
+ * large base64 proxy overhead.
  *
  * The AI can:
  *   - Visually inspect UMG widget layouts it just built
@@ -23,17 +23,7 @@
  *
  * IMPLEMENTATION:
  *   Uses FViewport::ReadPixels() on the active level editor viewport to capture
- *   the current frame, then encodes to JPEG via IImageWrapper and Base64.
- *
- * CONTEXT WINDOW SAFETY:
- *   - Default 512px max dimension + JPEG Q75 keeps output to ~7-20K tokens
- *   - Previous PNG at 1024px produced ~125-500K tokens â€” caused context overflow
- *   - Token count is logged and included in the result message
- *   - AI models can still analyze viewport content accurately at 512px JPEG
- *
- * NOTES:
- *   - Read-only tool: Low risk (no modifications to the project)
- *   - Works best with VLM-capable models; non-vision models ignore the image
+ *   the current frame, then saves it as a JPEG to the project's scratch directory.
  */
 class ANTIGRAVITYACTIONS_API FAntigravityViewportActions : public IAntigravityActionExecutor
 {
@@ -68,17 +58,31 @@ private:
 
 public:
 	/**
-	 * Encode raw pixel data to a Base64 JPEG string.
-	 *
-	 * Uses JPEG instead of PNG â€” 5-10x smaller for viewport/3D content,
-	 * keeping the base64 output within context window budgets.
+	 * Save raw pixel data to a JPEG file on disk.
 	 *
 	 * @param Pixels        Raw BGRA8 pixel data
 	 * @param Width         Image width
 	 * @param Height        Image height
 	 * @param MaxDimension  Maximum width/height for downscaling (default 512)
 	 * @param JpegQuality   JPEG compression quality 0-100 (default 75)
-	 * @return              Base64-encoded JPEG string, empty on failure
+	 * @return              Absolute path to the saved JPEG file, empty on failure
+	 */
+	static FString SavePixelsToDisk(
+		const TArray<FColor>& Pixels,
+		int32 Width,
+		int32 Height,
+		int32 MaxDimension,
+		int32 JpegQuality = 75);
+
+	/**
+	 * Encode raw pixel data to a Base64 JPEG string.
+	 *
+	 * @param Pixels        Raw BGRA8 pixel data
+	 * @param Width         Image width
+	 * @param Height        Image height
+	 * @param MaxDimension  Maximum width/height for downscaling (default 512)
+	 * @param JpegQuality   JPEG compression quality 0-100 (default 75)
+	 * @return              Base64 encoded string, empty on failure
 	 */
 	static FString EncodePixelsToBase64(
 		const TArray<FColor>& Pixels,

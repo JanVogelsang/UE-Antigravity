@@ -29,45 +29,31 @@ struct ANTIGRAVITYENGINE_API FAntigravitySkill
 };
 
 /**
- * Manages loadable skill documents (step-by-step instruction guides for Claude).
- *
- * Ported/adapted from Roo Code's skill tool concept.
+ * Manages loadable skill documents (step-by-step instruction guides for Antigravity/Gemini).
  *
  * WHAT ARE SKILLS:
  *   Skills are Markdown files stored in Resources/Skills/ that contain detailed,
  *   step-by-step instructions for accomplishing common UE development tasks.
- *   When Claude calls the skill tool (e.g., skill("create-actor", "PickupItem")),
- *   the skill document is injected as context, guiding Claude through the workflow.
+ *
+ * CONTEXT CACHING:
+ *   With Gemini's massive context window, all loaded skills are concatenated
+ *   into a single context string via GetAllSkillsContextString() and injected
+ *   into the system prompt upon initialization. This takes advantage of Context
+ *   Caching for zero-shot, low-latency execution without needing RAG tool calls.
  *
  * BUILT-IN SKILLS:
- *   create-actor    â€” Full workflow: C++ header â†’ source â†’ Blueprint â†’ test
- *   setup-input     â€” Enhanced Input system configuration
- *   create-interface â€” Blueprint interface creation and usage
- *   add-component   â€” Add and configure a UE component
- *   setup-replication â€” Configure actor replication for multiplayer
- *   create-hud      â€” Create and configure a HUD class
- *   add-save-game   â€” Add SaveGame system to a project
- *   setup-ai        â€” Configure AI character with Behavior Tree
+ *   create-actor    - Full workflow: C++ header -> source -> Blueprint -> test
+ *   setup-input     - Enhanced Input system configuration
+ *   create-interface - Blueprint interface creation and usage
+ *   add-component   - Add and configure a UE component
+ *   setup-replication - Configure actor replication for multiplayer
+ *   create-hud      - Create and configure a HUD class
+ *   add-save-game   - Add SaveGame system to a project
+ *   setup-ai        - Configure AI character with Behavior Tree
  *
  * CUSTOM SKILLS:
  *   Users can create their own .md skill files in Resources/Skills/
  *   and they will be loaded automatically.
- *
- * TOOL INVOCATION:
- *   Claude calls: skill("create-actor", "PickupItem")
- *   The skill content is injected into the conversation as system context.
- *
- * SKILL DOCUMENT FORMAT:
- *   # Skill: [Name]
- *   ## Description
- *   Brief description of what this skill accomplishes.
- *   ## Arguments
- *   - {{arg}}: Description of the argument
- *   ## Steps
- *   1. Step one...
- *   2. Step two...
- *   ## Example
- *   ...
  */
 class ANTIGRAVITYENGINE_API FAntigravitySkillsManager
 {
@@ -93,14 +79,10 @@ public:
 	) const;
 
 	/**
-	 * Handle the skill tool call from Claude.
-	 * Returns the skill content formatted as a tool result.
-	 *
-	 * @param SkillName   Skill name
-	 * @param Args        Optional args string
-	 * @return Tool result string (skill content or error message)
+	 * Concatenates all loaded skills into a single markdown string
+	 * optimized for Gemini Context Caching.
 	 */
-	FString HandleSkillToolCall(const FString& SkillName, const FString& Args) const;
+	FString GetAllSkillsContextString() const;
 
 	/** Get all available skills */
 	const TArray<FAntigravitySkill>& GetAllSkills() const { return Skills; }
@@ -117,14 +99,6 @@ public:
 	/** Get skills directory path */
 	static FString GetSkillsDirectory();
 
-	/** Get the name of the last loaded skill in the current session. Thread-safe. */
-	static FString GetLastLoadedSkillName();
-
-	/** Set the last loaded skill name. Thread-safe. */
-	static void SetLastLoadedSkillName(const FString& SkillName);
-
-	/** Clear the tracked skill (e.g. on task completion). Thread-safe. */
-	static void ClearLastLoadedSkill();
 
 private:
 	void LoadSkillFromFile(const FString& FilePath);
@@ -132,6 +106,4 @@ private:
 
 	TArray<FAntigravitySkill> Skills;
 
-	static FCriticalSection ActiveSkillMutex;
-	static FString TrackedLastLoadedSkillName;
 };
