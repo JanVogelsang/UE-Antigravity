@@ -86,7 +86,8 @@ TArray<FString> FAntigravityBlueprintActions::GetSupportedToolNames() const
 		TEXT("modify_blueprint"),
 		TEXT("verify_blueprint_connections"),
 		TEXT("set_node_pin_default"),
-		TEXT("delete_blueprint_nodes")
+		TEXT("delete_blueprint_nodes"),
+		TEXT("analyze_blueprint_graph")
 	};
 }
 
@@ -150,6 +151,7 @@ FAntigravityActionResult FAntigravityBlueprintActions::ExecuteAction(const TShar
 	if (ToolName == TEXT("verify_blueprint_connections"))       return ExecuteVerifyConnections(Params, Result);
 	if (ToolName == TEXT("set_node_pin_default"))               return ExecuteSetNodePinDefault(Params, Result);
 	if (ToolName == TEXT("delete_blueprint_nodes"))             return ExecuteDeleteNodes(Params, Result);
+	if (ToolName == TEXT("analyze_blueprint_graph"))            return ExecuteAnalyzeBlueprintGraph(Params, Result);
 
 	// Legacy param-based fallback dispatch
 	if (Params->HasField(TEXT("parent_class")))      return ExecuteCreateBlueprint(Params, Result);
@@ -159,7 +161,7 @@ FAntigravityActionResult FAntigravityBlueprintActions::ExecuteAction(const TShar
 	if (Params->HasField(TEXT("t3d_text")))          return ExecuteInjectNodesT3D(Params, Result);
 	if (Params->HasField(TEXT("defaults")))          return ExecuteSetDefaults(Params, Result);
 
-	Result.Errors.Add(FString::Printf(TEXT("Unknown Blueprint tool: '%s'. Supported: create_blueprint_actor, add_blueprint_component, add_blueprint_variable, add_blueprint_function, add_blueprint_event, compile_blueprint, set_blueprint_defaults, set_component_properties, inject_blueprint_nodes_t3d, get_blueprint_info, connect_blueprint_pins, set_node_pin_default, verify_blueprint_connections"), *ToolName));
+	Result.Errors.Add(FString::Printf(TEXT("Unknown Blueprint tool: '%s'. Supported: create_blueprint_actor, add_blueprint_component, add_blueprint_variable, add_blueprint_function, add_blueprint_event, compile_blueprint, set_blueprint_defaults, set_component_properties, inject_blueprint_nodes_t3d, get_blueprint_info, connect_blueprint_pins, set_node_pin_default, verify_blueprint_connections, analyze_blueprint_graph"), *ToolName));
 	return Result;
 }
 
@@ -327,7 +329,7 @@ bool FAntigravityBlueprintActions::DetectInfiniteLoopRisk(UBlueprint* Blueprint,
 // Helper: BuildBlueprintInfoJson
 // ============================================================================
 
-FString FAntigravityBlueprintActions::BuildBlueprintInfoJson(UBlueprint* Blueprint)
+FString FAntigravityBlueprintActions::BuildBlueprintInfoJson(UBlueprint* Blueprint, const TArray<FString>* NodeNamesFilter)
 {
 	TSharedPtr<FJsonObject> Root = MakeShared<FJsonObject>();
 
@@ -399,6 +401,8 @@ FString FAntigravityBlueprintActions::BuildBlueprintInfoJson(UBlueprint* Bluepri
 		for (UEdGraphNode* Node : Graph->Nodes)
 		{
 			if (!Node) continue;
+			if (NodeNamesFilter && !NodeNamesFilter->Contains(Node->GetName())) continue;
+			
 			TSharedPtr<FJsonObject> NodeObj = MakeShared<FJsonObject>();
 			NodeObj->SetStringField(TEXT("name"), Node->GetName());
 			NodeObj->SetStringField(TEXT("class"), Node->GetClass()->GetName());
@@ -1584,7 +1588,17 @@ FAntigravityActionResult FAntigravityBlueprintActions::ExecuteGetBlueprintInfo(c
 		return Result;
 	}
 
-	FString InfoJson = BuildBlueprintInfoJson(Blueprint);
+	TArray<FString> NodeNames;
+	const TArray<TSharedPtr<FJsonValue>>* NodeNamesArray = nullptr;
+	if (Params->TryGetArrayField(TEXT("node_names"), NodeNamesArray))
+	{
+		for (const TSharedPtr<FJsonValue>& Val : *NodeNamesArray)
+		{
+			NodeNames.Add(Val->AsString());
+		}
+	}
+
+	FString InfoJson = BuildBlueprintInfoJson(Blueprint, NodeNames.Num() > 0 ? &NodeNames : nullptr);
 
 	// -----------------------------------------------------------------------
 	// COMPACT CONNECTION REPORT — token-efficient replacement for full T3D
@@ -1602,7 +1616,11 @@ FAntigravityActionResult FAntigravityBlueprintActions::ExecuteGetBlueprintInfo(c
 			TSet<UEdGraphNode*> NodeSet;
 			for (UEdGraphNode* Node : Graph->Nodes)
 			{
-				if (Node) NodeSet.Add(Node);
+				if (Node)
+				{
+					if (NodeNames.Num() > 0 && !NodeNames.Contains(Node->GetName())) continue;
+					NodeSet.Add(Node);
+				}
 			}
 			if (NodeSet.IsEmpty()) return;
 
@@ -1616,6 +1634,87 @@ FAntigravityActionResult FAntigravityBlueprintActions::ExecuteGetBlueprintInfo(c
 
 	Result.bSuccess = true;
 	Result.ResultMessage = InfoJson + GraphReadbacks;
+	return Result;
+}
+
+// ============================================================================
+// ExecuteAnalyzeBlueprintGraph (NEW — Token-Efficient Summary)
+// ============================================================================
+
+FAntigravityActionResult FAntigravityBlueprintActions::ExecuteAnalyzeBlueprintGraph(const TSharedRef<FJsonObject>& Params, FAntigravityActionResult& Result)
+{
+	FString AssetPath = Params->GetStringField(TEXT("asset_path"));
+
+	UBlueprint* Blueprint = LoadObject<UBlueprint>(nullptr, *AssetPath);
+	if (!Blueprint)
+	{
+		Result.Errors.Add(FString::Printf(TEXT("Blueprint not found: '%s'"), *AssetPath));
+		return Result;
+	}
+
+	FString GraphNameFilter;
+	Params->TryGetStringField(TEXT("graph_name"), GraphNameFilter);
+
+	FString GraphReadbacks;
+
+	auto ReportGraph = [&](UEdGraph* Graph, const FString& GraphType)
+	{
+		if (!Graph) return;
+		if (!GraphNameFilter.IsEmpty() && Graph->GetName() != GraphNameFilter) return;
+
+		TSet<UEdGraphNode*> NodeSet;
+		for (UEdGraphNode* Node : Graph->Nodes)
+		{
+			if (Node) NodeSet.Add(Node);
+		}
+		if (NodeSet.IsEmpty()) return;
+
+		GraphReadbacks += BuildCompactConnectionReport(NodeSet, Graph->GetName());
+	};
+
+	for (UEdGraph* G : Blueprint->UbergraphPages)   ReportGraph(G, TEXT("EventGraph"));
+	for (UEdGraph* G : Blueprint->FunctionGraphs)   ReportGraph(G, TEXT("Function"));
+	for (UEdGraph* G : Blueprint->MacroGraphs)      ReportGraph(G, TEXT("Macro"));
+
+	if (GraphReadbacks.IsEmpty())
+	{
+		if (!GraphNameFilter.IsEmpty())
+		{
+			// Check if the graph exists but is empty
+			UEdGraph* FoundGraph = nullptr;
+			for (UEdGraph* G : Blueprint->UbergraphPages)   { if (G && G->GetName() == GraphNameFilter) { FoundGraph = G; break; } }
+			if (!FoundGraph)
+			{
+				for (UEdGraph* G : Blueprint->FunctionGraphs)   { if (G && G->GetName() == GraphNameFilter) { FoundGraph = G; break; } }
+			}
+			if (!FoundGraph)
+			{
+				for (UEdGraph* G : Blueprint->MacroGraphs)      { if (G && G->GetName() == GraphNameFilter) { FoundGraph = G; break; } }
+			}
+
+			if (FoundGraph)
+			{
+				GraphReadbacks = FString::Printf(TEXT("Graph '%s' exists in Blueprint '%s' but contains no nodes."), *GraphNameFilter, *AssetPath);
+			}
+			else
+			{
+				TArray<FString> AvailableGraphs;
+				for (UEdGraph* G : Blueprint->UbergraphPages)   { if (G) AvailableGraphs.Add(G->GetName()); }
+				for (UEdGraph* G : Blueprint->FunctionGraphs)   { if (G) AvailableGraphs.Add(G->GetName()); }
+				for (UEdGraph* G : Blueprint->MacroGraphs)      { if (G) AvailableGraphs.Add(G->GetName()); }
+
+				GraphReadbacks = FString::Printf(TEXT("Graph '%s' not found in Blueprint '%s'. Available graphs: %s"),
+					*GraphNameFilter, *AssetPath, *FString::Join(AvailableGraphs, TEXT(", ")));
+			}
+		}
+		else
+		{
+			GraphReadbacks = TEXT("No graphs or nodes found.");
+		}
+	}
+
+	Result.bSuccess = true;
+	Result.ResultMessage = GraphReadbacks;
 	return Result;
 }
 

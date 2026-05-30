@@ -323,6 +323,13 @@
           "asset_path": {
             "type": "string",
             "description": "Content path of the Blueprint to inspect"
+          },
+          "node_names": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "Optional array of internal node names (e.g. ['K2Node_CallFunction_0']). If provided, detailed info will only be returned for these nodes (to save tokens)."
           }
         },
         "required": ["asset_path"]
@@ -462,6 +469,24 @@
           }
         },
         "required": ["asset_path", "node_names"]
+      }
+    },
+    {
+      "name": "analyze_blueprint_graph",
+      "description": "Read an existing Blueprint graph and summarize its logic flow, execution chain, and data connections in a token-efficient text format. Essential for understanding complex legacy graphs before modifying them. Returns internal node names needed for subsequent detailed queries or modifications.",
+      "input_schema": {
+        "type": "object",
+        "properties": {
+          "asset_path": {
+            "type": "string",
+            "description": "Content path of the Blueprint to analyze"
+          },
+          "graph_name": {
+            "type": "string",
+            "description": "Optional specific graph to analyze (e.g. 'EventGraph', 'MyFunction'). If omitted, all graphs are summarized."
+          }
+        },
+        "required": ["asset_path"]
       }
     }
   ]

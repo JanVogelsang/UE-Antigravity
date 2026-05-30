@@ -1846,19 +1846,19 @@ FAntigravityActionResult FAntigravityWidgetActions::ExecuteCaptureWidget(const T
 	int32 Quality = 75;
 	Params->TryGetNumberField(TEXT("quality"), Quality);
 
-	FString Base64Image = FAntigravityViewportActions::EncodePixelsToBase64(Pixels, Width, Height, MaxDimension, Quality);
-	if (Base64Image.IsEmpty())
+	FString FilePath = FAntigravityViewportActions::SavePixelsToDisk(Pixels, Width, Height, MaxDimension, Quality);
+	if (FilePath.IsEmpty())
 	{
-		Result.Errors.Add(TEXT("Failed to encode widget capture to Base64."));
+		Result.Errors.Add(TEXT("Failed to save widget capture to disk."));
 		return Result;
 	}
 
-	int32 EstimatedTokens = Base64Image.Len() / 4;
 	Result.bSuccess = true;
 	Result.ResultMessage = FString::Printf(
-		TEXT("[IMAGE:base64:data:image/jpeg;base64,%s]\n\n"
-			 "Widget '%s' captured successfully (rendered at %dx%d, resized to max %dpx, JPEG quality %d, ~%d tokens)."),
-		*Base64Image, *AssetPath, Width, Height, MaxDimension, Quality, EstimatedTokens);
+		TEXT("[IMAGE:%s]\n\n"
+			 "Widget '%s' captured successfully (rendered at %dx%d, resized to max %dpx, JPEG quality %d). "
+			 "The image has been saved to the path above."),
+		*FilePath, *AssetPath, Width, Height, MaxDimension, Quality);
 
 	return Result;
 }

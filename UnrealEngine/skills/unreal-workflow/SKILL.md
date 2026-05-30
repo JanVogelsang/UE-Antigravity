@@ -52,5 +52,9 @@ description: Best practices for interacting with the Unreal Engine Editor via An
    - **Best Practice**: Prefer **Soft References** (`TSoftObjectPtr`) for heavy assets (meshes, textures, sound cues) when creating/modifying Data Asset definitions to avoid cascade loading memory bottlenecks.
    - **Rule**: Never use Python scripts to modify Data Assets if these native tools are available.
 
-
-
+9. **SOP: Visual UI Design**
+   - **CRITICAL**: Do not build complex UIs blindly. Use the `capture_widget` tool to visually see the widgets you create.
+   - **Step 1**: Use `create_widget_blueprint` and `add_widget` to construct the widget hierarchy.
+   - **Step 2**: Call `capture_widget` with the widget's `asset_path`. The tool will return a Base64 image artifact directly in the chat.
+   - **Step 3**: Visually analyze the Base64 image artifact. Check alignments, padding, and colors.
+   - **Step 4**: Iteratively adjust properties using `set_widget_slot` and `set_widget_property`, re-capturing as necessary until the layout perfectly matches the desired design.
