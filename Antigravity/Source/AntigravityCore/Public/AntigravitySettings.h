@@ -29,10 +29,10 @@ public:
 	// ============================================================================
 
 	/** Security mode controlling what capabilities Antigravity is allowed to use.
-	 *  Defaults to Sandbox for safety. Developer mode requires explicit opt-in. */
+	 *  Defaults to Full Access (Unrestricted) mode. */
 	UPROPERTY(Config, EditAnywhere, BlueprintReadOnly, Category = "Safety|Security",
 		meta = (DisplayName = "Security Mode",
-		ToolTip = "Sandbox: No C++/builds/shell. Advanced: Full asset editing. Developer: Full power including C++ and builds."))
+		ToolTip = "Restricted: Safe sandboxed asset viewing/editing. Standard: Full source code and asset editing. Full Access: Unrestricted power (compiling, Live Coding, python, and testing)."))
 	EAntigravitySecurityMode SecurityMode;
 
 	// ============================================================================
@@ -64,23 +64,15 @@ public:
 	// Skills Settings
 	// ============================================================================
 
-	/** Enable AI self-improvement loop for skills.
+	/** Enable developer diagnostics and debugging loop for skills.
 	 *  When enabled, Antigravity tracks active skills, detects failures or warnings,
-	 *  and appends self-improvement alerts to the response. */
+	 *  and appends diagnostic and debugging information to the response. */
 	UPROPERTY(Config, EditAnywhere, BlueprintReadOnly, Category = "Skills",
-		meta = (DisplayName = "Enable Skills Self-Improvement Loop",
-		ToolTip = "Analyze tool failures and compilation errors while a skill is active and notify the user to help improve the skill definitions."))
-	bool bEnableSkillsSelfImprovementLoop;
+		meta = (DisplayName = "Enable Skills Debugging and Diagnostics",
+		ToolTip = "Analyze tool failures and compilation errors while a skill is active and provide diagnostic logs to assist developers in debugging."))
+	bool bEnableSkillsDebugDiagnostics;
 
-	// ============================================================================
-	// Tool Selection
-	// ============================================================================
 
-	/** Enable Niagara-related authoring and graph-editing tools. */
-	UPROPERTY(Config, EditAnywhere, BlueprintReadOnly, Category = "Tool Selection",
-		meta = (DisplayName = "Enable Niagara Tools",
-		ToolTip = "When enabled, Antigravity is allowed to create, modify, and inspect Niagara Systems and Emitters."))
-	bool bEnableNiagaraTools;
 
 	// ============================================================================
 	// Utility

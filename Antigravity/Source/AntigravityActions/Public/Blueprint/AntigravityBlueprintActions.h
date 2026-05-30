@@ -146,6 +146,19 @@ private:
 	FAntigravityActionResult ExecuteGetBlueprintInfo(const TSharedRef<FJsonObject>& Params, FAntigravityActionResult& Result);
 
 	/**
+	 * Read an existing Blueprint graph and summarize its logic flow.
+	 *
+	 * Returns a token-efficient summary containing node inventory, execution chain,
+	 * and data connections. Essential for understanding complex legacy graphs
+	 * before modifying them.
+	 *
+	 * Parameters:
+	 *   - asset_path (string, required): Content path of the Blueprint
+	 *   - graph_name (string, optional): Specific graph to analyze. Default: all graphs.
+	 */
+	FAntigravityActionResult ExecuteAnalyzeBlueprintGraph(const TSharedRef<FJsonObject>& Params, FAntigravityActionResult& Result);
+
+	/**
 	 * Add a standard event handler node to a Blueprint's EventGraph.
 	 *
 	 * Adds or finds an existing event node (prevents duplicate creation). Returns the
@@ -300,7 +313,7 @@ private:
 	static bool CompileAndReport(UBlueprint* Blueprint, FAntigravityActionResult& Result, bool bSkipGC = true);
 
 	/** Build a JSON string describing variables, SCS components, and graph inventory. */
-	static FString BuildBlueprintInfoJson(UBlueprint* Blueprint);
+	static FString BuildBlueprintInfoJson(UBlueprint* Blueprint, const TArray<FString>* NodeNamesFilter = nullptr);
 
 	/**
 	 * Audit unconnected input pins across the given node set for common authoring errors:

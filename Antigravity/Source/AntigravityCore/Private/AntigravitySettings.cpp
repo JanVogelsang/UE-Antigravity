@@ -8,14 +8,11 @@ FAntigravitySettingsChangedDelegate UAntigravityDeveloperSettings::OnSettingsCha
 
 UAntigravityDeveloperSettings::UAntigravityDeveloperSettings()
 {
-	// Safety defaults -- Marketplace-safe: Sandbox by default, opt-in for power features
-	SecurityMode = EAntigravitySecurityMode::Sandbox;
+	// Safety defaults -- Full Access by default
+	SecurityMode = EAntigravitySecurityMode::FullAccess;
 
 	// Skills defaults
-	bEnableSkillsSelfImprovementLoop = false;
-
-	// Tool defaults
-	bEnableNiagaraTools = true;
+	bEnableSkillsDebugDiagnostics = false;
 }
 
 const UAntigravityDeveloperSettings* UAntigravityDeveloperSettings::Get()
@@ -25,7 +22,7 @@ const UAntigravityDeveloperSettings* UAntigravityDeveloperSettings::Get()
 
 bool UAntigravityDeveloperSettings::IsIniSectionAllowed(const FString& Section) const
 {
-	if (SecurityMode == EAntigravitySecurityMode::Advanced)
+	if (SecurityMode == EAntigravitySecurityMode::Restricted || SecurityMode == EAntigravitySecurityMode::Standard)
 	{
 		return Section.StartsWith(TEXT("/Script/Antigravity"));
 	}
@@ -72,11 +69,11 @@ void UAntigravityDeveloperSettings::PostEditChangeProperty(FPropertyChangedEvent
 	// ====================================================================
 	if (PropName == GET_MEMBER_NAME_CHECKED(UAntigravityDeveloperSettings, SecurityMode))
 	{
-		if (SecurityMode == EAntigravitySecurityMode::Developer)
+		if (SecurityMode == EAntigravitySecurityMode::FullAccess)
 		{
-			FText Title = FText::FromString(TEXT("Enable Developer Mode?"));
+			FText Title = FText::FromString(TEXT("Enable Full Access Mode?"));
 			FText Message = FText::FromString(
-				TEXT("WARNING: Developer Mode allows:\n\n")
+				TEXT("WARNING: Full Access Mode allows:\n\n")
 				TEXT("- C++ file writes and compilation\n")
 				TEXT("- Full INI/config modification\n")
 				TEXT("- External process execution (UAT builds)\n")
@@ -91,9 +88,9 @@ void UAntigravityDeveloperSettings::PostEditChangeProperty(FPropertyChangedEvent
 
 			if (Result != EAppReturnType::Yes)
 			{
-				// User declined -- revert to Advanced
-				SecurityMode = EAntigravitySecurityMode::Advanced;
-				UE_LOG(LogAntigravity, Log, TEXT("Antigravity: Developer mode switch declined. Reverting to Advanced."));
+				// User declined -- revert to Standard
+				SecurityMode = EAntigravitySecurityMode::Standard;
+				UE_LOG(LogAntigravity, Log, TEXT("Antigravity: Full Access mode switch declined. Reverting to Standard."));
 			}
 		}
 	}

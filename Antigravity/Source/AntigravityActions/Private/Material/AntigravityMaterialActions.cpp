@@ -21,6 +21,11 @@
 #include "UObject/SavePackage.h"
 #include "Misc/PackageName.h"
 #include "ScopedTransaction.h"
+#include "Kismet/KismetRenderingLibrary.h"
+#include "Engine/TextureRenderTarget2D.h"
+#include "Viewport/AntigravityViewportActions.h"
+#include "Editor.h"
+#include "RenderingThread.h"
 
 FAntigravityMaterialActions::FAntigravityMaterialActions() {}
 FAntigravityMaterialActions::~FAntigravityMaterialActions() {}
@@ -38,7 +43,8 @@ TArray<FString> FAntigravityMaterialActions::GetSupportedToolNames() const
 		TEXT("create_material"),
 		TEXT("create_material_instance"),
 		TEXT("add_material_expression"),
-		TEXT("connect_material_property")
+		TEXT("connect_material_property"),
+		TEXT("capture_material")
 	};
 }
 
@@ -73,6 +79,15 @@ FAntigravityActionResult FAntigravityMaterialActions::ExecuteAction(const TShare
 
 	FAntigravityActionResult Result;
 	Result.bSuccess = false;
+
+	FString ToolName;
+	if (Params->TryGetStringField(TEXT("_tool_name"), ToolName))
+	{
+		if (ToolName == TEXT("create_material")) return ExecuteCreateMaterial(Params, Result);
+		if (ToolName == TEXT("create_material_instance")) return ExecuteCreateMaterialInstance(Params, Result);
+		if (ToolName == TEXT("add_material_expression")) return ExecuteAddMaterialExpression(Params, Result);
+		if (ToolName == TEXT("capture_material")) return ExecuteCaptureMaterial(Params, Result);
+	}
 
 	if (Params->HasField(TEXT("parent_material")))
 	{
@@ -303,5 +318,68 @@ FAntigravityActionResult FAntigravityMaterialActions::ExecuteCreateMaterialInsta
 FAntigravityActionResult FAntigravityMaterialActions::ExecuteAddMaterialExpression(const TSharedRef<FJsonObject>& Params, FAntigravityActionResult& Result)
 {
 	Result.Errors.Add(TEXT("Use create_material with expressions array instead."));
+	return Result;
+}
+
+FAntigravityActionResult FAntigravityMaterialActions::ExecuteCaptureMaterial(const TSharedRef<FJsonObject>& Params, FAntigravityActionResult& Result)
+{
+	FString AssetPath = Params->GetStringField(TEXT("asset_path"));
+
+	UMaterialInterface* Material = LoadObject<UMaterialInterface>(nullptr, *AssetPath);
+	if (!Material)
+	{
+		Result.Errors.Add(FString::Printf(TEXT("Material not found at %s"), *AssetPath));
+		return Result;
+	}
+
+	UWorld* World = GEditor ? GEditor->GetEditorWorldContext().World() : nullptr;
+	if (!World)
+	{
+		Result.Errors.Add(TEXT("Could not find a valid World context to capture the material."));
+		return Result;
+	}
+
+	int32 MaxDimension = 512;
+	Params->TryGetNumberField(TEXT("max_dimension"), MaxDimension);
+
+	int32 Quality = 75;
+	Params->TryGetNumberField(TEXT("quality"), Quality);
+
+	UTextureRenderTarget2D* RenderTarget = NewObject<UTextureRenderTarget2D>();
+	RenderTarget->InitCustomFormat(MaxDimension, MaxDimension, PF_B8G8R8A8, false);
+	RenderTarget->ClearColor = FLinearColor(0.12f, 0.12f, 0.12f, 1.0f); // neutral dark gray
+
+	UKismetRenderingLibrary::DrawMaterialToRenderTarget(World, RenderTarget, Material);
+
+	FlushRenderingCommands();
+
+	FTextureRenderTargetResource* RTResource = RenderTarget->GameThread_GetRenderTargetResource();
+	if (!RTResource)
+	{
+		Result.Errors.Add(TEXT("Failed to get render target resource."));
+		return Result;
+	}
+
+	TArray<FColor> Pixels;
+	if (!RTResource->ReadPixels(Pixels))
+	{
+		Result.Errors.Add(TEXT("Failed to read pixels from render target."));
+		return Result;
+	}
+
+	FString FilePath = FAntigravityViewportActions::SavePixelsToDisk(Pixels, MaxDimension, MaxDimension, MaxDimension, Quality);
+	if (FilePath.IsEmpty())
+	{
+		Result.Errors.Add(TEXT("Failed to save material capture to disk."));
+		return Result;
+	}
+
+	Result.bSuccess = true;
+	Result.ResultMessage = FString::Printf(
+		TEXT("[IMAGE:%s]\n\n"
+			 "Material '%s' captured successfully (rendered at %dx%d, resized to max %dpx, JPEG quality %d). "
+			 "The image has been saved to the path above."),
+		*FilePath, *AssetPath, MaxDimension, MaxDimension, MaxDimension, Quality);
+
 	return Result;
 }

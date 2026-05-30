@@ -26,4 +26,5 @@ private:
     FAntigravityActionResult ExecuteCreateMaterial(const TSharedRef<FJsonObject>& Params, FAntigravityActionResult& Result);
     FAntigravityActionResult ExecuteCreateMaterialInstance(const TSharedRef<FJsonObject>& Params, FAntigravityActionResult& Result);
     FAntigravityActionResult ExecuteAddMaterialExpression(const TSharedRef<FJsonObject>& Params, FAntigravityActionResult& Result);
+    FAntigravityActionResult ExecuteCaptureMaterial(const TSharedRef<FJsonObject>& Params, FAntigravityActionResult& Result);
 };
