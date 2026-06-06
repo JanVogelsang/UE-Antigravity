@@ -4,11 +4,21 @@ description: Best practices for interacting with the Unreal Engine Editor via An
 ---
 # Unreal Workflow Skill
 
-1. **Editor State**: All Antigravity tools require the Unreal Engine Editor to be open. If a tool returns a "connection refused" or "Editor is not running" error, politely ask the user to start their Unreal Engine project.
+1. **Editor State**: All Antigravity tools require the Unreal Engine Editor to be open. If a tool returns a "connection refused" or "Editor is not running" error, start the editor.
+   - **How to Start the Editor**: Run this portable PowerShell command in the terminal to resolve the engine path from the registry and start the editor with the required developer authentication parameters:
+     ```powershell
+     $RegistryPath = "HKLM:\SOFTWARE\EpicGames\Unreal Engine\5.7"
+     $InstalledDir = (Get-ItemProperty -Path $RegistryPath -Name InstalledDirectory -ErrorAction SilentlyContinue).InstalledDirectory
+     if (-not $InstalledDir) { $InstalledDir = "C:\Program Files\Epic Games\UE_5.7" }
+     $EditorExe = Join-Path $InstalledDir "Engine\Binaries\Win64\UnrealEditor.exe"
+     $ProjectFile = Join-Path (Get-Location) "Tau.uproject"
+     Start-Process -FilePath $EditorExe -ArgumentList "`"$ProjectFile`"", "-CustomConfig=EOS", "-AUTH_TYPE=developer", "-AUTH_LOGIN=localhost:8080", "-AUTH_PASSWORD=TauDev"
+     ```
 2. **Tool Discovery**: Tools are dynamically fetched from the active UE project. **DO NOT waste tokens discovering or reading JSON schemas for standard tools.** Trust that native MCP tools (`spawn_actor`, `search_assets`, `inject_blueprint_nodes_t3d`, etc.) are available and use them directly.
 3. **Bridge Compilation & Verification**: Before executing any Unreal Engine task, verify that the native `unrealengine` MCP tools are active. If the bridge is offline or missing:
-   - You **MUST** automatically execute the build script `src/build_bridge.bat` (located inside the `UnrealEngine` plugin directory) without asking first. Propose this to the user as a safe, one-time operation to initialize the bridge.
-   - After a successful compilation, you **MUST** ask the user to restart "Antigravity" specifically to allow the newly compiled bridge to be loaded.
+   - You **MUST** automatically execute the build script `src/build_bridge.bat` (located inside the `UnrealEngine` plugin directory) without asking first. This script compiles the bridge and automatically generates the machine-specific `unreal-env` skill. Propose this to the user as a safe, one-time operation to initialize the bridge.
+   - After a successful compilation, you **MUST** ask the user to restart "Antigravity" specifically to allow the newly compiled bridge and the dynamically generated `unreal-env` skill to be loaded.
+   - If the `unreal-env` skill is missing or outdated but the bridge is active, you can regenerate it by running `powershell -ExecutionPolicy Bypass -File .agents/plugins/UnrealEngine/src/generate_env_skill.ps1`.
    - If the compilation fails or the bridge remains offline, you **MUST** loudly fail the Unreal Engine task.
    - Do **NOT** attempt to manually execute or run `bridge.exe` directly via terminal shell commands.
    - Do **NOT** attempt to bypass the offline bridge by running direct shell commands (e.g., PowerShell `Invoke-RestMethod` or `curl`).
