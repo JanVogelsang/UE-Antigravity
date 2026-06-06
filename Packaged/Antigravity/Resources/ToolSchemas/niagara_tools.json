@@ -1,0 +1,143 @@
+{
+  "schema_version": "1.0.0",
+  "domain": "niagara_tools",
+  "min_plugin_version": "1.1.0",
+  "tools": [
+    {
+      "name": "create_niagara_system",
+      "description": "Create a new blank Niagara System asset at the specified content path.",
+      "input_schema": {
+        "type": "object",
+        "properties": {
+          "asset_path": {
+            "type": "string",
+            "description": "Full destination content path, e.g. /Game/Effects/NS_Explosion"
+          }
+        },
+        "required": ["asset_path"]
+      }
+    },
+    {
+      "name": "add_niagara_emitter",
+      "description": "Create or copy an emitter and append it to an existing Niagara System.",
+      "input_schema": {
+        "type": "object",
+        "properties": {
+          "system_path": {
+            "type": "string",
+            "description": "Content path of the target Niagara System, e.g. /Game/Effects/NS_Explosion"
+          },
+          "emitter_template": {
+            "type": "string",
+            "enum": ["SpriteBurst", "RibbonTrail", "MeshDebris", "GPUSimulation"],
+            "description": "The standard AAA template emitter configuration to copy."
+          },
+          "emitter_name": {
+            "type": "string",
+            "description": "Desired unique name for the new emitter handle inside the system."
+          }
+        },
+        "required": ["system_path", "emitter_template", "emitter_name"]
+      }
+    },
+    {
+      "name": "add_niagara_module",
+      "description": "Dynamically add a logic module (e.g. AddVelocity, GravityForce, Collision, LightRenderer) to a specific phase of an emitter script graph.",
+      "input_schema": {
+        "type": "object",
+        "properties": {
+          "system_path": {
+            "type": "string",
+            "description": "Content path of the target Niagara System"
+          },
+          "emitter_name": {
+            "type": "string",
+            "description": "Name of the emitter inside the system to modify"
+          },
+          "phase": {
+            "type": "string",
+            "enum": ["EmitterSpawn", "EmitterUpdate", "ParticleSpawn", "ParticleUpdate"],
+            "description": "The script execution phase/stack layer where the module will be added."
+          },
+          "module_type": {
+            "type": "string",
+            "enum": ["AddVelocity", "GravityForce", "Drag", "Collision", "LightRenderer", "AccelerationForce"],
+            "description": "The standard Niagara module to add to the script stack."
+          }
+        },
+        "required": ["system_path", "emitter_name", "phase", "module_type"]
+      }
+    },
+    {
+      "name": "set_niagara_module_pin",
+      "description": "Configure an input pin value or curve binding on a specific module inside an emitter.",
+      "input_schema": {
+        "type": "object",
+        "properties": {
+          "system_path": {
+            "type": "string",
+            "description": "Content path of the target Niagara System"
+          },
+          "emitter_name": {
+            "type": "string",
+            "description": "Name of the emitter inside the system"
+          },
+          "phase": {
+            "type": "string",
+            "enum": ["EmitterSpawn", "EmitterUpdate", "ParticleSpawn", "ParticleUpdate"],
+            "description": "The execution phase containing the module"
+          },
+          "module_type": {
+            "type": "string",
+            "description": "The type of the module containing the pin, e.g. AddVelocity"
+          },
+          "pin_name": {
+            "type": "string",
+            "description": "Name of the input pin to edit (e.g., Velocity, Gravity, Drag, Size)"
+          },
+          "value": {
+            "type": "string",
+            "description": "The value or expression to assign to the pin. For standard types: '1.5' (float), 'X=0.0 Y=0.0 Z=-980.0' (Vector), '(R=1.0,G=0.0,B=0.0)' (Color). For curve mapping: '[ (0.0, 1.0), (0.5, 2.0), (1.0, 0.0) ]' representing time/value keys."
+          }
+        },
+        "required": ["system_path", "emitter_name", "phase", "module_type", "pin_name", "value"]
+      }
+    },
+    {
+      "name": "compile_niagara_system",
+      "description": "Compile the script graphs of the target Niagara System and retrieve errors, warnings, and performance bottleneck diagnostics.",
+      "input_schema": {
+        "type": "object",
+        "properties": {
+          "system_path": {
+            "type": "string",
+            "description": "Content path of the target Niagara System to compile"
+          }
+        },
+        "required": ["system_path"]
+      }
+    },
+    {
+      "name": "capture_niagara_system_isolated",
+      "description": "Perform an isolated scene capture of the Niagara system simulation over time, returning a 2x2 grid image of 4 chronologically spaced keyframes with dynamic time and scale overlays, as well as spatial bounds dimension metadata.",
+      "input_schema": {
+        "type": "object",
+        "properties": {
+          "system_path": {
+            "type": "string",
+            "description": "Content path of the target Niagara System to render"
+          },
+          "duration_seconds": {
+            "type": "number",
+            "description": "Total simulation window to capture over (default: 2.0 seconds). Slices will occur at 10%, 30%, 60%, and 90% of this window."
+          },
+          "max_dimension": {
+            "type": "integer",
+            "description": "Maximum width/height of the output grid image in pixels (default 512, range 256-1024)."
+          }
+        },
+        "required": ["system_path"]
+      }
+    }
+  ]
+}

@@ -1,0 +1,48 @@
+{
+  "image_support": false,
+  "disabled_tools": [
+    "capture_widget",
+    "capture_viewport",
+    "capture_niagara_system_isolated"
+  ],
+  "tool_overrides": {
+    "execute_python_script": {
+      "description": "Execute a Python script. / 执行 Python 脚本。 The script MUST use the 'unreal' module for all engine interactions. / 脚本必须使用 'unreal' 模块进行所有引擎交互。 NEVER use os, subprocess, or shutil for asset operations. / 切勿使用 os、subprocess 或 shutil 进行资产操作。 EXAMPLE: Use unreal.EditorAssetLibrary.rename_asset() instead of os.rename().",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "reasoning_step": {
+            "type": "string",
+            "description": "Explain what you are trying to achieve before writing the code. / 在编写代码之前解释你想要实现的目标。"
+          },
+          "script_content": {
+            "type": "string",
+            "description": "The exact Python code to execute. / 要执行的确切 Python 代码。"
+          }
+        },
+        "required": ["reasoning_step", "script_content"]
+      }
+    },
+    "execute_batch_blueprint_operations": {
+      "description": "Batch multiple Blueprint modifications in a single transaction. / 在单次事务中批量处理多个蓝图修改。 Plan your node injection and connections thoroughly before emitting the array. / 在提交数组之前彻底计划节点注入和连接。",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "reasoning_step": {
+            "type": "string",
+            "description": "Step-by-step plan of which nodes to add and how they connect. / 逐步计划要添加哪些节点以及它们如何连接。"
+          },
+          "blueprint_path": {
+            "type": "string",
+            "description": "The internal Unreal asset path to the Blueprint. / 蓝图的内部 Unreal 资产路径。"
+          },
+          "operations": {
+            "type": "array",
+            "description": "Array of operation objects. / 操作对象数组。"
+          }
+        },
+        "required": ["reasoning_step", "blueprint_path", "operations"]
+      }
+    }
+  }
+}

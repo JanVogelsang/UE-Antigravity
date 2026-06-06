@@ -1,0 +1,48 @@
+{
+  "image_support": false,
+  "disabled_tools": [
+    "capture_widget",
+    "capture_viewport",
+    "capture_niagara_system_isolated"
+  ],
+  "tool_overrides": {
+    "execute_python_script": {
+      "description": "Execute a Python script inside the Unreal Engine Editor's embedded Python interpreter. The script MUST use the 'unreal' module for all engine interactions. NEVER use os, subprocess, or shutil for asset operations. EXAMPLE: To rename an asset, use unreal.EditorAssetLibrary.rename_asset('/Game/Old', '/Game/New') instead of os.rename().",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "reasoning_step": {
+            "type": "string",
+            "description": "Explain step-by-step what you are trying to achieve before writing the code."
+          },
+          "script_content": {
+            "type": "string",
+            "description": "The exact Python code to execute. Must use the 'unreal' module."
+          }
+        },
+        "required": ["reasoning_step", "script_content"]
+      }
+    },
+    "execute_batch_blueprint_operations": {
+      "description": "Batch multiple Blueprint graph modifications (add components, variables, functions) in a single transaction, compiling once at the end. ALWAYS prefer this over making multiple individual calls. EXAMPLE: Plan out all nodes, variables, and connections before emitting the operations array.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "reasoning_step": {
+            "type": "string",
+            "description": "Step-by-step plan of which nodes to add and how they connect."
+          },
+          "blueprint_path": {
+            "type": "string",
+            "description": "The internal Unreal asset path to the Blueprint, e.g. '/Game/Blueprints/BP_MyActor'."
+          },
+          "operations": {
+            "type": "array",
+            "description": "Array of operation objects to execute in order."
+          }
+        },
+        "required": ["reasoning_step", "blueprint_path", "operations"]
+      }
+    }
+  }
+}

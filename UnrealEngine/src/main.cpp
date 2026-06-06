@@ -5,6 +5,7 @@
 #include <condition_variable>
 #include <thread>
 #include <chrono>
+#include <fstream>
 #include "json.hpp"
 
 #define WIN32_LEAN_AND_MEAN
@@ -13,10 +14,62 @@
 
 using json = nlohmann::json;
 
+// --- Global State ---
 std::queue<json> TaskQueue;
 std::mutex QueueMutex;
 std::condition_variable QueueCV;
 
+json ActiveProfile = json::object();
+std::mutex ProfileMutex;
+
+std::string GetExePath() {
+    char buffer[MAX_PATH];
+    GetModuleFileNameA(NULL, buffer, MAX_PATH);
+    std::string::size_type pos = std::string(buffer).find_last_of("\\/");
+    return std::string(buffer).substr(0, pos);
+}
+
+json LoadProfileFromDisk(const std::string& profileName) {
+    std::string profilePath = GetExePath() + "\\profiles\\" + profileName + ".json";
+    std::ifstream profileFile(profilePath);
+    if (profileFile.is_open()) {
+        json profile;
+        profileFile >> profile;
+        profileFile.close();
+        return profile;
+    }
+    return json::object();
+}
+
+void ResolveAndLoadProfile(const std::string& clientName) {
+    std::lock_guard<std::mutex> Lock(ProfileMutex);
+
+    // Priority 1: BRIDGE_PROFILE environment variable
+    const char* envProfile = std::getenv("BRIDGE_PROFILE");
+    if (envProfile && std::string(envProfile).length() > 0) {
+        ActiveProfile = LoadProfileFromDisk(envProfile);
+        if (!ActiveProfile.empty()) return;
+    }
+
+    // Priority 2: Auto-detect from MCP clientInfo.name
+    std::string lowerClient = clientName;
+    for (auto& c : lowerClient) c = (char)tolower(c);
+
+    if (lowerClient.find("antigravity") != std::string::npos) {
+        ActiveProfile = LoadProfileFromDisk("antigravity");
+        if (!ActiveProfile.empty()) return;
+    }
+
+    // Priority 3: Fall back to default.json
+    ActiveProfile = LoadProfileFromDisk("default");
+}
+
+json GetActiveProfile() {
+    std::lock_guard<std::mutex> Lock(ProfileMutex);
+    return ActiveProfile;
+}
+
+// --- HTTP ---
 std::string SendHttpRequest(const std::wstring& Path, const std::string& Method, const std::string& Payload = "") {
     HINTERNET hSession = WinHttpOpen(L"UnrealEngineBridge/1.0", WINHTTP_ACCESS_TYPE_NO_PROXY, WINHTTP_NO_PROXY_NAME, WINHTTP_NO_PROXY_BYPASS, 0);
     if (!hSession) return "";
@@ -60,6 +113,7 @@ std::string SendHttpRequest(const std::wstring& Path, const std::string& Method,
     return ResponseStr;
 }
 
+// --- Background Threads ---
 void MonitorThread() {
     bool bWasAvailable = false;
     while (true) {
@@ -76,6 +130,19 @@ void MonitorThread() {
         }
         bWasAvailable = bIsAvailable;
     }
+}
+
+static const std::string IMAGE_TOOLS[] = {
+    "capture_widget",
+    "capture_viewport",
+    "capture_niagara_system_isolated"
+};
+
+bool IsImageTool(const std::string& toolName) {
+    for (const auto& t : IMAGE_TOOLS) {
+        if (t == toolName) return true;
+    }
+    return false;
 }
 
 void WorkerThread() {
@@ -121,10 +188,30 @@ void WorkerThread() {
                 std::string Msg = UE_Result.value("ResultMessage", "");
                 
                 json Content = json::array();
-                Content.push_back({
-                    {"type", "text"},
-                    {"text", Msg}
-                });
+                std::string toolName = Payload.value("name", "");
+                
+                json profile = GetActiveProfile();
+                bool bImageSupport = profile.value("image_support", false);
+                
+                if (bSuccess && IsImageTool(toolName) && bImageSupport) {
+                    // Format as MCP image content block
+                    std::string base64Data = Msg;
+                    size_t prefixPos = base64Data.find("base64,");
+                    if (prefixPos != std::string::npos) {
+                        base64Data = base64Data.substr(prefixPos + 7);
+                    }
+                    Content.push_back({
+                        {"type", "image"},
+                        {"data", base64Data},
+                        {"mimeType", "image/png"}
+                    });
+                } else {
+                    // Format as plain text
+                    Content.push_back({
+                        {"type", "text"},
+                        {"text", Msg}
+                    });
+                }
                 
                 Response["result"] = {
                     {"content", Content},
@@ -137,7 +224,11 @@ void WorkerThread() {
     }
 }
 
+// --- Main ---
 int main() {
+    // Attempt early profile resolution from env var (before initialize handshake)
+    ResolveAndLoadProfile("");
+
     std::thread Worker(WorkerThread);
     Worker.detach();
 
@@ -153,6 +244,13 @@ int main() {
         std::string Method = Req.value("method", "");
         
         if (Method == "initialize") {
+            // Extract clientInfo.name for profile auto-detection
+            json Params = Req.value("params", json::object());
+            json ClientInfo = Params.value("clientInfo", json::object());
+            std::string clientName = ClientInfo.value("name", "");
+
+            ResolveAndLoadProfile(clientName);
+
             json Capabilities = { 
                 {"tools", {
                     {"listChanged", true}
@@ -161,7 +259,7 @@ int main() {
             json Result = {
                 {"protocolVersion", "2024-11-05"},
                 {"capabilities", Capabilities},
-                {"serverInfo", {{"name", "UnrealEngine"}, {"version", "1.0.0"}}}
+                {"serverInfo", {{"name", "UnrealEngine"}, {"version", "2.0.0"}}}
             };
             json Response = {
                 {"jsonrpc", "2.0"},
@@ -184,6 +282,11 @@ int main() {
                     Response["error"] = { {"code", -32603}, {"message", "Invalid JSON from UE"} };
                 } else {
                     json McpTools = json::array();
+                    
+                    json profile = GetActiveProfile();
+                    json disabledTools = profile.value("disabled_tools", json::array());
+                    json toolOverrides = profile.value("tool_overrides", json::object());
+
                     if (UE_Tools.is_object() && UE_Tools.contains("tools") && UE_Tools["tools"].is_array()) {
                         for (auto& domainObj : UE_Tools["tools"]) {
                             if (domainObj.is_object() && domainObj.contains("tools") && domainObj["tools"].is_array()) {
@@ -193,6 +296,30 @@ int main() {
                                         formattedTool["inputSchema"] = formattedTool["input_schema"];
                                         formattedTool.erase("input_schema");
                                     }
+                                    
+                                    std::string toolName = formattedTool.value("name", "");
+                                    
+                                    // Check disabled_tools list
+                                    bool disabled = false;
+                                    for (const auto& dt : disabledTools) {
+                                        if (dt.is_string() && dt.get<std::string>() == toolName) {
+                                            disabled = true;
+                                            break;
+                                        }
+                                    }
+                                    if (disabled) continue;
+
+                                    // Apply tool_overrides
+                                    if (toolOverrides.contains(toolName)) {
+                                        json overrideData = toolOverrides[toolName];
+                                        if (overrideData.contains("description")) {
+                                            formattedTool["description"] = overrideData["description"];
+                                        }
+                                        if (overrideData.contains("inputSchema")) {
+                                            formattedTool["inputSchema"] = overrideData["inputSchema"];
+                                        }
+                                    }
+                                    
                                     McpTools.push_back(formattedTool);
                                 }
                             }
@@ -209,7 +336,7 @@ int main() {
             QueueCV.notify_one();
         }
         else if (Method == "notifications/initialized" || Method == "ping") {
-            // Do nothing, respond to ping if it has id but typically no id
+            // No-op
         }
     }
     return 0;
