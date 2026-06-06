@@ -38,3 +38,6 @@ desktop.ini
 
 # User settings (API keys are stored here - NEVER commit)
 Config/
+
+# Dynamic local environment skill
+UnrealEngine/skills/unreal-env/
