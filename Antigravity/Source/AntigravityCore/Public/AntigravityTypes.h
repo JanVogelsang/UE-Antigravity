@@ -69,14 +69,14 @@ enum class EAntigravityActionStatus : uint8
 UENUM(BlueprintType)
 enum class EAntigravitySecurityMode : uint8
 {
-	/** Marketplace-safe. No C++, no shell, no config edits outside plugin namespace */
-	Sandbox		UMETA(DisplayName = "Sandbox"),
+	/** Restricted mode: Safe sandboxed asset viewing and editing. Blocks C++, shell, and config changes outside the plugin namespace. */
+	Restricted	UMETA(DisplayName = "Restricted"),
 
-	/** Allows file edits in Source/, Blueprint/Material/Level full access */
-	Advanced	UMETA(DisplayName = "Advanced"),
+	/** Standard mode: Allows C++ code and full asset editing, but blocks compiler execution and scripting. */
+	Standard	UMETA(DisplayName = "Standard"),
 
-	/** Full power: C++ generation, UAT builds, Live Coding, project file regen */
-	Developer	UMETA(DisplayName = "Developer")
+	/** Full Access mode: Unrestricted privileges. Enables C++ compilation, Live Coding, Python scripting, and editor testing. */
+	FullAccess	UMETA(DisplayName = "Full Access")
 };
 
 

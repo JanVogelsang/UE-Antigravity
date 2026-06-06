@@ -336,11 +336,10 @@
         },
         "required": ["asset_path", "menu_title", "button_names"]
       }
-    }
     },
     {
       "name": "capture_widget",
-      "description": "Capture a screenshot of a Widget Blueprint by rendering it headlessly (without opening the editor) and return it as a Base64-encoded PNG/JPEG image.\n\nThis is the PREFERRED METHOD for UI Visual Validation. It automatically measures the widget's dynamic desired size and renders it exactly to those bounds, producing a clean screenshot with no editor UI clutter.\n\nIf the widget is a full-screen layout (desired size is 0x0), it will fall back to the `resolution` parameter. You can also force a specific size using `render_size`.",
+      "description": "Capture a screenshot of a Widget Blueprint by rendering it headlessly (without opening the editor). The image is returned as a base64 data URI string directly in the tool result.\n\nThis is the PREFERRED METHOD for UI Visual Validation. It automatically measures the widget's dynamic desired size and renders it exactly to those bounds, producing a clean screenshot with no editor UI clutter.\n\nIf the widget is a full-screen layout (desired size is 0x0), it will fall back to the `resolution` parameter. You can also force a specific size using `render_size`.",
       "input_schema": {
         "type": "object",
         "properties": {

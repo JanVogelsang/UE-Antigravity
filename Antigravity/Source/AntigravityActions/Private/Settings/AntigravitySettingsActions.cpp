@@ -130,12 +130,12 @@ FAntigravityActionResult FAntigravitySettingsActions::ExecuteAction(const TShare
 	{
 		// WRITE CONFIG VALUE
 
-		// INI write restrictions in Advanced mode
+		// INI write restrictions in Restricted/Standard mode
 		const UAntigravityDeveloperSettings* Settings = UAntigravityDeveloperSettings::Get();
 		if (Settings && !Settings->IsIniSectionAllowed(Section))
 		{
 			Result.Errors.Add(FString::Printf(
-				TEXT("INI write to section '%s' is blocked in Advanced security mode. Only /Script/Antigravity.* sections are writable. Switch to Developer mode for full access."),
+				TEXT("INI write to section '%s' is blocked in Restricted/Standard security mode. Only /Script/Antigravity.* sections are writable. Switch to Full Access mode for full access."),
 				*Section));
 			return Result;
 		}

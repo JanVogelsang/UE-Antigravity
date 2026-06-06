@@ -77,11 +77,11 @@ FAntigravityActionResult FAntigravityPIEActions::ExecuteAction(const TSharedRef<
 	FAntigravityActionResult Result;
 	Result.bSuccess = false;
 
-	// Security gate: require Developer mode
+	// Security gate: require Full Access mode
 	const UAntigravityDeveloperSettings* Settings = UAntigravityDeveloperSettings::Get();
-	if (!Settings || Settings->SecurityMode != EAntigravitySecurityMode::Developer)
+	if (!Settings || Settings->SecurityMode != EAntigravitySecurityMode::FullAccess)
 	{
-		Result.Errors.Add(TEXT("PIE automation requires Developer security mode."));
+		Result.Errors.Add(TEXT("PIE automation requires Full Access security mode."));
 		return Result;
 	}
 

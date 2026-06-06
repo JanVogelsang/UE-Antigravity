@@ -28,7 +28,7 @@
 #include "Components/SceneCaptureComponent2D.h"
 #include "Engine/TextureRenderTarget2D.h"
 #include "ImageUtils.h"
-#include "Misc/Base64.h"
+#include "Viewport/AntigravityViewportActions.h"
 #include "Misc/PackageName.h"
 #include "UObject/SavePackage.h"
 
@@ -86,14 +86,6 @@ FAntigravityActionResult FAntigravityNiagaraActions::ExecuteAction(const TShared
 	FScopedTransaction Transaction(FText::FromString(TEXT("Antigravity Niagara Action")));
 	FAntigravityActionResult Result;
 	Result.bSuccess = false;
-
-	// Check settings toggle
-	const UAntigravityDeveloperSettings* Settings = GetDefault<UAntigravityDeveloperSettings>();
-	if (Settings && !Settings->bEnableNiagaraTools)
-	{
-		Result.Errors.Add(TEXT("Niagara tools are disabled in Project Settings > Plugins > Antigravity."));
-		return Result;
-	}
 
 	FString ToolName;
 	Params->TryGetStringField(TEXT("_tool_name"), ToolName);
@@ -513,10 +505,8 @@ FAntigravityActionResult FAntigravityNiagaraActions::ExecuteCaptureIsolated(cons
 		StitchedPixels[EndTickIndex]   = FColor::White;
 	}
 
-	// 5. Compress Stitched Image Array to PNG & Encode to Base64
-	TArray<uint8> CompressedPng;
-	FImageUtils::CompressImageArray(MaxDimension, MaxDimension, StitchedPixels, CompressedPng);
-	FString Base64Str = FBase64::Encode(CompressedPng);
+	// 5. Encode to JPEG and Save to Disk
+	FString FilePath = FAntigravityViewportActions::SavePixelsToDisk(StitchedPixels, MaxDimension, MaxDimension, MaxDimension, 90);
 
 	// 6. Cleanup transient Actors
 	World->DestroyActor(NiagaraActor);
@@ -524,7 +514,10 @@ FAntigravityActionResult FAntigravityNiagaraActions::ExecuteCaptureIsolated(cons
 
 	// 7. Populate metadata response
 	TSharedPtr<FJsonObject> ResponseObj = MakeShared<FJsonObject>();
-	ResponseObj->SetStringField(TEXT("image_data"), Base64Str);
+	if (!FilePath.IsEmpty())
+	{
+		ResponseObj->SetStringField(TEXT("image_path"), FilePath);
+	}
 	
 	TArray<TSharedPtr<FJsonValue>> TimesArray;
 	for (double T : Times) TimesArray.Add(MakeShared<FJsonValueNumber>(T));

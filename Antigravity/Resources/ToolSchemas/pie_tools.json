@@ -5,7 +5,7 @@
   "tools": [
     {
       "name": "start_pie_session",
-      "description": "Launch a Play-In-Editor (PIE) session to test gameplay. Requires Developer security mode. After starting, use read_message_log to check for runtime errors, simulate_input to interact, and stop_pie_session to end. CRITICAL: You MUST call stop_pie_session before attempting to modify Blueprints, recompile C++, or change level layouts. Modifying assets while the game is running will cause errors.",
+      "description": "Launch a Play-In-Editor (PIE) session to test gameplay. Requires Full Access security mode. After starting, use read_message_log to check for runtime errors, simulate_input to interact, and stop_pie_session to end. CRITICAL: You MUST call stop_pie_session before attempting to modify Blueprints, recompile C++, or change level layouts. Modifying assets while the game is running will cause errors.",
       "input_schema": {
         "type": "object",
         "properties": {
