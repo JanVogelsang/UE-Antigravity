@@ -12,6 +12,7 @@ description: Best practices for interacting with the Unreal Engine Editor via An
    - If the compilation fails or the bridge remains offline, you **MUST** loudly fail the Unreal Engine task.
    - Do **NOT** attempt to manually execute or run `bridge.exe` directly via terminal shell commands.
    - Do **NOT** attempt to bypass the offline bridge by running direct shell commands (e.g., PowerShell `Invoke-RestMethod` or `curl`).
+4. **C++ Compilation Priority (trigger_compile)**: When the Unreal Editor is running, always trigger compilation using the `trigger_compile` tool. Do NOT run manual build commands in the terminal (such as running `UnrealBuildTool.exe` directly) if the editor is open, as this causes mutex/file lock collisions. Furthermore, NEVER run `taskkill` or other command line utilities to terminate compiler or build processes (like `UnrealBuildTool.exe`, `cl.exe`, `link.exe`, etc.) to resolve concurrency lock errors (e.g., `UnrealBuildTool_Mutex` conflicts). These conflicts are transient; wait for the other build/compilation to finish and retry, or explain the conflict to the user.
 
 ## Standard Operating Procedures (SOPs)
 
@@ -22,10 +23,10 @@ description: Best practices for interacting with the Unreal Engine Editor via An
    - **Step 4**: DO NOT attempt to write Python scripts or use console commands to place objects in the level.
 
 2. **SOP: Modifying a Blueprint Graph**
-   - **Step 1**: Use `get_blueprint_info` to get the current graph layout, variable names, and node names. Never guess variable names.
-   - **Step 2**: Use `inject_blueprint_nodes_t3d` to insert new logic in T3D format.
-   - **Step 3**: If pins need connecting, use `connect_blueprint_pins`.
-   - **Step 4**: Run `compile_blueprint` to verify.
+   - **Step 1**: Use `get_blueprint_info` with `exclude_visual_layout=true` or `query_mode="interface_only"` to fetch the current graph interface without coordinates, saving massive tokens. Cache the returned `client_hash` and pass it in subsequent calls to return lightweight `up_to_date=true` results if unchanged.
+   - **Step 2**: Use `execute_batch_blueprint_operations` to batch multiple graph modifications (components, variables, functions) in a single transaction, compiling once at the end.
+   - **Step 3**: Use `inject_blueprint_nodes_t3d` with the inline `connections` array parameter to import nodes and wire them to existing nodes in a single tool call.
+   - **Step 4**: If isolated wiring is needed later, use `connect_blueprint_pins`. Compile step runs automatically on modifications.
 
 3. **SOP: C++ vs Blueprint / Python Priority**
    - Unless the user explicitly demands a C++ implementation, always default to Blueprint manipulation (`inject_blueprint_nodes_t3d`) or Python utility scripts (`execute_python_script`). Modifying C++ requires costly live coding recompiles and should be minimized.
@@ -54,7 +55,20 @@ description: Best practices for interacting with the Unreal Engine Editor via An
 
 9. **SOP: Visual UI Design**
    - **CRITICAL**: Do not build complex UIs blindly. Use the `capture_widget` tool to visually see the widgets you create.
-   - **Step 1**: Use `create_widget_blueprint` and `add_widget` to construct the widget hierarchy.
+   - **Step 1**: Use `create_widget_blueprint` to create the asset, then use `instantiate_ui_hierarchy` to construct the entire widget tree hierarchy, properties, slots, fonts, brushes, and event bindings in a single transaction and single compilation.
    - **Step 2**: Call `capture_widget` with the widget's `asset_path`. The tool will return a Base64 image artifact directly in the chat.
    - **Step 3**: Visually analyze the Base64 image artifact. Check alignments, padding, and colors.
-   - **Step 4**: Iteratively adjust properties using `set_widget_slot` and `set_widget_property`, re-capturing as necessary until the layout perfectly matches the desired design.
+   - **Step 4**: Iteratively adjust properties using `instantiate_ui_hierarchy` or specific setters, re-capturing as necessary until the layout perfectly matches the desired design.
+
+10. **SOP: Running Automation Tests**
+   - **CRITICAL**: The Unreal Editor automatically throttles background framerate using the `bUseLessCPUInBackground` preference. This can cause automation tests to hang indefinitely if the editor loses focus.
+   - **Step 1**: Before executing long-running automation tests, ensure background throttling is disabled.
+   - **Step 2**: Use `execute_python_script` to disable the preference directly via the Unreal Python API:
+     ```python
+     import unreal
+     settings = unreal.get_default_object(unreal.EditorPerformanceSettings)
+     if settings:
+         settings.set_editor_property("bUseLessCPUInBackground", False)
+     ```
+   - **Step 3**: Ensure `t.IdleWhenNotForeground` is `0` and `t.MaxFPS.Unfocused` is sufficient.
+   - **Step 4**: Run your automation tests.
