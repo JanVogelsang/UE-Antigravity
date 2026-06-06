@@ -12,7 +12,7 @@ description: Best practices for interacting with the Unreal Engine Editor via An
      if (-not $InstalledDir) { $InstalledDir = "C:\Program Files\Epic Games\UE_5.7" }
      $EditorExe = Join-Path $InstalledDir "Engine\Binaries\Win64\UnrealEditor.exe"
      $ProjectFile = Join-Path (Get-Location) "Tau.uproject"
-     Start-Process -FilePath $EditorExe -ArgumentList "`"$ProjectFile`"", "-CustomConfig=EOS", "-AUTH_TYPE=developer", "-AUTH_LOGIN=localhost:8080", "-AUTH_PASSWORD=TauDev"
+     cmd.exe /c "`"$EditorExe`" `"$ProjectFile`" -CustomConfig=EOS -AUTH_TYPE=developer -AUTH_LOGIN=localhost:8080 -AUTH_PASSWORD=TauDev"
      ```
 2. **Tool Discovery**: Tools are dynamically fetched from the active UE project. **DO NOT waste tokens discovering or reading JSON schemas for standard tools.** Trust that native MCP tools (`spawn_actor`, `search_assets`, `inject_blueprint_nodes_t3d`, etc.) are available and use them directly.
 3. **Bridge Compilation & Verification**: Before executing any Unreal Engine task, verify that the native `unrealengine` MCP tools are active. If the bridge is offline or missing:

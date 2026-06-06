@@ -69,7 +69,7 @@ Start-Process -FilePath "$BuildTool" -ArgumentList "TauEditor", "Win64", "Develo
 ### 3. Launching the Unreal Editor
 To launch the Unreal Editor with the project and developer authentication arguments:
 ```powershell
-Start-Process -FilePath "$EditorExe" -ArgumentList '"$ProjectFile"', "-CustomConfig=EOS", "-AUTH_TYPE=developer", "-AUTH_LOGIN=localhost:8080", "-AUTH_PASSWORD=TauDev"
+cmd.exe /c '""$EditorExe" "$ProjectFile" -CustomConfig=EOS -AUTH_TYPE=developer -AUTH_LOGIN=localhost:8080 -AUTH_PASSWORD=TauDev"'
 ```
 
 "@
