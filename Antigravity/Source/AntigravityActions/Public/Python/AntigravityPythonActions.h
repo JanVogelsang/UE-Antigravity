@@ -16,7 +16,7 @@
  * captured stdout/stderr is returned as the tool result.
  *
  * SECURITY:
- *   - Requires SecurityMode == Developer (gated in SafetyGate + here)
+ *   - Requires SecurityMode == FullAccess (gated in SafetyGate + here)
  *   - Requires bEnablePythonTools == true in settings
  *   - Scripts are validated against a denylist before execution
  *   - Temp scripts are written to Saved/Antigravity/Scripts/ and cleaned up after

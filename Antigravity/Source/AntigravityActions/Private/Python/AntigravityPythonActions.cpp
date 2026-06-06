@@ -79,11 +79,11 @@ FAntigravityActionResult FAntigravityPythonActions::ExecuteAction(const TSharedR
 	FAntigravityActionResult Result;
 	Result.bSuccess = false;
 
-	// Security gate: require Developer mode
+	// Security gate: require Full Access mode
 	const UAntigravityDeveloperSettings* Settings = UAntigravityDeveloperSettings::Get();
-	if (!Settings || Settings->SecurityMode != EAntigravitySecurityMode::Developer)
+	if (!Settings || Settings->SecurityMode != EAntigravitySecurityMode::FullAccess)
 	{
-		Result.Errors.Add(TEXT("Python script execution requires Developer security mode. "
+		Result.Errors.Add(TEXT("Python script execution requires Full Access security mode. "
 			"Change this in Project Settings > Plugins > Antigravity > Safety > Security Mode."));
 		return Result;
 	}

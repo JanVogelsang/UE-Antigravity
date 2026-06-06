@@ -22,7 +22,7 @@
  *
  * SAFETY:
  *   - PIE is inherently risky (editor crash potential), so rated High risk
- *   - Requires Developer security mode
+ *   - Requires Full Access security mode
  *   - Input simulation is limited to keyboard/gamepad (no mouse movement)
  *   - PIE sessions auto-stop after a configurable timeout
  */
