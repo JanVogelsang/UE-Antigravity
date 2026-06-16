@@ -30,7 +30,7 @@ void FAntigravityCoreModule::StartupModule()
 	{
 		if (UObject* EditorSettings = EditorPerfClass->GetDefaultObject())
 		{
-			if (FBoolProperty* UseLessCPUProp = FindFProperty<FBoolProperty>(EditorPerfClass, TEXT("bUseLessCPUInBackground")))
+			if (FBoolProperty* UseLessCPUProp = FindFProperty<FBoolProperty>(EditorPerfClass, TEXT("bThrottleCPUWhenNotForeground")))
 			{
 				UseLessCPUProp->SetPropertyValue_InContainer(EditorSettings, false);
 				EditorSettings->SaveConfig();

@@ -4,25 +4,29 @@ description: Best practices for interacting with the Unreal Engine Editor via An
 ---
 # Unreal Workflow Skill
 
-1. **Editor State**: All Antigravity tools require the Unreal Engine Editor to be open. If a tool returns a "connection refused" or "Editor is not running" error, start the editor.
-   - **How to Start the Editor**: Run this portable PowerShell command in the terminal to resolve the engine path from the registry and start the editor with the required developer authentication parameters:
-     ```powershell
-     $RegistryPath = "HKLM:\SOFTWARE\EpicGames\Unreal Engine\5.7"
-     $InstalledDir = (Get-ItemProperty -Path $RegistryPath -Name InstalledDirectory -ErrorAction SilentlyContinue).InstalledDirectory
-     if (-not $InstalledDir) { $InstalledDir = "C:\Program Files\Epic Games\UE_5.7" }
-     $EditorExe = Join-Path $InstalledDir "Engine\Binaries\Win64\UnrealEditor.exe"
-     $ProjectFile = Join-Path (Get-Location) "Tau.uproject"
-     cmd.exe /c "`"$EditorExe`" `"$ProjectFile`" -CustomConfig=EOS -AUTH_TYPE=developer -AUTH_LOGIN=localhost:8080 -AUTH_PASSWORD=TauDev"
-     ```
-2. **Tool Discovery**: Tools are dynamically fetched from the active UE project. **DO NOT waste tokens discovering or reading JSON schemas for standard tools.** Trust that native MCP tools (`spawn_actor`, `search_assets`, `inject_blueprint_nodes_t3d`, etc.) are available and use them directly.
-3. **Bridge Compilation & Verification**: Before executing any Unreal Engine task, verify that the native `unrealengine` MCP tools are active. If the bridge is offline or missing:
+## Agent Efficiency & Robustness Guidelines
+- **Wait Durations & Scheduling**: Avoid active polling loops or shell-based sleep commands. Use the platform's native `schedule` tool (with `DurationSeconds`) when waiting for long background tasks. Ensure wait commands/timeouts for Editor start, compilation, and PIE loading are realistic (e.g., 5-15 seconds) to prevent premature check-in timeouts.
+- **Log Parsing Efficiency**: When reading active logs via commands, always use `Get-Content -Path <LogPath> -Tail <N>` (PowerShell) or `tail -n <N>` (Unix/macOS) instead of reading the entire file.
+- **Precision File Reading with `view_file`**: Use the native `view_file` tool rather than command-line utilities (like `cat` or `Get-Content`) to view source files. Specify `StartLine` and `EndLine` whenever possible to read only the target lines, keeping token overhead minimal.
+- **Handling Failures and Stuck Processes**: If an editor session, compilation command, or automation test fails or hangs, do not retry blindly. Check the tail of the log file, report the issue clearly, and immediately ask the user for assistance or verification.
+
+
+1. **Startup Permission**: When this plugin first loads, you **MUST** immediately call `ask_permission` with `Action: "unsandboxed"` and `Target` set to the **Unreal Editor Executable** path from the `unreal-env` skill. This grants the ability to launch the editor process outside the terminal sandbox. Do this proactively before any editor interaction is needed.
+2. **Editor State**: All Antigravity tools require the Unreal Engine Editor to be open. If a tool returns a "connection refused" or "Editor is not running" error, start the editor.
+   - **Environment Delegation**: Always refer to the `unreal-env` skill for all local environment configurations, paths, and commands needed to launch the Unreal Editor, start the EOS DevAuthTools, or build the project.
+3. **Tool Discovery**: Tools are dynamically fetched from the active UE project. **DO NOT waste tokens discovering or reading JSON schemas for standard tools.** Trust that native MCP tools (`spawn_actor`, `search_assets`, `inject_blueprint_nodes_t3d`, etc.) are available and use them directly.
+4. **Bridge Compilation & Verification**: Before executing any Unreal Engine task, verify that the native `unrealengine` MCP tools are active. If the bridge is offline or missing:
    - You **MUST** automatically execute the build script `src/build_bridge.bat` (located inside the `UnrealEngine` plugin directory) without asking first. This script compiles the bridge and automatically generates the machine-specific `unreal-env` skill. Propose this to the user as a safe, one-time operation to initialize the bridge.
    - After a successful compilation, you **MUST** ask the user to restart "Antigravity" specifically to allow the newly compiled bridge and the dynamically generated `unreal-env` skill to be loaded.
    - If the `unreal-env` skill is missing or outdated but the bridge is active, you can regenerate it by running `powershell -ExecutionPolicy Bypass -File .agents/plugins/UnrealEngine/src/generate_env_skill.ps1`.
    - If the compilation fails or the bridge remains offline, you **MUST** loudly fail the Unreal Engine task.
    - Do **NOT** attempt to manually execute or run `bridge.exe` directly via terminal shell commands.
    - Do **NOT** attempt to bypass the offline bridge by running direct shell commands (e.g., PowerShell `Invoke-RestMethod` or `curl`).
-4. **C++ Compilation Priority (trigger_compile)**: When the Unreal Editor is running, always trigger compilation using the `trigger_compile` tool. Do NOT run manual build commands in the terminal (such as running `UnrealBuildTool.exe` directly) if the editor is open, as this causes mutex/file lock collisions. Furthermore, NEVER run `taskkill` or other command line utilities to terminate compiler or build processes (like `UnrealBuildTool.exe`, `cl.exe`, `link.exe`, etc.) to resolve concurrency lock errors (e.g., `UnrealBuildTool_Mutex` conflicts). These conflicts are transient; wait for the other build/compilation to finish and retry, or explain the conflict to the user.
+5. **C++ Compilation Priority (trigger_compile)**: When the Unreal Editor is running, always trigger compilation using the `trigger_compile` tool. Do NOT run manual build commands in the terminal (such as running `UnrealBuildTool.exe` directly) if the editor is open, as this causes mutex/file lock collisions. Furthermore, NEVER run `taskkill` or other command line utilities to terminate compiler or build processes (like `UnrealBuildTool.exe`, `cl.exe`, `link.exe`, etc.) to resolve concurrency lock errors (e.g., `UnrealBuildTool_Mutex` conflicts). These conflicts are transient; wait for the other build/compilation to finish and retry, or explain the conflict to the user.
+6. **Project Build & EOS DevAuthTools Workflows**: Always consult `unreal-env` for:
+   - **Building the Project**: When the editor is closed, use the `Unreal Build Tool` path and build commands from `unreal-env` to compile C++ code and binaries before launching.
+   - **Starting EOS DevAuthTools**: Before attempting developer authentication, verify the tool is running or start it using the `EOS DevAuthTool` path and workflow specified in `unreal-env`.
+
 
 ## Standard Operating Procedures (SOPs)
 
@@ -36,6 +40,7 @@ description: Best practices for interacting with the Unreal Engine Editor via An
    - **Step 1**: Use `get_blueprint_info` with `exclude_visual_layout=true` or `query_mode="interface_only"` to fetch the current graph interface without coordinates, saving massive tokens. Cache the returned `client_hash` and pass it in subsequent calls to return lightweight `up_to_date=true` results if unchanged.
    - **Step 2**: Use `execute_batch_blueprint_operations` to batch multiple graph modifications (components, variables, functions) in a single transaction, compiling once at the end.
    - **Step 3**: Use `inject_blueprint_nodes_t3d` with the inline `connections` array parameter to import nodes and wire them to existing nodes in a single tool call.
+     - **CRITICAL**: When generating T3D (plain-text) representation for nodes (for `inject_blueprint_nodes_t3d` or copy-pasting), you **MUST** include a unique, valid `NodeGuid` parameter (a 32-character uppercase hexadecimal string, e.g., `NodeGuid=3E2A5D8446B84A29B52C2D812A2BD5F5`) for every single node. If omitted or duplicated, the imported nodes will lack a unique GUID, causing "missing NodeGuid" warnings during cooking.
    - **Step 4**: If isolated wiring is needed later, use `connect_blueprint_pins`. Compile step runs automatically on modifications.
 
 3. **SOP: C++ vs Blueprint / Python Priority**
@@ -70,15 +75,3 @@ description: Best practices for interacting with the Unreal Engine Editor via An
    - **Step 3**: Visually analyze the Base64 image artifact. Check alignments, padding, and colors.
    - **Step 4**: Iteratively adjust properties using `instantiate_ui_hierarchy` or specific setters, re-capturing as necessary until the layout perfectly matches the desired design.
 
-10. **SOP: Running Automation Tests**
-   - **CRITICAL**: The Unreal Editor automatically throttles background framerate using the `bUseLessCPUInBackground` preference. This can cause automation tests to hang indefinitely if the editor loses focus.
-   - **Step 1**: Before executing long-running automation tests, ensure background throttling is disabled.
-   - **Step 2**: Use `execute_python_script` to disable the preference directly via the Unreal Python API:
-     ```python
-     import unreal
-     settings = unreal.get_default_object(unreal.EditorPerformanceSettings)
-     if settings:
-         settings.set_editor_property("bUseLessCPUInBackground", False)
-     ```
-   - **Step 3**: Ensure `t.IdleWhenNotForeground` is `0` and `t.MaxFPS.Unfocused` is sufficient.
-   - **Step 4**: Run your automation tests.

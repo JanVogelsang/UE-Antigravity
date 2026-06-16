@@ -46,10 +46,10 @@ echo Bridge compiled successfully.
 for %%i in ("%~dp0..\bridge.exe") do set "BRIDGE_PATH=%%~fi"
 set "ESCAPED_PATH=%BRIDGE_PATH:\=\\%"
 
-:: Rewrite mcp_config.json with the absolute path
-powershell -Command "(Get-Content -Raw ..\mcp_config.json) -replace '\"command\":\s*\"[^\"]+\"', '\"command\": \"%ESCAPED_PATH%\"' ^| Set-Content ..\mcp_config.json"
+:: Generate mcp_config.json with the absolute path
+powershell -Command "$json = @{ mcpServers = @{ unrealengine = @{ command = '%ESCAPED_PATH%' } } }; $json | ConvertTo-Json -Depth 10 | Set-Content ..\mcp_config.json"
 if %errorlevel% equ 0 (
-    echo Configured mcp_config.json with relative path.
+    echo Generated mcp_config.json with absolute path.
 )
 
 :: Generate dynamic unreal-env skill
