@@ -1,9 +1,0 @@
-{
-  "mcpServers": {
-    "unrealengine": {
-      "command": ".agents/plugins/UnrealEngine/bridge.exe"
-    }
-  }
-}
-
-

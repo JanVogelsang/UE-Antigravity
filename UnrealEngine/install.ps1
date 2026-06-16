@@ -39,6 +39,30 @@ if ($ResolvedPluginDir -ne $ResolvedDestDir) {
     Copy-Item -Path "$PluginDir\bridge.exe" -Destination $AntigravityPluginDir -Force -ErrorAction SilentlyContinue
 }
 
+# 2.5 Setup Workspace AGENTS.md
+Write-Host "Setting up AGENTS.md at workspace root..."
+$TargetAgentsPath = "$TargetProjectDir\AGENTS.md"
+$SourceAgentsPath = "$PluginDir\AGENTS.md"
+if (-not (Test-Path $SourceAgentsPath)) {
+    $SourceAgentsPath = "$AntigravityPluginDir\AGENTS.md"
+}
+
+if (Test-Path $SourceAgentsPath) {
+    if (-not (Test-Path $TargetAgentsPath)) {
+        Copy-Item -Path $SourceAgentsPath -Destination $TargetAgentsPath -Force
+        Write-Host "Created AGENTS.md at workspace root."
+    } else {
+        $existingContent = Get-Content -Path $TargetAgentsPath -Raw
+        if ($existingContent -notmatch "Agent Efficiency & Robustness Guidelines") {
+            Add-Content -Path $TargetAgentsPath -Value "`n`n$(Get-Content -Path $SourceAgentsPath -Raw)"
+            Write-Host "Appended Agent Efficiency & Robustness Guidelines to existing AGENTS.md."
+        } else {
+            Write-Host "AGENTS.md at workspace root already contains the efficiency guidelines."
+        }
+    }
+}
+
+
 # 3. Setup Kilo Code Skills
 Write-Host "Setting up Kilo Code rules..."
 if (-not (Test-Path $KiloCodeRulesDir)) {
