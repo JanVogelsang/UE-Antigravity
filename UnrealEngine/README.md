@@ -4,7 +4,9 @@ This is the Antigravity agent plugin component of the **UE-Antigravity** integra
 
 ## Architecture
 
-This plugin includes a lightweight C++ MCP bridge. The bridge proxies standard input/output (`stdin`/`stdout`) JSON-RPC messages from any MCP-compatible AI client to the Unreal Engine Editor's HTTP loopback server.
+This plugin encompasses two main components:
+1. **C++ MCP Bridge**: A lightweight C++ proxy (`bridge.exe`) that translates standard input/output (`stdin`/`stdout`) JSON-RPC messages from any MCP-compatible AI client to the Unreal Engine Editor's HTTP loopback server.
+2. **External Python Server (`ExternalServer`)**: An AST Indexing and RAG server that runs as a standalone Python process. It uses `libclang` to parse C++ files, maintains an SQLite database cache, and performs semantic documentation search.
 
 ### LLM Profile System
 

@@ -82,6 +82,7 @@ $PythonExeEscaped = $PythonExe -replace '\\', '\\'
 
 # Resolve repository root dynamically (parent of the UnrealEngine folder)
 $RepoRoot = (Get-Item $PluginDir).Parent.FullName -replace '\\', '\\'
+$PluginDirEscaped = $AntigravityPluginDir -replace '\\', '\\'
 $BridgeDestPath = "$AntigravityPluginDir\bridge.exe" -replace '\\', '\\'
 
 if ($useKiloCode) {
@@ -144,7 +145,7 @@ if ($useKiloCode) {
       "command": "$PythonExeEscaped",
       "args": ["-u", "-m", "ExternalServer.src.main"],
       "env": {
-        "PYTHONPATH": "$RepoRoot"
+        "PYTHONPATH": "$PluginDirEscaped"
       },
       "enabled": true
     }
@@ -182,7 +183,7 @@ if ($useKiloCode) {
       "command": "$PythonExeEscaped",
       "args": ["-u", "-m", "ExternalServer.src.main"],
       "env": {
-        "PYTHONPATH": "$RepoRoot"
+        "PYTHONPATH": "$PluginDirEscaped"
       },
       "enabled": true
     }

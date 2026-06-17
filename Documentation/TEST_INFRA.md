@@ -42,9 +42,10 @@ UE-Antigravity/
 │   ├── mock_client.py        # Mock Agent Client wrapping stdio (JSON-RPC) & HTTP communication
 │   ├── test_e2e_integration.py # E2E Integration tests verifying tool invocation and connection
 │   └── README.md             # E2E Test execution guide
-├── ExternalServer/
-│   └── src/
-│       └── main.py           # Python MCP server entrypoint
+├── UnrealEngine/
+│   └── ExternalServer/
+│       └── src/
+│           └── main.py       # Python MCP server entrypoint
 └── TEST_INFRA.md             # This document (Test infrastructure specifications)
 ```
 

@@ -2,6 +2,8 @@
 
 This is the Unreal Engine plugin component of the **UE-Antigravity** integration. It exposes an in-process HTTP loopback server (listening on port `18777`) to execute commands safely on the Game Thread, allowing the Antigravity AI coding assistant to natively interact with your Unreal Editor.
 
+*(Note: The MCP servers that communicate with the AI assistant, including the C++ Bridge and the External Python AST Server, are located in the `UnrealEngine` directory of this repository.)*
+
 ## Installation
 
 1. Create a `Plugins` directory at the root of your Unreal Engine project if it doesn't already exist.

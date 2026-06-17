@@ -18,7 +18,7 @@ TEMP_WATCH_DIR.mkdir(parents=True, exist_ok=True)
 TEMP_DB_PATH = Path(TEMP_DIR) / "test_ast_cache_outofline.db"
 
 # Monkeypatch main paths before importing/using them
-import ExternalServer.src.main as main
+import UnrealEngine.ExternalServer.src.main as main
 main.WATCH_DIR = TEMP_WATCH_DIR
 main.DB_PATH = TEMP_DB_PATH
 main.COMPILE_COMMANDS_PATH = Path(TEMP_DIR) / "non_existent_compile_commands.json"

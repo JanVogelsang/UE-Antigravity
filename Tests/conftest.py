@@ -249,7 +249,7 @@ def python_server_process():
     else:
         env["PYTHONPATH"] = project_root
 
-    cmd = [sys.executable, "-u", "-m", "ExternalServer.src.main"]
+    cmd = [sys.executable, "-u", "-m", "UnrealEngine.ExternalServer.src.main"]
     print(f"\nSpawning Python MCP server process with command: {' '.join(cmd)}")
     
     process = subprocess.Popen(
