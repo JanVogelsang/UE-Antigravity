@@ -15,7 +15,7 @@ sys.path.insert(0, str(PROJECT_ROOT))
 
 # Default paths
 DEFAULT_WATCH_DIR = Path("c:/Users/Jan/Documents/Unreal Projects/tau-game/Source")
-DEFAULT_DB_PATH = PROJECT_ROOT / "ExternalServer" / "ast_cache.db"
+DEFAULT_DB_PATH = PROJECT_ROOT / "UnrealEngine" / "ExternalServer" / "ast_cache.db"
 
 # Global test configuration
 NUM_READERS = 5
@@ -344,7 +344,7 @@ def main():
     
     try:
         # Initialize temp DB schema
-        import ExternalServer.src.main as main_module
+        import UnrealEngine.ExternalServer.src.main as main_module
         main_module.DB_PATH = temp_db_path
         main_module.init_db()
         

@@ -58,7 +58,7 @@ Windows is case-insensitive, but SQLite queries, file watchers, and C++ Clang pa
 If you are developing or running the External Python MCP server or any stdio-based subprocesses:
 1. **Unbuffered Output**: Python buffers stdout by default when piped. This will hang JSON-RPC handshake readers. Always launch python subprocesses with the `-u` (unbuffered) flag:
    ```bash
-   python -u -m ExternalServer.src.main
+   python -u -m UnrealEngine.ExternalServer.src.main
    ```
 2. **Stdout Pollution**: The stdio channel is dedicated solely to JSON-RPC messages. Any logs, third-party logs, or subprocess commands (like `pip install`) that write raw text to `stdout` will pollute the channel and crash the client parser.
    * **Rule**: Always redirect stdout of internal commands to `stderr` or `subprocess.DEVNULL`:

@@ -11,9 +11,9 @@ The system consists of two primary servers:
   - `Source/AntigravityActions/` - Main plugin implementation containing actions/tools.
   - `Source/AntigravityActions/Private/Diagnostics/` - Automated unit/integration tests for C++ side.
 - `UnrealEngine/` - The C++ bridge source and client profile configuration.
-- `ExternalServer/` - The External Python Indexing & RAG server.
-  - `src/` - Python server implementation (`mcp` library stdio server).
-  - `tests/` - Python unit/integration tests (pytest).
+  - `ExternalServer/` - The External Python Indexing & RAG server.
+    - `src/` - Python server implementation (`mcp` library stdio server).
+    - `tests/` - Python unit/integration tests (pytest).
 - `Tests/` - Workspace integration tests and mock agent client.
 - `run_all_tests.ps1` - PowerShell script to trigger the entire test suite headlessly (both C++ and Python).
 
