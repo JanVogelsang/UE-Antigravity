@@ -2,6 +2,7 @@
 
 #include "Misc/AutomationTest.h"
 #include "Blueprint/AntigravityBlueprintActions.h"
+#include "Cpp/AntigravityCppActions.h"
 #include "Widget/AntigravityWidgetActions.h"
 #include "Dom/JsonObject.h"
 #include "Dom/JsonValue.h"
@@ -348,6 +349,84 @@ bool FAntigravityTokenEfficiencyTest::RunTest(const FString& Parameters)
 			ObjectTools::DeleteObjects(AssetsToDelete, false);
 		}
 	}
+
+	return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FAntigravityGuidResolutionTest, "Antigravity.GuidResolution", EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
+
+bool FAntigravityGuidResolutionTest::RunTest(const FString& Parameters)
+{
+	// Test input with overlapping prefix placeholders
+	FString MockT3D = TEXT("NodeGuid=GUID_Node1\n"
+						   "PinId=LINK_1\n"
+						   "NodeGuid=GUID_Node10\n"
+						   "PinId=LINK_10\n"
+						   "LinkedTo=(GUID_Node1 LINK_1)\n"
+						   "LinkedTo=(GUID_Node10 LINK_10)");
+
+	// Access FAntigravityBlueprintActions to resolve placeholders
+	struct FTestBlueprintActions : public FAntigravityBlueprintActions
+	{
+		using FAntigravityBlueprintActions::ResolveT3DPlaceholders;
+	};
+
+	FString Resolved = FTestBlueprintActions::ResolveT3DPlaceholders(MockT3D);
+
+	// Check that placeholders have been replaced by 32-character hex GUIDs
+	// And that LINK_1 replacement didn't corrupt LINK_10
+	TestFalse(TEXT("Should resolve GUID_Node1"), Resolved.Contains(TEXT("GUID_Node1")));
+	TestFalse(TEXT("Should resolve GUID_Node10"), Resolved.Contains(TEXT("GUID_Node10")));
+	TestFalse(TEXT("Should resolve LINK_1"), Resolved.Contains(TEXT("LINK_1")));
+	TestFalse(TEXT("Should resolve LINK_10"), Resolved.Contains(TEXT("LINK_10")));
+
+	// Verify total length or formatting patterns to ensure correct replacement
+	TArray<FString> Lines;
+	Resolved.ParseIntoArrayLines(Lines);
+	
+	FString LineNode1 = Lines[0];  // NodeGuid=[GUID]
+	FString LineLink1 = Lines[1];  // PinId=[GUID]
+	FString LineNode10 = Lines[2]; // NodeGuid=[GUID]
+	FString LineLink10 = Lines[3]; // PinId=[GUID]
+	
+	FString Guid1Val = LineNode1.Mid(LineNode1.Find(TEXT("=")) + 1);
+	FString Link1Val = LineLink1.Mid(LineLink1.Find(TEXT("=")) + 1);
+	FString Guid10Val = LineNode10.Mid(LineNode10.Find(TEXT("=")) + 1);
+	FString Link10Val = LineLink10.Mid(LineLink10.Find(TEXT("=")) + 1);
+
+	TestEqual(TEXT("GUID_Node1 replacement length should be 32"), Guid1Val.Len(), 32);
+	TestEqual(TEXT("LINK_1 replacement length should be 32"), Link1Val.Len(), 32);
+	TestEqual(TEXT("GUID_Node10 replacement length should be 32"), Guid10Val.Len(), 32);
+	TestEqual(TEXT("LINK_10 replacement length should be 32"), Link10Val.Len(), 32);
+	TestNotEqual(TEXT("GUID_Node1 and GUID_Node10 must be different"), Guid1Val, Guid10Val);
+	TestNotEqual(TEXT("LINK_1 and LINK_10 must be different"), Link1Val, Link10Val);
+
+	return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FAntigravityCppReflectionTest, "Antigravity.CppReflection", EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
+
+bool FAntigravityCppReflectionTest::RunTest(const FString& Parameters)
+{
+	FAntigravityCppActions CppActions;
+	TSharedRef<FJsonObject> Params = MakeShared<FJsonObject>();
+	Params->SetStringField(TEXT("_tool_name"), TEXT("get_cpp_reflection_info"));
+	Params->SetStringField(TEXT("class_name"), TEXT("Actor")); // Test against engine Actor class
+	
+	FAntigravityActionResult Result = CppActions.ExecuteAction(Params);
+	TestTrue(TEXT("Reflection lookup should succeed for Actor"), Result.bSuccess);
+
+	TSharedPtr<FJsonObject> JsonObj;
+	TSharedRef<TJsonReader<>> Reader = TJsonReaderFactory<>::Create(Result.ResultMessage);
+	TestTrue(TEXT("Should parse JSON output"), FJsonSerializer::Deserialize(Reader, JsonObj));
+	TestTrue(TEXT("JSON should be valid"), JsonObj.IsValid());
+
+	TestEqual(TEXT("Class name should match"), JsonObj->GetStringField(TEXT("class_name")), TEXT("Actor"));
+	TestEqual(TEXT("Parent class should match"), JsonObj->GetStringField(TEXT("parent_class")), TEXT("Object"));
+	
+	// Verify properties and functions arrays exist
+	TestTrue(TEXT("Should have properties"), JsonObj->HasField(TEXT("properties")));
+	TestTrue(TEXT("Should have functions"), JsonObj->HasField(TEXT("functions")));
 
 	return true;
 }

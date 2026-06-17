@@ -10,6 +10,11 @@
 #include "HAL/PlatformFileManager.h"
 #include "DesktopPlatformModule.h"
 #include "Interfaces/IMainFrameModule.h"
+#include "UObject/Class.h"
+#include "UObject/UnrealType.h"
+#include "UObject/MetaData.h"
+#include "Serialization/JsonSerializer.h"
+#include "Serialization/JsonWriter.h"
 
 #if WITH_LIVE_CODING
 #include "ILiveCodingModule.h"
@@ -32,7 +37,8 @@ TArray<FString> FAntigravityCppActions::GetSupportedToolNames() const
 		TEXT("modify_cpp_file"),
 		TEXT("trigger_compile"),
 		TEXT("regenerate_project_files"),
-		TEXT("macro_create_cpp_class")
+		TEXT("macro_create_cpp_class"),
+		TEXT("get_cpp_reflection_info")
 	};
 }
 
@@ -62,6 +68,14 @@ bool FAntigravityCppActions::ValidateParams(const TSharedRef<FJsonObject>& Param
 		if (!Params->HasField(TEXT("class_name")) || !Params->HasField(TEXT("parent_class")) || !Params->HasField(TEXT("module_name")))
 		{
 			OutErrors.Add(TEXT("Missing required field(s) for macro_create_cpp_class: class_name, parent_class, module_name"));
+			return false;
+		}
+	}
+	else if (ToolName == TEXT("get_cpp_reflection_info"))
+	{
+		if (!Params->HasField(TEXT("class_name")))
+		{
+			OutErrors.Add(TEXT("Missing required field for get_cpp_reflection_info: class_name"));
 			return false;
 		}
 	}
@@ -133,6 +147,10 @@ FAntigravityActionResult FAntigravityCppActions::ExecuteAction(const TSharedRef<
 		if (ToolName == TEXT("macro_create_cpp_class"))
 		{
 			return ExecuteMacroCreateCppClass(Params, Result);
+		}
+		else if (ToolName == TEXT("get_cpp_reflection_info"))
+		{
+			return ExecuteGetCppReflectionInfo(Params, Result);
 		}
 	}
 
@@ -514,5 +532,209 @@ FAntigravityActionResult FAntigravityCppActions::ExecuteMacroCreateCppClass(cons
 	Result.bSuccess = true;
 	Result.ResultMessage = FString::Printf(TEXT("Generated C++ class %s successfully. [AI HINT: You MUST run regenerate_project_files and trigger_compile (or compile from IDE) for these structural changes to load properly.]"), *FullClassName);
 	
+	return Result;
+}
+
+#if WITH_EDITOR
+template<typename T>
+const TMap<FName, FString>* GetMetaMapForObject(T* MetaData, const UObject* Object)
+{
+	return MetaData ? MetaData->GetMapForObject(Object) : nullptr;
+}
+
+template<typename T>
+const TMap<FName, FString>* GetMetaMapForObject(T& MetaData, const UObject* Object)
+{
+	return MetaData.GetMapForObject(Object);
+}
+#endif
+
+FAntigravityActionResult FAntigravityCppActions::ExecuteGetCppReflectionInfo(const TSharedRef<FJsonObject>& Params, FAntigravityActionResult& Result)
+{
+	FString ClassName = Params->GetStringField(TEXT("class_name"));
+
+	bool bIncludeProperties = true;
+	Params->TryGetBoolField(TEXT("include_properties"), bIncludeProperties);
+	bool bIncludeFunctions = true;
+	Params->TryGetBoolField(TEXT("include_functions"), bIncludeFunctions);
+	bool bIncludeInterfaces = true;
+	Params->TryGetBoolField(TEXT("include_interfaces"), bIncludeInterfaces);
+	bool bIncludeMetadata = true;
+	Params->TryGetBoolField(TEXT("include_metadata"), bIncludeMetadata);
+
+	// Locate class, handling prefixes A/U
+	UClass* Class = FindFirstObject<UClass>(*ClassName);
+	if (!Class && ClassName.Len() > 1 && (ClassName.StartsWith(TEXT("A")) || ClassName.StartsWith(TEXT("U")) || ClassName.StartsWith(TEXT("I"))))
+	{
+		Class = FindFirstObject<UClass>(*ClassName.RightChop(1));
+	}
+
+	if (!Class)
+	{
+		Result.bSuccess = false;
+		Result.Errors.Add(FString::Printf(TEXT("Class '%s' not found in Unreal reflection system."), *ClassName));
+		return Result;
+	}
+
+	TSharedRef<FJsonObject> ResponseObj = MakeShared<FJsonObject>();
+	ResponseObj->SetStringField(TEXT("class_name"), Class->GetName());
+	ResponseObj->SetStringField(TEXT("parent_class"), Class->GetSuperClass() ? Class->GetSuperClass()->GetName() : TEXT("None"));
+	ResponseObj->SetBoolField(TEXT("is_abstract"), Class->HasAnyClassFlags(CLASS_Abstract));
+
+	bool bBlueprintSpawnable = false;
+#if WITH_EDITOR
+	bBlueprintSpawnable = Class->HasMetaData(TEXT("BlueprintSpawnableComponent"));
+#endif
+	ResponseObj->SetBoolField(TEXT("is_blueprint_spawnable"), bBlueprintSpawnable);
+
+	// Extract Class Metadata
+	if (bIncludeMetadata)
+	{
+		TSharedRef<FJsonObject> MetaObj = MakeShared<FJsonObject>();
+#if WITH_EDITOR
+		UPackage* Package = Class->GetOutermost();
+		if (Package)
+		{
+			const TMap<FName, FString>* MetaMap = GetMetaMapForObject(Package->GetMetaData(), Class);
+			if (MetaMap)
+			{
+				for (const auto& MetaPair : *MetaMap)
+				{
+					MetaObj->SetStringField(MetaPair.Key.ToString(), MetaPair.Value);
+				}
+			}
+		}
+#endif
+		ResponseObj->SetObjectField(TEXT("metadata"), MetaObj);
+	}
+
+	// Extract Interfaces
+	if (bIncludeInterfaces)
+	{
+		TArray<TSharedPtr<FJsonValue>> InterfaceList;
+		for (const FImplementedInterface& Interface : Class->Interfaces)
+		{
+			if (Interface.Class)
+			{
+				InterfaceList.Add(MakeShared<FJsonValueString>(Interface.Class->GetName()));
+			}
+		}
+		ResponseObj->SetArrayField(TEXT("interfaces"), InterfaceList);
+	}
+
+	// Extract Properties
+	if (bIncludeProperties)
+	{
+		TArray<TSharedPtr<FJsonValue>> PropList;
+		for (TFieldIterator<FProperty> PropIt(Class, EFieldIteratorFlags::ExcludeSuper); PropIt; ++PropIt)
+		{
+			FProperty* Prop = *PropIt;
+			TSharedRef<FJsonObject> PropObj = MakeShared<FJsonObject>();
+			PropObj->SetStringField(TEXT("name"), Prop->GetName());
+			PropObj->SetStringField(TEXT("type"), Prop->GetCPPType());
+
+			// Map Property Flags to Readable Strings
+			TArray<TSharedPtr<FJsonValue>> FlagsList;
+			uint64 Flags = Prop->GetPropertyFlags();
+			if (Flags & CPF_BlueprintVisible) FlagsList.Add(MakeShared<FJsonValueString>(TEXT("CPF_BlueprintVisible")));
+			if (Flags & CPF_Edit)             FlagsList.Add(MakeShared<FJsonValueString>(TEXT("CPF_Edit")));
+			if (Flags & CPF_BlueprintReadOnly)FlagsList.Add(MakeShared<FJsonValueString>(TEXT("CPF_BlueprintReadOnly")));
+			if (Flags & CPF_EditConst)        FlagsList.Add(MakeShared<FJsonValueString>(TEXT("CPF_EditConst")));
+			if (Flags & CPF_Net)              FlagsList.Add(MakeShared<FJsonValueString>(TEXT("CPF_Net")));
+			PropObj->SetArrayField(TEXT("flags"), FlagsList);
+
+			if (bIncludeMetadata)
+			{
+				TSharedRef<FJsonObject> PropMeta = MakeShared<FJsonObject>();
+#if WITH_EDITOR
+				if (const TMap<FName, FString>* MetaMap = Prop->GetMetaDataMap())
+				{
+					for (const auto& MetaPair : *MetaMap)
+					{
+						PropMeta->SetStringField(MetaPair.Key.ToString(), MetaPair.Value);
+					}
+				}
+#endif
+				PropObj->SetObjectField(TEXT("metadata"), PropMeta);
+			}
+			PropList.Add(MakeShared<FJsonValueObject>(PropObj));
+		}
+		ResponseObj->SetArrayField(TEXT("properties"), PropList);
+	}
+
+	// Extract Functions
+	if (bIncludeFunctions)
+	{
+		TArray<TSharedPtr<FJsonValue>> FuncList;
+		for (TFieldIterator<UFunction> FuncIt(Class, EFieldIteratorFlags::ExcludeSuper); FuncIt; ++FuncIt)
+		{
+			UFunction* Func = *FuncIt;
+			TSharedRef<FJsonObject> FuncObj = MakeShared<FJsonObject>();
+			FuncObj->SetStringField(TEXT("name"), Func->GetName());
+			FuncObj->SetBoolField(TEXT("is_pure"), (Func->FunctionFlags & FUNC_BlueprintPure) != 0);
+
+			TArray<TSharedPtr<FJsonValue>> FlagsList;
+			uint32 Flags = Func->FunctionFlags;
+			if (Flags & FUNC_BlueprintCallable)FlagsList.Add(MakeShared<FJsonValueString>(TEXT("FUNC_BlueprintCallable")));
+			if (Flags & FUNC_BlueprintPure)    FlagsList.Add(MakeShared<FJsonValueString>(TEXT("FUNC_BlueprintPure")));
+			if (Flags & FUNC_Net)              FlagsList.Add(MakeShared<FJsonValueString>(TEXT("FUNC_Net")));
+			if (Flags & FUNC_Static)           FlagsList.Add(MakeShared<FJsonValueString>(TEXT("FUNC_Static")));
+			FuncObj->SetArrayField(TEXT("flags"), FlagsList);
+
+			if (bIncludeMetadata)
+			{
+				TSharedRef<FJsonObject> FuncMeta = MakeShared<FJsonObject>();
+#if WITH_EDITOR
+				UPackage* Package = Func->GetOutermost();
+				if (Package)
+				{
+					const TMap<FName, FString>* MetaMap = GetMetaMapForObject(Package->GetMetaData(), Func);
+					if (MetaMap)
+					{
+						for (const auto& MetaPair : *MetaMap)
+						{
+							FuncMeta->SetStringField(MetaPair.Key.ToString(), MetaPair.Value);
+						}
+					}
+				}
+#endif
+				FuncObj->SetObjectField(TEXT("metadata"), FuncMeta);
+			}
+
+			// Extract Function Parameters
+			TArray<TSharedPtr<FJsonValue>> ParamList;
+			for (TFieldIterator<FProperty> ParamIt(Func); ParamIt; ++ParamIt)
+			{
+				FProperty* Param = *ParamIt;
+				if (!Param->HasAnyPropertyFlags(CPF_Parm))
+				{
+					continue;
+				}
+				TSharedRef<FJsonObject> ParamObj = MakeShared<FJsonObject>();
+				ParamObj->SetStringField(TEXT("name"), Param->GetName());
+				ParamObj->SetStringField(TEXT("type"), Param->GetCPPType());
+
+				TArray<TSharedPtr<FJsonValue>> ParamFlagsList;
+				uint64 PFlags = Param->GetPropertyFlags();
+				if (PFlags & CPF_Parm)      ParamFlagsList.Add(MakeShared<FJsonValueString>(TEXT("CPF_Parm")));
+				if (PFlags & CPF_OutParm)   ParamFlagsList.Add(MakeShared<FJsonValueString>(TEXT("CPF_OutParm")));
+				if (PFlags & CPF_ReturnParm)ParamFlagsList.Add(MakeShared<FJsonValueString>(TEXT("CPF_ReturnParm")));
+				ParamObj->SetArrayField(TEXT("flags"), ParamFlagsList);
+
+				ParamList.Add(MakeShared<FJsonValueObject>(ParamObj));
+			}
+			FuncObj->SetArrayField(TEXT("parameters"), ParamList);
+			FuncList.Add(MakeShared<FJsonValueObject>(FuncObj));
+		}
+		ResponseObj->SetArrayField(TEXT("functions"), FuncList);
+	}
+
+	// Serialize response to string
+	FString ResponseString;
+	TSharedRef<TJsonWriter<>> Writer = TJsonWriterFactory<>::Create(&ResponseString);
+	FJsonSerializer::Serialize(ResponseObj, Writer);
+
+	Result.bSuccess = true;
+	Result.ResultMessage = ResponseString;
 	return Result;
 }

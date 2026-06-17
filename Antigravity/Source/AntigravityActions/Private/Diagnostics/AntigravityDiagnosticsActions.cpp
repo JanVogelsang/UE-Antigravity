@@ -6,6 +6,7 @@
 #include "Logging/TokenizedMessage.h"
 #include "Misc/OutputDeviceRedirector.h"
 #include "Misc/OutputDeviceHelper.h"
+#include "Async/Async.h"
 
 #define LOCTEXT_NAMESPACE "AntigravityDiagnosticsActions"
 
@@ -79,7 +80,7 @@ bool FAntigravityDiagnosticsActions::UndoAction() { return false; }
 
 TArray<FString> FAntigravityDiagnosticsActions::GetSupportedToolNames() const
 {
-	return { TEXT("read_message_log") };
+	return { TEXT("read_message_log"), TEXT("shutdown_editor") };
 }
 
 bool FAntigravityDiagnosticsActions::ValidateParams(const TSharedRef<FJsonObject>& Params, TArray<FString>& OutErrors) const
@@ -89,22 +90,52 @@ bool FAntigravityDiagnosticsActions::ValidateParams(const TSharedRef<FJsonObject
 
 FAntigravityActionPlan FAntigravityDiagnosticsActions::PreviewAction(const TSharedRef<FJsonObject>& Params)
 {
+	FString ToolName;
+	Params->TryGetStringField(TEXT("_tool_name"), ToolName);
+
 	FAntigravityActionPlan Plan;
-	Plan.Summary = TEXT("Read recent Output Log entries (read-only)");
-	Plan.MaxRiskLevel = EAntigravityRiskLevel::Low;
-	FAntigravityAction Action;
-	Action.Description = Plan.Summary;
-	Action.Category = EAntigravityActionCategory::General;
-	Action.RiskLevel = EAntigravityRiskLevel::Low;
-	Plan.Actions.Add(Action);
+	if (ToolName == TEXT("shutdown_editor"))
+	{
+		Plan.Summary = TEXT("Shutdown the Unreal Editor");
+		Plan.MaxRiskLevel = EAntigravityRiskLevel::High;
+		FAntigravityAction Action;
+		Action.Description = Plan.Summary;
+		Action.Category = EAntigravityActionCategory::General;
+		Action.RiskLevel = EAntigravityRiskLevel::High;
+		Plan.Actions.Add(Action);
+	}
+	else
+	{
+		Plan.Summary = TEXT("Read recent Output Log entries (read-only)");
+		Plan.MaxRiskLevel = EAntigravityRiskLevel::Low;
+		FAntigravityAction Action;
+		Action.Description = Plan.Summary;
+		Action.Category = EAntigravityActionCategory::General;
+		Action.RiskLevel = EAntigravityRiskLevel::Low;
+		Plan.Actions.Add(Action);
+	}
 	return Plan;
 }
 
 FAntigravityActionResult FAntigravityDiagnosticsActions::ExecuteAction(const TSharedRef<FJsonObject>& Params)
 {
+	FString ToolName;
+	Params->TryGetStringField(TEXT("_tool_name"), ToolName);
+
 	FAntigravityActionResult Result;
 	Result.bSuccess = false;
-	return ExecuteReadMessageLog(Params, Result);
+
+	if (ToolName == TEXT("read_message_log"))
+	{
+		return ExecuteReadMessageLog(Params, Result);
+	}
+	else if (ToolName == TEXT("shutdown_editor"))
+	{
+		return ExecuteShutdownEditor(Params, Result);
+	}
+
+	Result.Errors.Add(FString::Printf(TEXT("Unknown tool name: %s"), *ToolName));
+	return Result;
 }
 
 // ============================================================================
@@ -205,6 +236,18 @@ FAntigravityActionResult FAntigravityDiagnosticsActions::ExecuteReadMessageLog(
 
 	Result.bSuccess = true;
 	Result.ResultMessage = Output;
+	return Result;
+}
+
+FAntigravityActionResult FAntigravityDiagnosticsActions::ExecuteShutdownEditor(
+	const TSharedRef<FJsonObject>& Params, FAntigravityActionResult& Result)
+{
+	AsyncTask(ENamedThreads::GameThread, []() {
+		FPlatformMisc::RequestExit(false);
+	});
+
+	Result.bSuccess = true;
+	Result.ResultMessage = TEXT("Editor shutdown initiated successfully.");
 	return Result;
 }
 

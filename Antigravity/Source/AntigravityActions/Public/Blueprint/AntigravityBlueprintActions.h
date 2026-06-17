@@ -6,6 +6,10 @@
 #include "AntigravityInterfaces.h"
 #include "EdGraphSchema_K2.h"
 
+#if WITH_EDITOR
+#include "UObject/AssetRegistryTagsContext.h"
+#endif
+
 class UBlueprint;
 class UEdGraph;
 class USCS_Node;
@@ -45,6 +49,10 @@ public:
 	virtual bool UndoAction() override;
 	virtual TArray<FString> GetSupportedToolNames() const override;
 	virtual bool ValidateParams(const TSharedRef<FJsonObject>& Params, TArray<FString>& OutErrors) const override;
+
+#if WITH_EDITOR
+	static void HandleGetExtraObjectTags(FAssetRegistryTagsContext Context);
+#endif
 
 private:
 	// =========================================================================
@@ -273,6 +281,9 @@ private:
 	 */
 	FAntigravityActionResult ExecuteDeleteNodes(const TSharedRef<FJsonObject>& Params, FAntigravityActionResult& Result);
 
+	/** Extract Blueprint schema without loading the asset in memory. */
+	FAntigravityActionResult ExecuteGetBlueprintSchema(const TSharedRef<FJsonObject>& Params, FAntigravityActionResult& Result);
+
 	// =========================================================================
 	// Helpers
 	// =========================================================================
@@ -307,7 +318,9 @@ private:
 	 *
 	 * Example: "PinId=LINK_1" → "PinId=A1B2C3D4E5F6A1B2C3D4E5F6A1B2C3D4"
 	 */
+protected:
 	static FString ResolveT3DPlaceholders(const FString& T3DText);
+private:
 
 	/**
 	 * Compile a Blueprint and collect all errors/warnings into Result.

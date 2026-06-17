@@ -39,6 +39,7 @@
 // Asset management
 #include "AssetToolsModule.h"
 #include "AssetRegistry/AssetRegistryModule.h"
+#include "AssetRegistry/AssetData.h"
 #include "Factories/BlueprintFactory.h"
 #include "FileHelpers.h"
 #include "UObject/SavePackage.h"
@@ -84,6 +85,72 @@ namespace
 		}
 		return InPath;
 	}
+
+	FString GetVarTypeString(const FEdGraphPinType& VarType)
+	{
+		auto FormatSingleType = [](const FName& PinCategory, const FName& PinSubCategory, UObject* SubCategoryObject) -> FString
+		{
+			FString BaseName = PinCategory.ToString();
+			if (SubCategoryObject)
+			{
+				BaseName = SubCategoryObject->GetName();
+			}
+
+			if (PinCategory == UEdGraphSchema_K2::PC_Real)
+			{
+				if (PinSubCategory == UEdGraphSchema_K2::PC_Float)
+				{
+					return TEXT("float");
+				}
+				else if (PinSubCategory == UEdGraphSchema_K2::PC_Double)
+				{
+					return TEXT("double");
+				}
+				else
+				{
+					return TEXT("float");
+				}
+			}
+			else if (PinCategory == UEdGraphSchema_K2::PC_Class)
+			{
+				return FString::Printf(TEXT("TSubclassOf<%s>"), *BaseName);
+			}
+			else if (PinCategory == UEdGraphSchema_K2::PC_SoftObject)
+			{
+				return FString::Printf(TEXT("TSoftObjectPtr<%s>"), *BaseName);
+			}
+			else if (PinCategory == UEdGraphSchema_K2::PC_SoftClass)
+			{
+				return FString::Printf(TEXT("TSoftClassPtr<%s>"), *BaseName);
+			}
+			else if (PinCategory == UEdGraphSchema_K2::PC_Object)
+			{
+				return BaseName;
+			}
+			return BaseName;
+		};
+
+		FString KeyType = FormatSingleType(VarType.PinCategory, VarType.PinSubCategory, VarType.PinSubCategoryObject.Get());
+
+		if (VarType.ContainerType == EPinContainerType::Array)
+		{
+			return FString::Printf(TEXT("TArray<%s>"), *KeyType);
+		}
+		else if (VarType.ContainerType == EPinContainerType::Set)
+		{
+			return FString::Printf(TEXT("TSet<%s>"), *KeyType);
+		}
+		else if (VarType.ContainerType == EPinContainerType::Map)
+		{
+			FString ValueType = FormatSingleType(
+				VarType.PinValueType.TerminalCategory,
+				VarType.PinValueType.TerminalSubCategory,
+				VarType.PinValueType.TerminalSubCategoryObject.Get()
+			);
+			return FString::Printf(TEXT("TMap<%s, %s>"), *KeyType, *ValueType);
+		}
+		return KeyType;
+	}
 }
 
 FAntigravityBlueprintActions::FAntigravityBlueprintActions() {}
@@ -116,7 +183,8 @@ TArray<FString> FAntigravityBlueprintActions::GetSupportedToolNames() const
 		TEXT("set_node_pin_default"),
 		TEXT("delete_blueprint_nodes"),
 		TEXT("analyze_blueprint_graph"),
-		TEXT("execute_batch_blueprint_operations")
+		TEXT("execute_batch_blueprint_operations"),
+		TEXT("get_blueprint_schema")
 	};
 }
 
@@ -284,7 +352,8 @@ FAntigravityActionResult FAntigravityBlueprintActions::ExecuteAction(const TShar
 
 	bool bIsReadOnly = (ToolName == TEXT("get_blueprint_info") ||
 	                    ToolName == TEXT("verify_blueprint_connections") ||
-	                    ToolName == TEXT("analyze_blueprint_graph"));
+	                    ToolName == TEXT("analyze_blueprint_graph") ||
+	                    ToolName == TEXT("get_blueprint_schema"));
 
 	TOptional<FScopedTransaction> Transaction;
 	if (!bIsReadOnly)
@@ -305,6 +374,7 @@ FAntigravityActionResult FAntigravityBlueprintActions::ExecuteAction(const TShar
 	else if (ToolName == TEXT("set_component_properties"))      Result = ExecuteSetComponentProperties(Params, Result);
 	else if (ToolName == TEXT("inject_blueprint_nodes_t3d"))    Result = ExecuteInjectNodesT3D(Params, Result);
 	else if (ToolName == TEXT("get_blueprint_info"))            Result = ExecuteGetBlueprintInfo(Params, Result);
+	else if (ToolName == TEXT("get_blueprint_schema"))          Result = ExecuteGetBlueprintSchema(Params, Result);
 	else if (ToolName == TEXT("connect_blueprint_pins"))        Result = ExecuteConnectPins(Params, Result);
 	else if (ToolName == TEXT("add_enhanced_input_node"))       Result = ExecuteAddEnhancedInputNode(Params, Result);
 	else if (ToolName == TEXT("verify_blueprint_connections"))  Result = ExecuteVerifyConnections(Params, Result);
@@ -323,7 +393,7 @@ FAntigravityActionResult FAntigravityBlueprintActions::ExecuteAction(const TShar
 		else if (Params->HasField(TEXT("defaults")))          Result = ExecuteSetDefaults(Params, Result);
 		else
 		{
-			Result.Errors.Add(FString::Printf(TEXT("Unknown Blueprint tool: '%s'. Supported: create_blueprint_actor, add_blueprint_component, add_blueprint_variable, add_blueprint_function, add_blueprint_event, compile_blueprint, set_blueprint_defaults, set_component_properties, inject_blueprint_nodes_t3d, get_blueprint_info, connect_blueprint_pins, set_node_pin_default, verify_blueprint_connections, analyze_blueprint_graph, execute_batch_blueprint_operations"), *ToolName));
+			Result.Errors.Add(FString::Printf(TEXT("Unknown Blueprint tool: '%s'. Supported: create_blueprint_actor, add_blueprint_component, add_blueprint_variable, add_blueprint_function, add_blueprint_event, compile_blueprint, set_blueprint_defaults, set_component_properties, inject_blueprint_nodes_t3d, get_blueprint_info, get_blueprint_schema, connect_blueprint_pins, set_node_pin_default, verify_blueprint_connections, analyze_blueprint_graph, execute_batch_blueprint_operations"), *ToolName));
 		}
 	}
 
@@ -489,10 +559,16 @@ FString FAntigravityBlueprintActions::ResolveT3DPlaceholders(const FString& T3DT
 		}
 	}
 
+	TArray<FString> SortedKeys;
+	PlaceholderMap.GetKeys(SortedKeys);
+	SortedKeys.Sort([](const FString& A, const FString& B) {
+		return A.Len() > B.Len();
+	});
+
 	FString Result = T3DText;
-	for (const auto& Pair : PlaceholderMap)
+	for (const FString& Key : SortedKeys)
 	{
-		Result = Result.Replace(*Pair.Key, *Pair.Value, ESearchCase::CaseSensitive);
+		Result = Result.Replace(*Key, *PlaceholderMap[Key], ESearchCase::CaseSensitive);
 	}
 
 	return Result;
@@ -2118,11 +2194,12 @@ FAntigravityActionResult FAntigravityBlueprintActions::ExecuteInjectNodesT3D(con
 
 	Result.bSuccess = bCompileOk;
 	Result.ResultMessage = FString::Printf(
-		TEXT("Injected %d nodes into graph '%s' of '%s'.\nImported nodes:\n%sCompile: %s.%s%s"),
+		TEXT("Injected %d nodes into graph '%s' of '%s'.\nImported nodes:\n%sCompile: %s.%s%s\nResolvedT3D:\n%s"),
 		ImportedNodes.Num(), *GraphName, *AssetPath, *NodePositions,
 		bCompileOk ? TEXT("SUCCESS") : TEXT("FAILED"),
 		*PinAuditReport,
-		*NodeReadback);
+		*NodeReadback,
+		*ResolvedT3D);
 	Result.ModifiedAssets.Add(AssetPath);
 	return Result;
 }
@@ -4179,6 +4256,169 @@ FAntigravityActionResult FAntigravityBlueprintActions::ExecuteBatchOperations(co
 	if (!bCompileOk)
 	{
 		Result.bSuccess = false;
+	}
+
+	return Result;
+}
+
+#if WITH_EDITOR
+void FAntigravityBlueprintActions::HandleGetExtraObjectTags(FAssetRegistryTagsContext Context)
+{
+	const UObject* InObject = Context.GetObject();
+	if (!InObject) return;
+	const UBlueprint* Blueprint = Cast<UBlueprint>(InObject);
+	if (!Blueprint) return;
+
+	FString ParentClassName = Blueprint->ParentClass ? Blueprint->ParentClass->GetName() : TEXT("None");
+
+	TArray<TSharedPtr<FJsonValue>> VarsArray;
+	for (const FBPVariableDescription& Var : Blueprint->NewVariables)
+	{
+		TSharedPtr<FJsonObject> VarObj = MakeShared<FJsonObject>();
+		VarObj->SetStringField(TEXT("name"), Var.VarName.ToString());
+		VarObj->SetStringField(TEXT("type"), GetVarTypeString(Var.VarType));
+		VarObj->SetStringField(TEXT("category"), !Var.Category.IsEmpty() ? Var.Category.ToString() : TEXT("Default"));
+		VarsArray.Add(MakeShared<FJsonValueObject>(VarObj));
+	}
+
+	FString VariablesJsonStr;
+	TSharedRef<TJsonWriter<>> VarWriter = TJsonWriterFactory<>::Create(&VariablesJsonStr);
+	FJsonSerializer::Serialize(VarsArray, VarWriter);
+
+	TArray<TSharedPtr<FJsonValue>> CustomEventsArray;
+	for (UEdGraph* Graph : Blueprint->UbergraphPages)
+	{
+		if (!Graph) continue;
+		for (UEdGraphNode* Node : Graph->Nodes)
+		{
+			if (UK2Node_CustomEvent* CustomEventNode = Cast<UK2Node_CustomEvent>(Node))
+			{
+				CustomEventsArray.Add(MakeShared<FJsonValueString>(CustomEventNode->GetFunctionName().ToString()));
+			}
+		}
+	}
+
+	FString CustomEventsJsonStr;
+	TSharedRef<TJsonWriter<>> EventWriter = TJsonWriterFactory<>::Create(&CustomEventsJsonStr);
+	FJsonSerializer::Serialize(CustomEventsArray, EventWriter);
+
+	Context.AddTag(UObject::FAssetRegistryTag(TEXT("Antigravity_ParentClass"), ParentClassName, UObject::FAssetRegistryTag::TT_Alphabetical));
+	Context.AddTag(UObject::FAssetRegistryTag(TEXT("Antigravity_Variables"), VariablesJsonStr, UObject::FAssetRegistryTag::TT_Hidden));
+	Context.AddTag(UObject::FAssetRegistryTag(TEXT("Antigravity_CustomEvents"), CustomEventsJsonStr, UObject::FAssetRegistryTag::TT_Hidden));
+}
+#endif
+
+FAntigravityActionResult FAntigravityBlueprintActions::ExecuteGetBlueprintSchema(const TSharedRef<FJsonObject>& Params, FAntigravityActionResult& Result)
+{
+	FString AssetPath;
+	if (!Params->TryGetStringField(TEXT("asset_path"), AssetPath) || AssetPath.IsEmpty())
+	{
+		Result.bSuccess = false;
+		Result.Errors.Add(TEXT("Missing or empty required field: asset_path"));
+		return Result;
+	}
+
+	FAssetRegistryModule& AssetRegistryModule = FModuleManager::LoadModuleChecked<FAssetRegistryModule>("AssetRegistry");
+	IAssetRegistry& AssetRegistry = AssetRegistryModule.Get();
+
+	FString ObjectPathStr = AssetPath;
+	if (!ObjectPathStr.Contains(TEXT(".")))
+	{
+		ObjectPathStr = ObjectPathStr + TEXT(".") + FPackageName::GetShortName(ObjectPathStr);
+	}
+
+	FAssetData AssetData = AssetRegistry.GetAssetByObjectPath(FSoftObjectPath(*ObjectPathStr));
+	bool bUseFallback = false;
+	if (!AssetData.IsValid())
+	{
+		bUseFallback = true;
+	}
+	else if (!AssetData.AssetClassPath.GetAssetName().ToString().Contains(TEXT("Blueprint")))
+	{
+		Result.Errors.Add(FString::Printf(TEXT("Asset is not a Blueprint: '%s'"), *AssetPath));
+		return Result;
+	}
+
+	FString ParentClass = TEXT("None");
+	TArray<TSharedPtr<FJsonValue>> Variables;
+	TArray<TSharedPtr<FJsonValue>> CustomEvents;
+	bool bLoadedFallback = false;
+
+	FAssetTagValueRef ParentClassTag = AssetData.TagsAndValues.FindTag(FName(TEXT("Antigravity_ParentClass")));
+	FAssetTagValueRef VariablesTag = AssetData.TagsAndValues.FindTag(FName(TEXT("Antigravity_Variables")));
+	FAssetTagValueRef CustomEventsTag = AssetData.TagsAndValues.FindTag(FName(TEXT("Antigravity_CustomEvents")));
+
+	if (!bUseFallback && ParentClassTag.IsSet() && VariablesTag.IsSet() && CustomEventsTag.IsSet())
+	{
+		ParentClass = ParentClassTag.GetValue();
+
+		FString VariablesJson = VariablesTag.GetValue();
+		TSharedPtr<FJsonValue> VarVal;
+		TSharedRef<TJsonReader<>> VarReader = TJsonReaderFactory<>::Create(VariablesJson);
+		if (FJsonSerializer::Deserialize(VarReader, VarVal) && VarVal.IsValid())
+		{
+			Variables = VarVal->AsArray();
+		}
+
+		FString CustomEventsJson = CustomEventsTag.GetValue();
+		TSharedPtr<FJsonValue> EventVal;
+		TSharedRef<TJsonReader<>> EventReader = TJsonReaderFactory<>::Create(CustomEventsJson);
+		if (FJsonSerializer::Deserialize(EventReader, EventVal) && EventVal.IsValid())
+		{
+			CustomEvents = EventVal->AsArray();
+		}
+	}
+	else
+	{
+		bLoadedFallback = true;
+		UBlueprint* Blueprint = LoadObject<UBlueprint>(nullptr, *ObjectPathStr);
+		if (!Blueprint)
+		{
+			Result.Errors.Add(FString::Printf(TEXT("Failed to load Blueprint fallback: '%s'"), *AssetPath));
+			return Result;
+		}
+
+		ParentClass = Blueprint->ParentClass ? Blueprint->ParentClass->GetName() : TEXT("None");
+
+		for (const FBPVariableDescription& Var : Blueprint->NewVariables)
+		{
+			TSharedPtr<FJsonObject> VarObj = MakeShared<FJsonObject>();
+			VarObj->SetStringField(TEXT("name"), Var.VarName.ToString());
+			VarObj->SetStringField(TEXT("type"), GetVarTypeString(Var.VarType));
+			VarObj->SetStringField(TEXT("category"), !Var.Category.IsEmpty() ? Var.Category.ToString() : TEXT("Default"));
+			Variables.Add(MakeShared<FJsonValueObject>(VarObj));
+		}
+
+		for (UEdGraph* Graph : Blueprint->UbergraphPages)
+		{
+			if (!Graph) continue;
+			for (UEdGraphNode* Node : Graph->Nodes)
+			{
+				if (UK2Node_CustomEvent* CustomEventNode = Cast<UK2Node_CustomEvent>(Node))
+				{
+					CustomEvents.Add(MakeShared<FJsonValueString>(CustomEventNode->GetFunctionName().ToString()));
+				}
+			}
+		}
+	}
+
+	FString AssetName = AssetData.IsValid() ? AssetData.AssetName.ToString() : FPackageName::GetShortName(AssetPath);
+
+	TSharedPtr<FJsonObject> ResponseObj = MakeShared<FJsonObject>();
+	ResponseObj->SetStringField(TEXT("asset_name"), AssetName);
+	ResponseObj->SetStringField(TEXT("parent_class"), ParentClass);
+	ResponseObj->SetArrayField(TEXT("variables"), Variables);
+	ResponseObj->SetArrayField(TEXT("custom_events"), CustomEvents);
+
+	FString ResponseString;
+	TSharedRef<TJsonWriter<>> Writer = TJsonWriterFactory<>::Create(&ResponseString);
+	FJsonSerializer::Serialize(ResponseObj.ToSharedRef(), Writer);
+
+	Result.bSuccess = true;
+	Result.ResultMessage = ResponseString;
+	if (bLoadedFallback)
+	{
+		Result.Warnings.Add(TEXT("Blueprint asset was loaded in memory as a fallback because custom tags were not populated in the Asset Registry. Please save the asset to enable fast non-loading schema extraction."));
 	}
 
 	return Result;

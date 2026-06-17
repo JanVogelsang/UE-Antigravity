@@ -1,6 +1,6 @@
 # UE-Antigravity
 
-**UE-Antigravity** is a high-performance integration that connects the Google Antigravity AI coding assistant directly to a running Unreal Engine Editor.
+**UE-Antigravity** is a high-performance integration that connects the Google Antigravity 2.0 AI coding assistant directly to a running Unreal Engine Editor.
 
 Exposed as a Model Context Protocol (MCP) server, it enables Antigravity to interact natively with your Unreal Engine projects, query schemas, run diagnostics, modify code, execute editor automation, and build Blueprints dynamically on the Game Thread.
 
@@ -8,7 +8,7 @@ Exposed as a Model Context Protocol (MCP) server, it enables Antigravity to inte
 
 ## Key Features
 
-Exposes **70+ advanced editor tools** categorized into specialized domains:
+Exposes **100+ advanced editor tools** categorized into specialized domains:
 
 * **Blueprint Generation**: Create Blueprint actors, add variables/functions, connect pins, and inject node graphs.
 * **Widget & UMG Editor**: Retrieve widget hierarchies, modify widget slots, set fonts, and bind interactive events.
@@ -22,10 +22,17 @@ Exposes **70+ advanced editor tools** categorized into specialized domains:
 
 ## Repository Structure
 
-This repository contains two distinct components that work together, separated into their own directories for easy distribution:
+This repository contains the following components and directories:
 
-1. **[Antigravity](./Antigravity)** - The Unreal Engine Editor plugin. It runs an in-process HTTP loopback server to execute commands safely on the Game Thread.
-2. **[UnrealEngine](./UnrealEngine)** - The Antigravity extension plugin (MCP Server). It registers the tools with the AI assistant and proxies JSON-RPC messages via a lightweight C++ bridge to the Unreal HTTP server.
+*   **[Antigravity](./Antigravity)**: The Unreal Engine Editor plugin. It runs an in-process HTTP loopback server to execute commands safely on the Game Thread.
+*   **[UnrealEngine](./UnrealEngine)**: The Antigravity extension plugin (MCP Server). It registers the tools with the AI assistant and proxies JSON-RPC messages via a lightweight C++ bridge to the Unreal HTTP server.
+*   **[Documentation](./Documentation)**: Contains system documentation:
+    *   [PROJECT.md](./Documentation/PROJECT.md): Overview of the Dual-MCP architecture, directory layout, and milestones.
+    *   [DEVELOPMENT.md](./Documentation/DEVELOPMENT.md): Developer guide for environment setup, compilation, and AST server debugging.
+    *   [TEST_INFRA.md](./Documentation/TEST_INFRA.md): Specifications of the E2E test harness and test matrix.
+*   **[Tests](./Tests)**: Contains automated integration and unit tests:
+    *   To run Python tests: `powershell -File .\Tests\run_tests.ps1`
+    *   To run all C++ and Python tests sequentially: `powershell -File .\Tests\run_all_tests.ps1`
 
 ```mermaid
 graph TD
@@ -36,49 +43,66 @@ graph TD
 
 ---
 
-## Installation & Setup
+## How It Works (High-Level Architecture)
 
-You must install both components to use the integration. 
+UE-Antigravity operates as a **Dual-MCP Server** system that links your AI coding assistant (e.g., Google Antigravity or Kilo Code) directly to your Unreal Engine environment:
 
-First, download the ZIP archives from the [latest release page](https://github.com/JanVogelsang/UE-Antigravity/releases/latest).
-
-### 1. Unreal Engine Plugin (Antigravity)
-
-1. Create a `Plugins` directory at the root of your Unreal Engine project if it doesn't already exist.
-2. Extract the downloaded `Antigravity` archive and copy the `Antigravity` folder into your project's `Plugins` directory.
-3. Open your project in Unreal Editor, click **Yes** if prompted to rebuild, and ensure the plugin is enabled in **Edit > Plugins**.
-
-*For more details on the Unreal Engine plugin, please see the [Antigravity README](./Antigravity/README.md).*
-
-### 2. Antigravity Agent Plugin (UnrealEngine)
-
-Extract the downloaded `UnrealEngine` archive and copy the `UnrealEngine` folder into one of the following locations:
-
-**Workspace Level (Recommended)**
-Copy the `UnrealEngine` folder into the `.agents/plugins/` directory at the root of your active project workspace:
-```bash
-mkdir -p .agents/plugins
-# Extract/copy the UnrealEngine folder here
-```
-
-**Global Level**
-Alternatively, for global installation, copy the folder to your user profile's global configuration directory:
-* **Windows:** `C:\Users\<Username>\.gemini\config\plugins\UnrealEngine`
-* **Mac/Linux:** `~/.gemini/config/plugins/UnrealEngine`
-
-*For more details on the agent plugin, please see the [UnrealEngine README](./UnrealEngine/README.md).*
+1. **Internal C++ Editor Server**: The C++ plugin runs inside the active Unreal Editor process, listening on port `18777`. It performs game thread operations like reading Blueprint graphs, adding reflection variables, compiling assets, and injecting nodes.
+2. **C++ stdio Bridge**: Translates Model Context Protocol (MCP) standard input/output (stdio) requests from the AI assistant to local HTTP loopback calls targeting the editor.
+3. **External Python AST Server**: Resolves C++ symbols and file structures using `libclang` and watches your C++ source directories. It caches class names, method signatures, properties, and called functions in a local SQLite database and refreshes them automatically whenever files are saved.
 
 ---
 
-## Verification
+## Installation & Setup
 
-To verify that the installation was successful and the integration is working:
+You must install both the C++ editor plugin and the agent plugin to enable the integration.
 
-1. Ensure your Unreal Engine project is open and running in the editor.
-2. Open your Antigravity AI assistant in the workspace where you installed the agent plugin.
-3. Ask the assistant a question about your project, such as: *"List all the Blueprint classes in my Unreal project"* or *"What is the current location of the camera in the Unreal Editor?"*
+### Step 1: Install Unreal Engine Editor Plugin
 
-If the assistant successfully queries the Unreal Engine editor and returns the correct information, your setup is complete and fully functional!
+1. Navigate to the root directory of your game project.
+2. Create a folder named `Plugins` at the root if it is missing.
+3. Copy the [Antigravity](./Antigravity) folder into your project's `Plugins/` directory.
+4. Open your project in Unreal Editor. If prompted to rebuild the plugin binaries, click **Yes**.
+5. Ensure the plugin is loaded by opening **Edit > Plugins** and checking **Antigravity**.
+
+### Step 2: Install Antigravity 2.0 Plugin (also supports Kilo Code)
+
+We provide an automated installer script that compiles the C++ bridge, links rule sets, and writes configuration files for your AI assistant in one step.
+
+1. Open PowerShell and run the installer script:
+   ```powershell
+   powershell -ExecutionPolicy Bypass -File .\UnrealEngine\install.ps1
+   ```
+2. When prompted:
+   * **Project Root**: Press Enter to install to the default workspace, or specify the path to your target project folder.
+   * **LLM Profile**: Pick a default configuration profile (e.g., select `default` or `deepseek-v4`).
+3. The installer will automatically:
+   * Compile the `bridge.exe` proxy binary.
+   * Install the plugin directory under `.agents/plugins/UnrealEngine`.
+   * Create `mcp_config.json` to enable automatic server discovery for Antigravity.
+   * Create or merge the server definitions inside `kilo.jsonc` for Kilo Code.
+
+---
+
+## Verification & How to Use
+
+Once both components are installed, you do not need to start any servers manually. Your AI assistant will automatically launch the C++ bridge and Python AST servers in the background.
+
+To verify the setup, open your AI coding assistant inside the workspace and prompt it to run any of the following queries:
+
+### 1. C++ AST & Header Analysis
+Ask the assistant to analyze your C++ files or find class details:
+* *"Find the declaration and inheritance chain for the class AWatchdogStressTarget"*
+* *"List the parameters and return type for the method ExecPythonCommand"*
+
+### 2. Live Blueprint & Reflection Queries
+Ask the assistant to query active editor assets and runtime properties (Unreal Editor must be open):
+* *"Extract the Blueprint variables and parent class of BP_RoundPawn"*
+* *"Get the runtime reflection properties and metadata tags of AActor"*
+
+### 3. Graph Injection
+Ask the assistant to wire logic inside a Blueprint graph:
+* *"Inject a custom variable getter node into the EventGraph of BP_RoundPawn"*
 
 ---
 

@@ -555,6 +555,20 @@
         },
         "required": ["asset_path", "operations"]
       }
+    },
+    {
+      "name": "get_blueprint_schema",
+      "description": "Extract the Blueprint structural schema (parent class, member variables with their types and categories, and custom events) WITHOUT loading the asset in memory. Uses the Asset Registry cache. If the cache is not populated, falls back to memory load with a warning.",
+      "input_schema": {
+        "type": "object",
+        "properties": {
+          "asset_path": {
+            "type": "string",
+            "description": "Content path of the Blueprint asset, e.g. /Game/Blueprints/BP_Enemy"
+          }
+        },
+        "required": ["asset_path"]
+      }
     }
   ]
 }
