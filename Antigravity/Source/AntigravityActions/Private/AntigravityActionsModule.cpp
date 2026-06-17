@@ -5,10 +5,20 @@
 #include "AntigravityHttpServer.h"
 #include "Misc/CoreDelegates.h"
 
+#if WITH_EDITOR
+#include "AssetRegistry/AssetRegistryModule.h"
+#include "Blueprint/AntigravityBlueprintActions.h"
+static FDelegateHandle ExtraTagsDelegateHandle;
+#endif
+
 #define LOCTEXT_NAMESPACE "FAntigravityActionsModule"
 
 void FAntigravityActionsModule::StartupModule() { 
 	UE_LOG(LogAntigravity, Log, TEXT("AntigravityActions module started.")); 
+
+#if WITH_EDITOR
+	ExtraTagsDelegateHandle = UObject::FAssetRegistryTag::OnGetExtraObjectTagsWithContext.AddStatic(&FAntigravityBlueprintActions::HandleGetExtraObjectTags);
+#endif
 
 	if (!IsRunningCommandlet())
 	{
@@ -26,6 +36,13 @@ void FAntigravityActionsModule::StartupModule() {
 }
 
 void FAntigravityActionsModule::ShutdownModule() { 
+#if WITH_EDITOR
+	if (ExtraTagsDelegateHandle.IsValid())
+	{
+		UObject::FAssetRegistryTag::OnGetExtraObjectTagsWithContext.Remove(ExtraTagsDelegateHandle);
+		ExtraTagsDelegateHandle.Reset();
+	}
+#endif
 	FAntigravityHttpServer::Stop();
 	UE_LOG(LogAntigravity, Log, TEXT("AntigravityActions module shut down.")); 
 }

@@ -18,7 +18,6 @@ if (-not $TargetProjectDir) {
 Write-Host "Installing to: $TargetProjectDir"
 
 $AntigravityPluginDir = "$TargetProjectDir\.agents\plugins\UnrealEngine"
-$KiloCodeRulesDir = "$TargetProjectDir\.kilocode\rules"
 $BridgePath = "$PluginDir\bridge.exe"
 
 # 1. Compile Bridge if missing
@@ -27,7 +26,7 @@ if (-not (Test-Path $BridgePath)) {
     Start-Process -FilePath "$PluginDir\src\build_bridge.bat" -WorkingDirectory "$PluginDir\src" -Wait -NoNewWindow
 }
 
-# 2. Setup Antigravity
+# 2. Setup Antigravity plugin directory
 Write-Host "Setting up Antigravity..."
 if (-not (Test-Path $AntigravityPluginDir)) {
     New-Item -ItemType Directory -Force -Path $AntigravityPluginDir | Out-Null
@@ -62,42 +61,74 @@ if (Test-Path $SourceAgentsPath) {
     }
 }
 
+# 3. Select AI coding assistant
+Write-Host ""
+Write-Host "Which AI coding assistant do you want to configure?"
+Write-Host "  [0] Antigravity 2.0 (default)"
+Write-Host "  [1] Kilo Code"
+$clientChoice = Read-Host "Select (press Enter for Antigravity 2.0)"
+$useKiloCode = ($clientChoice -eq "1")
 
-# 3. Setup Kilo Code Skills
-Write-Host "Setting up Kilo Code rules..."
-if (-not (Test-Path $KiloCodeRulesDir)) {
-    New-Item -ItemType Directory -Force -Path $KiloCodeRulesDir | Out-Null
+# Resolve dynamic python path
+$UserDir = $env:USERPROFILE
+$StorePython = "$UserDir\AppData\Local\Microsoft\WindowsApps\python.exe"
+if (Test-Path $StorePython) {
+    $PythonExe = $StorePython
+} else {
+    $PythonExe = (Get-Command python -ErrorAction SilentlyContinue).Source
+    if (-not $PythonExe) { $PythonExe = "python" }
 }
-$SourceSkill = "$AntigravityPluginDir\skills\unreal-workflow\SKILL.md"
-if (-not (Test-Path $SourceSkill)) {
-    $SourceSkill = "$PluginDir\skills\unreal-workflow\SKILL.md"
-}
-$TargetRule = "$KiloCodeRulesDir\unreal-workflow.md"
-if (Test-Path $TargetRule) { Remove-Item $TargetRule }
-New-Item -ItemType HardLink -Path $TargetRule -Value $SourceSkill | Out-Null
+$PythonExeEscaped = $PythonExe -replace '\\', '\\'
 
-# 4. Setup Kilo Code MCP Config
-$KiloConfigPath = "$TargetProjectDir\kilo.jsonc"
+# Resolve repository root dynamically (parent of the UnrealEngine folder)
+$RepoRoot = (Get-Item $PluginDir).Parent.FullName -replace '\\', '\\'
 $BridgeDestPath = "$AntigravityPluginDir\bridge.exe" -replace '\\', '\\'
 
-# Ask for LLM profile
-Write-Host ""
-Write-Host "Available LLM profiles:"
-$profiles = Get-ChildItem -Path "$PluginDir\profiles\*.json" | ForEach-Object { $_.BaseName }
-for ($i = 0; $i -lt $profiles.Count; $i++) {
-    Write-Host "  [$i] $($profiles[$i])"
-}
-$profileChoice = Read-Host "Select a profile for Kilo Code (enter number, or press Enter for 'default')"
-$selectedProfile = "default"
-if (-not [string]::IsNullOrWhiteSpace($profileChoice)) {
-    $idx = [int]$profileChoice
-    if ($idx -ge 0 -and $idx -lt $profiles.Count) {
-        $selectedProfile = $profiles[$idx]
-    }
-}
-Write-Host "Using profile: $selectedProfile"
+if ($useKiloCode) {
+    # ── Kilo Code ────────────────────────────────────────────────────────────
 
-$McpConfigSnippet = @"
+    # Ask for LLM profile
+    Write-Host ""
+    Write-Host "Available LLM profiles for Kilo Code:"
+    $profiles = Get-ChildItem -Path "$PluginDir\profiles\*.json" | ForEach-Object { $_.BaseName }
+    for ($i = 0; $i -lt $profiles.Count; $i++) {
+        Write-Host "  [$i] $($profiles[$i])"
+    }
+    $profileChoice = Read-Host "Select a profile (enter number, or press Enter for 'default')"
+    $selectedProfile = "default"
+    if (-not [string]::IsNullOrWhiteSpace($profileChoice)) {
+        $idx = [int]$profileChoice
+        if ($idx -ge 0 -and $idx -lt $profiles.Count) {
+            $selectedProfile = $profiles[$idx]
+        }
+    }
+    Write-Host "Using profile: $selectedProfile"
+
+    # Setup Kilo Code rules (skill hard-links)
+    $KiloCodeRulesDir = "$TargetProjectDir\.kilocode\rules"
+    Write-Host "Setting up Kilo Code rules..."
+    if (-not (Test-Path $KiloCodeRulesDir)) {
+        New-Item -ItemType Directory -Force -Path $KiloCodeRulesDir | Out-Null
+    }
+
+    $SkillsSourceDir = "$AntigravityPluginDir\skills"
+    if (-not (Test-Path $SkillsSourceDir)) { $SkillsSourceDir = "$PluginDir\skills" }
+
+    $LastTargetRule = ""
+    Get-ChildItem -Path $SkillsSourceDir -Directory | ForEach-Object {
+        $SkillName = $_.Name
+        $SourceSkill = Join-Path $_.FullName "SKILL.md"
+        $LastTargetRule = Join-Path $KiloCodeRulesDir "$SkillName.md"
+        if (Test-Path $LastTargetRule) { Remove-Item $LastTargetRule }
+        if (Test-Path $SourceSkill) {
+            New-Item -ItemType HardLink -Path $LastTargetRule -Value $SourceSkill | Out-Null
+            Write-Host "  Linked skill '$SkillName'."
+        }
+    }
+
+    # Write kilo.jsonc
+    $KiloConfigPath = "$TargetProjectDir\kilo.jsonc"
+    $KiloConfigContent = @"
 {
   "mcpServers": {
     "unrealengine": {
@@ -107,20 +138,64 @@ $McpConfigSnippet = @"
         "BRIDGE_PROFILE": "$selectedProfile"
       },
       "enabled": true
+    },
+    "cpp-ast-rag": {
+      "type": "stdio",
+      "command": "$PythonExeEscaped",
+      "args": ["-u", "-m", "ExternalServer.src.main"],
+      "env": {
+        "PYTHONPATH": "$RepoRoot"
+      },
+      "enabled": true
     }
   }
 }
 "@
-if (-not (Test-Path $KiloConfigPath)) {
-    Set-Content -Path $KiloConfigPath -Value $McpConfigSnippet
-    Write-Host "Created kilo.jsonc with profile '$selectedProfile'"
-} else {
-    Write-Host "kilo.jsonc already exists. Please manually merge the MCP server definition:"
-    Write-Host $McpConfigSnippet
-}
 
-Write-Host ""
-Write-Host "Installation Complete."
-Write-Host "  Antigravity plugin: $AntigravityPluginDir"
-Write-Host "  Kilo Code rules:   $TargetRule"
-Write-Host "  LLM Profile:       $selectedProfile"
+    if (-not (Test-Path $KiloConfigPath)) {
+        Set-Content -Path $KiloConfigPath -Value $KiloConfigContent
+        Write-Host "Created kilo.jsonc."
+    } else {
+        Write-Host "kilo.jsonc already exists. Please manually merge the MCP server definition:"
+        Write-Host $KiloConfigContent
+    }
+
+    Write-Host ""
+    Write-Host "Installation Complete (Kilo Code)."
+    Write-Host "  Antigravity plugin : $AntigravityPluginDir"
+    Write-Host "  Kilo Code rules    : $KiloCodeRulesDir"
+    Write-Host "  LLM Profile        : $selectedProfile"
+
+} else {
+    # ── Antigravity 2.0 (default) ────────────────────────────────────────────
+
+    $McpConfigContent = @"
+{
+  "mcpServers": {
+    "unrealengine": {
+      "type": "stdio",
+      "command": "$BridgeDestPath",
+      "enabled": true
+    },
+    "cpp-ast-rag": {
+      "type": "stdio",
+      "command": "$PythonExeEscaped",
+      "args": ["-u", "-m", "ExternalServer.src.main"],
+      "env": {
+        "PYTHONPATH": "$RepoRoot"
+      },
+      "enabled": true
+    }
+  }
+}
+"@
+
+    $PluginConfigPath = Join-Path $AntigravityPluginDir "mcp_config.json"
+    Set-Content -Path $PluginConfigPath -Value $McpConfigContent
+    Write-Host "Created/Updated mcp_config.json."
+
+    Write-Host ""
+    Write-Host "Installation Complete (Antigravity 2.0)."
+    Write-Host "  Antigravity plugin : $AntigravityPluginDir"
+    Write-Host "  MCP config         : $PluginConfigPath"
+}

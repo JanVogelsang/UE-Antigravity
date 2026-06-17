@@ -29,6 +29,15 @@
         },
         "required": []
       }
+    },
+    {
+      "name": "shutdown_editor",
+      "description": "Gracefully shut down the Unreal Editor headless or GUI process.",
+      "input_schema": {
+        "type": "object",
+        "properties": {},
+        "required": []
+      }
     }
   ]
 }

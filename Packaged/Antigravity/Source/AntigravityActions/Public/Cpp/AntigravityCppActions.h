@@ -28,6 +28,7 @@ private:
     FAntigravityActionResult ExecuteModifyCppFile(const TSharedRef<FJsonObject>& Params, FAntigravityActionResult& Result);
     FAntigravityActionResult ExecuteTriggerCompile(FAntigravityActionResult& Result);
     FAntigravityActionResult ExecuteRegenerateProjectFiles(FAntigravityActionResult& Result);
+    FAntigravityActionResult ExecuteGetCppReflectionInfo(const TSharedRef<FJsonObject>& Params, FAntigravityActionResult& Result);
 
     /** Validate generated code for dangerous patterns */
     bool ValidateCodeSafety(const FString& Code, TArray<FString>& OutViolations) const;

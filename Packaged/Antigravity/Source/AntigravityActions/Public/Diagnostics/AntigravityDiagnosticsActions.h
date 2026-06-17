@@ -41,4 +41,5 @@ private:
 	 * (Error, Warning, Display).
 	 */
 	FAntigravityActionResult ExecuteReadMessageLog(const TSharedRef<FJsonObject>& Params, FAntigravityActionResult& Result);
+	FAntigravityActionResult ExecuteShutdownEditor(const TSharedRef<FJsonObject>& Params, FAntigravityActionResult& Result);
 };

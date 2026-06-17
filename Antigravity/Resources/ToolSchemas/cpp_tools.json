@@ -114,6 +114,38 @@
         },
         "required": ["class_name", "parent_class", "module_name"]
       }
+    },
+    {
+      "name": "get_cpp_reflection_info",
+      "description": "Query Unreal Engine's reflection system (UClass) to extract structural details of a compiled C++ class and return them as a JSON payload.",
+      "input_schema": {
+        "type": "object",
+        "properties": {
+          "class_name": {
+            "type": "string",
+            "description": "The C++ class name to inspect (with or without 'A'/'U' prefix, e.g. 'Actor' or 'AActor')"
+          },
+          "include_properties": {
+            "type": "boolean",
+            "description": "Extract class properties (default: true)"
+          },
+          "include_functions": {
+            "type": "boolean",
+            "description": "Extract class functions (default: true)"
+          },
+          "include_interfaces": {
+            "type": "boolean",
+            "description": "Extract implemented interfaces (default: true)"
+          },
+          "include_metadata": {
+            "type": "boolean",
+            "description": "Extract class metadata (default: true)"
+          }
+        },
+        "required": [
+          "class_name"
+        ]
+      }
     }
   ]
 }
