@@ -118,6 +118,17 @@ Copy to your user profile's global configuration directory:
 * **Windows:** `C:\Users\<Username>\.gemini\config\plugins\UnrealEngine`
 * **Mac/Linux:** `~/.gemini/config/plugins/UnrealEngine`
 
+### Run the Setup Conversation (One-time Setup)
+
+Once the plugin is installed and your Unreal Editor is running:
+1. Open a new conversation with your AI coding assistant in the project workspace.
+2. Instruct the assistant to run the setup and index the project:
+   ```
+   Run project setup and index the project
+   ```
+3. The assistant will trigger the `unreal-setup` skill, generate the machine-specific `unreal-env` skill, perform a full scan of the C++ codebase, project settings, and active editor assets, and write a permanent OKF project-indexing skill at `.agents/skills/project-index/SKILL.md`.
+4. **Restart the assistant session** or reload the window to ensure the new `project-index` skill is registered. This is required because the assistant platform only scans and loads workspace skills during conversation startup. Every subsequent session will benefit from this sophisticated, token-efficient architectural and asset map.
+
 ## Compilation
 
 The bridge uses a lightweight C++ executable (`bridge.exe`) to proxy requests. The agent is configured to automatically compile this binary using `src/build_bridge.bat` when it first boots and detects the binary is missing.

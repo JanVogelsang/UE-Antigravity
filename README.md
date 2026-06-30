@@ -82,6 +82,18 @@ We provide an automated installer script that compiles the C++ bridge, links rul
    * Create `mcp_config.json` to enable automatic server discovery for Antigravity.
    * Create or merge the server definitions inside `kilo.jsonc` for Kilo Code.
 
+### Step 3: Run the Setup Conversation (One-time Setup)
+
+Once the installer finishes:
+1. Ensure your Unreal Editor is open and running.
+2. Open a new conversation with your AI coding assistant in the project workspace.
+3. Prompt the assistant to run the project setup:
+   ```
+   Run project setup and index the project
+   ```
+4. The assistant will detect the `unreal-setup` skill, generate the machine-specific `unreal-env` skill, perform a full scan of the C++ codebase, project settings, and active editor assets, and write a permanent OKF project-indexing skill at `.agents/skills/project-index/SKILL.md`.
+5. **Restart the assistant session** or reload the window to ensure the new `project-index` skill is registered. This is required because the assistant platform only scans and loads workspace skills during conversation startup. Every subsequent session will benefit from this sophisticated, token-efficient architectural map.
+
 ---
 
 ## Verification & How to Use
@@ -103,6 +115,7 @@ Ask the assistant to query active editor assets and runtime properties (Unreal E
 ### 3. Graph Injection
 Ask the assistant to wire logic inside a Blueprint graph:
 * *"Inject a custom variable getter node into the EventGraph of BP_RoundPawn"*
+* *"Add a sequence node and format the layout so they do not overlap"*
 
 ---
 

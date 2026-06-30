@@ -78,7 +78,27 @@ if (Test-Path $StorePython) {
     $PythonExe = (Get-Command python -ErrorAction SilentlyContinue).Source
     if (-not $PythonExe) { $PythonExe = "python" }
 }
-$PythonExeEscaped = $PythonExe -replace '\\', '\\'
+
+# Setup dedicated virtual environment for External Server in destination
+Write-Host "Setting up Python virtual environment..."
+$VenvDir = "$AntigravityPluginDir\ExternalServer\.venv"
+if (-not (Test-Path $VenvDir)) {
+    & $PythonExe -m venv $VenvDir
+    if ($LASTEXITCODE -ne 0) {
+        Write-Error "Failed to create Python virtual environment."
+        exit 1
+    }
+}
+$VenvPython = "$VenvDir\Scripts\python.exe"
+$PythonExeEscaped = $VenvPython -replace '\\', '\\'
+
+# Install External Server runtime dependencies via pip
+Write-Host "Installing External Server dependencies via pip..."
+& $VenvPython -m pip install -r "$AntigravityPluginDir\ExternalServer\requirements.txt"
+if ($LASTEXITCODE -ne 0) {
+    Write-Error "Failed to install Python dependencies via pip. Setup process failed."
+    exit 1
+}
 
 # Resolve repository root dynamically (parent of the UnrealEngine folder)
 $RepoRoot = (Get-Item $PluginDir).Parent.FullName -replace '\\', '\\'
@@ -200,3 +220,21 @@ if ($useKiloCode) {
     Write-Host "  Antigravity plugin : $AntigravityPluginDir"
     Write-Host "  MCP config         : $PluginConfigPath"
 }
+
+Write-Host ""
+Write-Host "------------------------------------------------------------------------"
+Write-Host "Next Step (Highly Recommended):"
+Write-Host "  Ensure Unreal Editor is running, open a new conversation with your"
+if ($useKiloCode) {
+    Write-Host "  AI assistant (which will follow the linked Kilo rules), and ask to:"
+} else {
+    Write-Host "  AI assistant, and prompt it to run the setup:"
+}
+Write-Host ""
+Write-Host "    'Run project setup and index the project'"
+Write-Host ""
+Write-Host "  This will scan your project structures, generate the local 'unreal-env'"
+Write-Host "  skill, and build a permanent OKF project-index skill to optimize all"
+Write-Host "  subsequent agent conversations."
+Write-Host "------------------------------------------------------------------------"
+

@@ -23,7 +23,7 @@ The system consists of two primary servers:
 | 1 | C++ Blueprint Schema Tool | Implement asset-registry-based Blueprint `.uasset` structural schema extraction without loading object | None | DONE | 6ea4e77e-43c9-4698-be5a-a4d48d645ff9 |
 | 2 | C++ T3D Injection & UHT Metadata | Validate T3D Node GUID injection and implement UHT reflection data extraction at runtime | M1 | IN_PROGRESS | aa637e1d-1edf-40c8-aa6e-1b9789ff504b |
 | 3 | Python AST & Compilation DB | Setup python libclang AST parsing and automated `compile_commands.json` generation via UBT | None | IN_PROGRESS | 16164949-72df-4c84-85c7-2dcfaca926e6 |
-| 4 | Python Watcher & Vector DB | Implement filesystem watcher for incremental AST caching and Vector DB semantic search | M3 | PAUSED | TBD |
+| 4 | Python Watcher & Vector DB | Implement filesystem watcher for incremental AST caching and Vector DB semantic search | M3 | DONE | d114107c-12aa-4282-bf23-25de60ff4dfc |
 | 5 | E2E Testing Suite | Develop E2E integration test suite, headless test script, and verify Dual-MCP communication flow | M2, M4 | PAUSED | TBD |
 
 ## Interface Contracts
@@ -39,6 +39,9 @@ The system consists of two primary servers:
   - `query_cpp_ast`
   - `generate_compile_commands`
   - `search_vector_db`
+  - `search_similar_blueprints`
+  - `index_all_blueprints`
+  - `format_t3d_layout`
 
 ### C++ Blueprint Schema JSON Format
 ```json

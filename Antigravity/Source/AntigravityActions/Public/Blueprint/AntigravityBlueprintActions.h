@@ -74,8 +74,12 @@ private:
 	/** Set default property values on a Blueprint's Class Default Object. */
 	FAntigravityActionResult ExecuteSetDefaults(const TSharedRef<FJsonObject>& Params, FAntigravityActionResult& Result);
 
+	FAntigravityActionResult ExecuteExportBlueprintSummary(const TSharedRef<FJsonObject>& Params, FAntigravityActionResult& Result);
+
+	FAntigravityActionResult ExecuteCheckAssetState(const TSharedRef<FJsonObject>& Params, FAntigravityActionResult& Result);
+
 	// =========================================================================
-	// New executors
+	// Helpers / Utilities
 	// =========================================================================
 
 	/**

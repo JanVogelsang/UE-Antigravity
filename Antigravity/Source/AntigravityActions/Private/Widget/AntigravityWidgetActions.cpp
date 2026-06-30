@@ -2526,7 +2526,7 @@ FAntigravityActionResult FAntigravityWidgetActions::ExecuteInstantiateUIHierarch
 		{
 			for (auto PropIt = (*PropertiesObj)->Values.CreateConstIterator(); PropIt; ++PropIt)
 			{
-				FString PropName = PropIt.Key();
+				FString PropName = FString(*PropIt.Key());
 				FString PropVal;
 				if (PropIt.Value()->TryGetString(PropVal))
 				{
@@ -2574,7 +2574,7 @@ FAntigravityActionResult FAntigravityWidgetActions::ExecuteInstantiateUIHierarch
 		{
 			for (auto EventIt = (*EventsObj)->Values.CreateConstIterator(); EventIt; ++EventIt)
 			{
-				FString EventName = EventIt.Key();
+				FString EventName = FString(*EventIt.Key());
 				FString FunctionName;
 				EventIt.Value()->TryGetString(FunctionName);
 				if (ApplyWidgetEventHelper(WidgetBP, NewWidget, EventName, FunctionName, Result))

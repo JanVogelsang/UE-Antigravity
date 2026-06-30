@@ -430,3 +430,90 @@ bool FAntigravityCppReflectionTest::RunTest(const FString& Parameters)
 
 	return true;
 }
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FAntigravitySentinelTest, "Antigravity.Sentinel", EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
+
+bool FAntigravitySentinelTest::RunTest(const FString& Parameters)
+{
+	FString ActorPath = TEXT("/Game/Antigravity_SentinelTestActor");
+
+	// Clean up if existing
+	FAssetRegistryModule& AssetRegistryModule = FModuleManager::LoadModuleChecked<FAssetRegistryModule>("AssetRegistry");
+	FAssetData ExistingActorAsset = AssetRegistryModule.Get().GetAssetByObjectPath(FSoftObjectPath(ActorPath + TEXT(".") + FPackageName::GetShortName(ActorPath)));
+	if (ExistingActorAsset.IsValid() && ExistingActorAsset.GetAsset())
+	{
+		TArray<UObject*> AssetsToDelete;
+		AssetsToDelete.Add(ExistingActorAsset.GetAsset());
+		ObjectTools::DeleteObjects(AssetsToDelete, false);
+	}
+
+	FAntigravityBlueprintActions BlueprintActions;
+
+	// 1. Create a clean Blueprint
+	{
+		TSharedRef<FJsonObject> Params = MakeShared<FJsonObject>();
+		Params->SetStringField(TEXT("_tool_name"), TEXT("create_blueprint_actor"));
+		Params->SetStringField(TEXT("asset_path"), ActorPath);
+		Params->SetStringField(TEXT("parent_class"), TEXT("Actor"));
+
+		FAntigravityActionResult Res = BlueprintActions.ExecuteAction(Params);
+		TestTrue(TEXT("Should create a clean blueprint actor"), Res.bSuccess);
+	}
+
+	// Make sure it exists and load it
+	UPackage* Package = FindPackage(nullptr, *ActorPath);
+	TestNotNull(TEXT("Package should exist"), Package);
+
+	if (Package)
+	{
+		// 2. Mark package dirty (simulate user edit)
+		Package->MarkPackageDirty();
+		TestTrue(TEXT("Package should be dirty"), Package->IsDirty());
+
+		// 3. Try to run a modifying action (e.g. add a variable)
+		{
+			TSharedRef<FJsonObject> Params = MakeShared<FJsonObject>();
+			Params->SetStringField(TEXT("_tool_name"), TEXT("add_blueprint_variable"));
+			Params->SetStringField(TEXT("asset_path"), ActorPath);
+			Params->SetStringField(TEXT("variable_name"), TEXT("TestSentinelVar"));
+			Params->SetStringField(TEXT("variable_type"), TEXT("float"));
+
+			FAntigravityActionResult Res = BlueprintActions.ExecuteAction(Params);
+			TestFalse(TEXT("Sentinel should block modifications when package is dirty"), Res.bSuccess);
+			TestTrue(TEXT("Result should contain SENTINEL ERROR warning/error"), Res.Errors.Num() > 0 && Res.Errors[0].Contains(TEXT("SENTINEL ERROR")));
+		}
+
+		// 4. Test check_asset_state tool
+		{
+			TSharedRef<FJsonObject> Params = MakeShared<FJsonObject>();
+			Params->SetStringField(TEXT("_tool_name"), TEXT("check_asset_state"));
+			Params->SetStringField(TEXT("asset_path"), ActorPath);
+
+			FAntigravityActionResult Res = BlueprintActions.ExecuteAction(Params);
+			TestTrue(TEXT("check_asset_state should execute successfully"), Res.bSuccess);
+
+			TSharedPtr<FJsonObject> JsonObj;
+			TSharedRef<TJsonReader<>> Reader = TJsonReaderFactory<>::Create(Res.ResultMessage);
+			TestTrue(TEXT("check_asset_state output should be JSON"), FJsonSerializer::Deserialize(Reader, JsonObj));
+			if (JsonObj.IsValid())
+			{
+				TestTrue(TEXT("bIsDirty should be true"), JsonObj->GetBoolField(TEXT("bIsDirty")));
+			}
+		}
+
+		// 5. Clean up the package (un-dirty it and delete)
+		Package->SetDirtyFlag(false);
+	}
+
+	// Clean up asset
+	FAssetData ActorAsset = AssetRegistryModule.Get().GetAssetByObjectPath(FSoftObjectPath(ActorPath + TEXT(".") + FPackageName::GetShortName(ActorPath)));
+	if (ActorAsset.IsValid() && ActorAsset.GetAsset())
+	{
+		TArray<UObject*> AssetsToDelete;
+		AssetsToDelete.Add(ActorAsset.GetAsset());
+		ObjectTools::DeleteObjects(AssetsToDelete, false);
+	}
+
+	return true;
+}
+

@@ -180,7 +180,7 @@ FAntigravityActionResult FAntigravityDataAssetActions::ExecuteSetDataAssetProper
 
 	for (const auto& Pair : (*PropertiesObj)->Values)
 	{
-		FString PropName = Pair.Key;
+		FString PropName = FString(*Pair.Key);
 		FProperty* Prop = DataAsset->GetClass()->FindPropertyByName(FName(*PropName));
 		if (!Prop)
 		{

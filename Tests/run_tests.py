@@ -2,15 +2,18 @@ import os
 import sys
 
 # Add pywin32 dll directory to path for Python 3.8+ on Windows
-dll_path = r"C:\Users\Jan\AppData\Local\Packages\PythonSoftwareFoundation.Python.3.13_qbz5n2kfra8p0\LocalCache\local-packages\Python313\site-packages\pywin32_system32"
-if os.path.exists(dll_path):
-    os.add_dll_directory(dll_path)
-else:
-    # Fallback to check other potential locations
-    user_profile = os.environ.get("USERPROFILE", "")
-    alt_path = os.path.join(user_profile, r"AppData\Local\Packages\PythonSoftwareFoundation.Python.3.13_qbz5n2kfra8p0\LocalCache\local-packages\Python313\site-packages\pywin32_system32")
-    if os.path.exists(alt_path):
-        os.add_dll_directory(alt_path)
+if sys.platform == "win32" and hasattr(os, "add_dll_directory"):
+    import site
+    site_dirs = site.getsitepackages()
+    if hasattr(site, "getusersitepackages"):
+        site_dirs.append(site.getusersitepackages())
+    for s_dir in site_dirs:
+        pywin_path = os.path.join(s_dir, "pywin32_system32")
+        if os.path.exists(pywin_path):
+            try:
+                os.add_dll_directory(pywin_path)
+            except Exception:
+                pass
 
 import pytest
 sys.exit(pytest.main(["-v", "-s"]))

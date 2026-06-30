@@ -54,6 +54,11 @@
 // Misc
 #include "ScopedTransaction.h"
 #include "Internationalization/Regex.h"
+#include "Subsystems/AssetEditorSubsystem.h"
+#include "ISourceControlModule.h"
+#include "ISourceControlProvider.h"
+#include "SourceControlHelpers.h"
+#include "Editor.h"
 
 // ============================================================================
 // Statics / Lifecycle
@@ -184,7 +189,9 @@ TArray<FString> FAntigravityBlueprintActions::GetSupportedToolNames() const
 		TEXT("delete_blueprint_nodes"),
 		TEXT("analyze_blueprint_graph"),
 		TEXT("execute_batch_blueprint_operations"),
-		TEXT("get_blueprint_schema")
+		TEXT("get_blueprint_schema"),
+		TEXT("export_blueprint_summary"),
+		TEXT("check_asset_state")
 	};
 }
 
@@ -353,7 +360,44 @@ FAntigravityActionResult FAntigravityBlueprintActions::ExecuteAction(const TShar
 	bool bIsReadOnly = (ToolName == TEXT("get_blueprint_info") ||
 	                    ToolName == TEXT("verify_blueprint_connections") ||
 	                    ToolName == TEXT("analyze_blueprint_graph") ||
-	                    ToolName == TEXT("get_blueprint_schema"));
+	                    ToolName == TEXT("get_blueprint_schema") ||
+	                    ToolName == TEXT("export_blueprint_summary") ||
+	                    ToolName == TEXT("check_asset_state"));
+
+	// Sentinel check for modifying tools
+	if (!bIsReadOnly)
+	{
+		FString AssetPath;
+		if (Params->TryGetStringField(TEXT("asset_path"), AssetPath))
+		{
+			AssetPath = ExpandAssetPath(AssetPath);
+
+			// 1. In-memory Dirty Check
+			UPackage* Package = FindPackage(nullptr, *AssetPath);
+			if (Package && Package->IsDirty())
+			{
+				FAntigravityActionResult FailResult;
+				FailResult.bSuccess = false;
+				FailResult.Errors.Add(FString::Printf(TEXT("SENTINEL ERROR: Asset '%s' has unsaved changes in Unreal Editor. Please save the asset in the editor first."), *AssetPath));
+				return FailResult;
+			}
+
+			// 2. Source Control Lock Check
+			ISourceControlModule& SCModule = ISourceControlModule::Get();
+			if (SCModule.IsEnabled() && SCModule.GetProvider().IsAvailable())
+			{
+				FString FilePath = USourceControlHelpers::PackageFilename(AssetPath);
+				FSourceControlStatePtr SCState = SCModule.GetProvider().GetState(FilePath, EStateCacheUsage::Use);
+				if (SCState.IsValid() && (SCState->IsCheckedOutOther() || !SCState->CanEdit()))
+				{
+					FAntigravityActionResult FailResult;
+					FailResult.bSuccess = false;
+					FailResult.Errors.Add(FString::Printf(TEXT("SENTINEL ERROR: Asset '%s' is locked or checked out by another user in source control."), *AssetPath));
+					return FailResult;
+				}
+			}
+		}
+	}
 
 	TOptional<FScopedTransaction> Transaction;
 	if (!bIsReadOnly)
@@ -382,6 +426,8 @@ FAntigravityActionResult FAntigravityBlueprintActions::ExecuteAction(const TShar
 	else if (ToolName == TEXT("delete_blueprint_nodes"))        Result = ExecuteDeleteNodes(Params, Result);
 	else if (ToolName == TEXT("analyze_blueprint_graph"))       Result = ExecuteAnalyzeBlueprintGraph(Params, Result);
 	else if (ToolName == TEXT("execute_batch_blueprint_operations")) Result = ExecuteBatchOperations(Params, Result);
+	else if (ToolName == TEXT("export_blueprint_summary"))      Result = ExecuteExportBlueprintSummary(Params, Result);
+	else if (ToolName == TEXT("check_asset_state"))             Result = ExecuteCheckAssetState(Params, Result);
 	else
 	{
 		// Legacy param-based fallback dispatch
@@ -1400,7 +1446,7 @@ FAntigravityActionResult FAntigravityBlueprintActions::ExecuteSetDefaults(const 
 	for (const auto& Pair : (*DefaultsObj)->Values)
 	{
 		// Support "Component.Property" notation
-		FString FullKey  = Pair.Key;
+		FString FullKey  = FString(*Pair.Key);
 		FString CompName = TEXT("");
 		FString PropName = FullKey;
 
@@ -4164,6 +4210,102 @@ FAntigravityActionResult FAntigravityBlueprintActions::ExecuteDeleteNodes(const 
 }
 
 // ============================================================================
+// BSF (Blueprint Summary Format) Export (NEW)
+// ============================================================================
+
+FAntigravityActionResult FAntigravityBlueprintActions::ExecuteExportBlueprintSummary(const TSharedRef<FJsonObject>& Params, FAntigravityActionResult& Result)
+{
+	FString AssetPath;
+	if (!Params->TryGetStringField(TEXT("asset_path"), AssetPath))
+	{
+		Result.Errors.Add(TEXT("Missing required parameter: 'asset_path'"));
+		return Result;
+	}
+
+	UBlueprint* Blueprint = LoadObject<UBlueprint>(nullptr, *AssetPath);
+	if (!Blueprint)
+	{
+		Result.Errors.Add(FString::Printf(TEXT("Failed to load blueprint at %s"), *AssetPath));
+		return Result;
+	}
+
+	TSharedPtr<FJsonObject> RootObject = MakeShared<FJsonObject>();
+	RootObject->SetStringField(TEXT("asset_path"), AssetPath);
+	RootObject->SetStringField(TEXT("parent_class"), Blueprint->ParentClass ? Blueprint->ParentClass->GetName() : TEXT("None"));
+	RootObject->SetStringField(TEXT("compile_status"), Blueprint->Status == BS_UpToDate ? TEXT("Valid") : TEXT("Dirty/Error"));
+
+	TArray<TSharedPtr<FJsonValue>> VariablesArray;
+	for (const FBPVariableDescription& Var : Blueprint->NewVariables)
+	{
+		TSharedPtr<FJsonObject> VarObj = MakeShared<FJsonObject>();
+		VarObj->SetStringField(TEXT("name"), Var.VarName.ToString());
+		VarObj->SetStringField(TEXT("type"), GetVarTypeString(Var.VarType));
+		VarObj->SetStringField(TEXT("category"), Var.Category.ToString());
+		VariablesArray.Add(MakeShared<FJsonValueObject>(VarObj));
+	}
+	RootObject->SetArrayField(TEXT("variables"), VariablesArray);
+
+	TArray<TSharedPtr<FJsonValue>> ComponentsArray;
+	if (Blueprint->SimpleConstructionScript)
+	{
+		for (USCS_Node* Node : Blueprint->SimpleConstructionScript->GetAllNodes())
+		{
+			if (!Node || !Node->ComponentTemplate) continue;
+			TSharedPtr<FJsonObject> CompObj = MakeShared<FJsonObject>();
+			CompObj->SetStringField(TEXT("name"), Node->GetVariableName().ToString());
+			CompObj->SetStringField(TEXT("class"), Node->ComponentTemplate->GetClass()->GetName());
+			
+			USCS_Node* ParentNode = Blueprint->SimpleConstructionScript->FindParentNode(Node);
+			CompObj->SetStringField(TEXT("parent"), ParentNode ? ParentNode->GetVariableName().ToString() : TEXT("DefaultSceneRoot"));
+			
+			ComponentsArray.Add(MakeShared<FJsonValueObject>(CompObj));
+		}
+	}
+	RootObject->SetArrayField(TEXT("components"), ComponentsArray);
+
+	TArray<TSharedPtr<FJsonValue>> GraphsArray;
+	auto ProcessGraphs = [&](const TArray<UEdGraph*>& Graphs)
+	{
+		for (UEdGraph* Graph : Graphs)
+		{
+			if (!Graph) continue;
+			TSharedPtr<FJsonObject> GraphObj = MakeShared<FJsonObject>();
+			GraphObj->SetStringField(TEXT("name"), Graph->GetName());
+			GraphObj->SetNumberField(TEXT("node_count"), Graph->Nodes.Num());
+
+			TSet<UEdGraphNode*> NodeSet(Graph->Nodes);
+			FString LogicSummary = BuildCompactConnectionReport(NodeSet, Graph->GetName());
+			GraphObj->SetStringField(TEXT("logic_summary"), LogicSummary);
+
+			GraphsArray.Add(MakeShared<FJsonValueObject>(GraphObj));
+		}
+	};
+	ProcessGraphs(Blueprint->UbergraphPages);
+	ProcessGraphs(Blueprint->FunctionGraphs);
+	ProcessGraphs(Blueprint->MacroGraphs);
+	
+	RootObject->SetArrayField(TEXT("graphs"), GraphsArray);
+
+	TArray<TSharedPtr<FJsonValue>> InterfacesArray;
+	for (const FBPInterfaceDescription& Interface : Blueprint->ImplementedInterfaces)
+	{
+		if (Interface.Interface)
+		{
+			InterfacesArray.Add(MakeShared<FJsonValueString>(Interface.Interface->GetName()));
+		}
+	}
+	RootObject->SetArrayField(TEXT("interfaces"), InterfacesArray);
+
+	FString OutputString;
+	TSharedRef<TJsonWriter<>> Writer = TJsonWriterFactory<>::Create(&OutputString);
+	FJsonSerializer::Serialize(RootObject.ToSharedRef(), Writer);
+
+	Result.bSuccess = true;
+	Result.ResultMessage = OutputString;
+	return Result;
+}
+
+// ============================================================================
 // ExecuteBatchOperations (NEW — Transactional Batching)
 // ============================================================================
 
@@ -4421,6 +4563,51 @@ FAntigravityActionResult FAntigravityBlueprintActions::ExecuteGetBlueprintSchema
 		Result.Warnings.Add(TEXT("Blueprint asset was loaded in memory as a fallback because custom tags were not populated in the Asset Registry. Please save the asset to enable fast non-loading schema extraction."));
 	}
 
+	return Result;
+}
+
+FAntigravityActionResult FAntigravityBlueprintActions::ExecuteCheckAssetState(const TSharedRef<FJsonObject>& Params, FAntigravityActionResult& Result)
+{
+	FString AssetPath = Params->GetStringField(TEXT("asset_path"));
+	AssetPath = ExpandAssetPath(AssetPath);
+
+	UPackage* Package = FindPackage(nullptr, *AssetPath);
+	bool bIsDirty = Package ? Package->IsDirty() : false;
+
+	bool bIsOpen = false;
+	UObject* Asset = LoadObject<UObject>(nullptr, *AssetPath);
+	if (Asset && GEditor)
+	{
+		UAssetEditorSubsystem* AssetEditorSubsystem = GEditor->GetEditorSubsystem<UAssetEditorSubsystem>();
+		if (AssetEditorSubsystem)
+		{
+			bIsOpen = (AssetEditorSubsystem->FindEditorForAsset(Asset, false) != nullptr);
+		}
+	}
+
+	bool bIsLocked = false;
+	ISourceControlModule& SCModule = ISourceControlModule::Get();
+	if (SCModule.IsEnabled() && SCModule.GetProvider().IsAvailable())
+	{
+		FString FilePath = USourceControlHelpers::PackageFilename(AssetPath);
+		FSourceControlStatePtr SCState = SCModule.GetProvider().GetState(FilePath, EStateCacheUsage::Use);
+		if (SCState.IsValid())
+		{
+			bIsLocked = SCState->IsCheckedOutOther() || !SCState->CanEdit();
+		}
+	}
+
+	TSharedPtr<FJsonObject> ResponseObj = MakeShared<FJsonObject>();
+	ResponseObj->SetBoolField(TEXT("bIsDirty"), bIsDirty);
+	ResponseObj->SetBoolField(TEXT("bIsOpen"), bIsOpen);
+	ResponseObj->SetBoolField(TEXT("bIsLocked"), bIsLocked);
+
+	FString ResponseString;
+	TSharedRef<TJsonWriter<>> Writer = TJsonWriterFactory<>::Create(&ResponseString);
+	FJsonSerializer::Serialize(ResponseObj.ToSharedRef(), Writer);
+
+	Result.bSuccess = true;
+	Result.ResultMessage = ResponseString;
 	return Result;
 }
 

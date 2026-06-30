@@ -30,7 +30,7 @@ $ErrorActionPreference = "Stop"
 
 # Get absolute path for repository root
 $RepoRoot = Resolve-Path $PSScriptRoot
-$PluginDir = Join-Path $RepoRoot "Antigravity"
+$PluginDir = if (Test-Path (Join-Path $RepoRoot "Antigravity.uplugin")) { $RepoRoot } else { Join-Path $RepoRoot "Antigravity" }
 $UpluginPath = Join-Path $PluginDir "Antigravity.uplugin"
 
 if (-not (Test-Path $UpluginPath)) {

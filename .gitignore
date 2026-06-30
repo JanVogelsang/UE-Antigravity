@@ -44,3 +44,16 @@ Packaged/
 
 # Dynamic local environment skill
 UnrealEngine/skills/unreal-env/
+
+# Python caching & environments
+__pycache__/
+*.pyc
+.pytest_cache/
+.venv/
+venv/
+ENV/
+
+# Local databases and vector db archives
+*.db
+vector_db_*/
+vector_db_*.zip
