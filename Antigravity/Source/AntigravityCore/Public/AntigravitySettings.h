@@ -60,18 +60,6 @@ public:
 		ToolTip = "When enabled, replaces the built-in protected file list with only your custom patterns."))
 	bool bOverrideDefaultProtectedPaths = false;
 
-	// ============================================================================
-	// Skills Settings
-	// ============================================================================
-
-	/** Enable developer diagnostics and debugging loop for skills.
-	 *  When enabled, Antigravity tracks active skills, detects failures or warnings,
-	 *  and appends diagnostic and debugging information to the response. */
-	UPROPERTY(Config, EditAnywhere, BlueprintReadOnly, Category = "Skills",
-		meta = (DisplayName = "Enable Skills Debugging and Diagnostics",
-		ToolTip = "Analyze tool failures and compilation errors while a skill is active and provide diagnostic logs to assist developers in debugging."))
-	bool bEnableSkillsDebugDiagnostics;
-
 
 
 	// ============================================================================

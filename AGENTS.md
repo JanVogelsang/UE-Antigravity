@@ -1,0 +1,104 @@
+# UE-Antigravity - Project Overview & Agent Instructions
+
+This document provides a high-level overview of the UE-Antigravity repository, its architectural design decisions, and common workflows. All future agents working in this repository should refer to this document to understand the setup and constraints.
+
+## Plugin Nature & Context
+**IMPORTANT:** This repository contains the source code for a **plugin**, not a standalone game project. The purpose of this codebase is to be compiled and installed into *other* target Unreal Engine game projects to give them Antigravity AI capabilities.
+When working in this repository, you are developing the integration infrastructure itself.
+
+## Purpose & Architecture
+UE-Antigravity is a high-performance integration that connects the Google Antigravity 2.0 AI coding assistant directly to a running Unreal Engine Editor. It operates using a **Dual-MCP Server** architecture:
+
+1. **Internal C++ MCP Server (`Antigravity/`)**: An Unreal Engine Editor plugin running an in-process HTTP loopback server on port `18777`. It executes Game Thread operations like reading Blueprint graphs, adding variables, and injecting nodes. **Design Decision:** This directory strictly handles Editor integration and MCP server capabilities. It must *not* manage static agent instructions or skills.
+2. **External Agent & MCP Server (`UnrealEngine/`)**: The Antigravity agent plugin. It handles all LLM logic, static instructions, and `SKILL.md` documents. It includes a `bridge.exe` that translates MCP JSON-RPC messages to HTTP loopback calls targeting the editor, and a Python AST server for C++ symbol resolution, file watching, and semantic search.
+
+## Repository Setup
+*   **`Antigravity/`**: C++ plugin for the Unreal Editor.
+*   **`UnrealEngine/`**: Agent plugin, MCP configurations, bridge proxy, Python AST server, and static skills. Contains its own `AGENTS.md` with detailed coding guidelines for agents working inside the target game projects.
+*   **`Documentation/`**: Contains core system documents. Agents should read `PROJECT.md` (architecture & milestones), `DEVELOPMENT.md` (environment & build rules), and `TEST_INFRA.md` (E2E testing matrix).
+*   **`Tests/`**: Automated integration and unit tests (`pytest` based) testing the Dual-MCP communication flow against a target game project.
+
+## Common Workflows
+
+### 1. Building the Plugin
+Unreal Engine compilation relies on UBT. Running builds concurrently can trigger a conflicting UAT instance error. Always run the build script from the repository root using the UAT mutex bypass:
+```powershell
+$env:uebp_UATMutexNoWait = '1'
+powershell -ExecutionPolicy Bypass -File .\build_plugin.ps1 -NoZip
+```
+This builds the plugin and usually copies the binaries to the target test game project.
+
+### 2. Running Automated Tests
+Always use the PowerShell wrapper to ensure the correct Python interpreter (which has `pip` and `pytest`) is used, avoiding conflicts with MSYS2 environments.
+*   To run Python tests: `powershell -File .\Tests\run_tests.ps1`
+*   To run all C++ and Python tests sequentially: `powershell -File .\Tests\run_all_tests.ps1`
+
+### 3. Agent Coding Guidelines & Constraints
+Before writing code or utilizing MCP tools, you **MUST** read the detailed guidelines located at `UnrealEngine/AGENTS.md`. Key highlights include:
+*   **Tool Priority**: Prefer native Unreal Engine MCP tools over executing Python scripts.
+*   **AST Updates**: Whenever new C++ files or headers are added, invoke `generate_compile_commands` to regenerate `compile_commands.json` so the Python AST server remains accurate.
+*   **Blueprint Node Generation**: Always include a unique, valid `NodeGuid` (32-char hex string) when generating T3D representations.
+*   **The "Ponytail" Ladder**: Follow strict evaluation before writing new C++ or Blueprint logic.
+
+### 4. Target Project Context vs. Plugin Context
+Do not confuse the UE-Antigravity plugin development context with the context of the game project using it.
+*   **When developing the plugin (this repository):** Refer to `Documentation/PROJECT.md` and `Documentation/DEVELOPMENT.md` for architectural context.
+*   **When operating inside a target game project:** The auto-generated `project-index` skill (`.agents/skills/project-index/`) is used to understand the host game's gameplay specifications and systems. Do not look for a `project-index` skill to understand the UE-Antigravity plugin architecture itself.
+
+## 5. Installing & Testing on a Target Project
+
+These steps should be used whenever you need to verify that changes to the `UE-Antigravity` repository correctly integrate with a host game. We use the local project `C:\Users\janv1\Documents\Unreal Projects\tau-game` as our standard target project for this example.
+
+### 5.1 Install the C++ Editor Plugin (`Antigravity`)
+
+The C++ Editor plugin handles game-thread operations and must be present in the target project's `Plugins` directory.
+
+1. Locate the target game project directory (e.g., `C:\Users\janv1\Documents\Unreal Projects\tau-game`).
+2. If it does not exist, create a `Plugins` folder at the root of the target project.
+3. Copy the entire `Antigravity` folder from the `UE-Antigravity` repository into the target project's `Plugins` folder:
+   ```powershell
+   # Run from the UE-Antigravity repository root
+   Copy-Item -Path ".\Antigravity" -Destination "C:\Users\janv1\Documents\Unreal Projects\tau-game\Plugins\Antigravity" -Recurse -Force
+   ```
+4. **Compile the Plugin**: Open the target project (`tau-game`) in the Unreal Engine Editor. If Unreal Engine prompts to rebuild missing modules for the `Antigravity` plugin, choose **Yes**.
+
+### 5.2 Install the Agent Plugin (`UnrealEngine`)
+
+The Agent plugin sets up the Python AST server, the MCP JSON-RPC bridge, and agent skills.
+
+1. From the root of the `UE-Antigravity` repository, execute the installation script:
+   ```powershell
+   powershell -ExecutionPolicy Bypass -File .\UnrealEngine\install.ps1
+   ```
+2. When the script prompts for the `target project root directory`, enter the absolute path to the target project:
+   `C:\Users\janv1\Documents\Unreal Projects\tau-game`
+3. When prompted for an AI assistant, select your target assistant (press Enter for Antigravity 2.0).
+4. The installer script will automatically:
+   - Create a Python virtual environment inside the target project.
+   - Install dependencies for the `bridge` proxy and `ExternalServer`.
+   - Copy the MCP tools to `tau-game\.agents\plugins\UnrealEngine`.
+   - Write the `mcp_config.json` inside the target workspace.
+
+### 5.3 Verify Integration (Manual E2E Testing)
+
+To verify the integration manually, you must open an agent conversation *inside* the target project workspace (`tau-game`):
+
+1. **Start the Editor**: Ensure the `tau-game` Unreal Engine Editor is running (this hosts the internal C++ server on port `18777`).
+2. **Initialize Workspace**: In the agent conversation for `tau-game`, run the initial setup prompt:
+   > "Run project setup and index the project"
+   This triggers the `unreal-setup` skill, generates the `unreal-env`, and creates the `project-index` skill inside `tau-game`.
+3. **Test Queries**: Verify the Dual-MCP servers are functioning by asking the agent to perform specific Unreal Engine tasks:
+   - **C++ AST Server**: *"Find the declaration for the class ATauCharacter"*
+   - **Editor Loopback Server**: *"Extract the Blueprint variables of BP_TauPlayerController"*
+
+### 5.4 Run Automated Integration Tests
+
+The `UE-Antigravity` repository contains an automated E2E test suite (`pytest`) that connects a mock client to the Python bridge and the Editor loopback server.
+
+1. Ensure the target game project (`tau-game`) is running in the Unreal Engine Editor.
+2. Ensure you are using the correct Python interpreter (usually the Windows Store app python, avoiding MSYS2).
+3. Execute the automated test wrapper from the `UE-Antigravity` root:
+   ```powershell
+   powershell -File .\Tests\run_tests.ps1
+   ```
+   This will spin up the mock client, interface with the target project's `tau-game` editor via port `18777`, and validate all 7 core features (Blueprint Schema Retrieval, Graph Injection, UHT Reflection, AST Queries, etc.).

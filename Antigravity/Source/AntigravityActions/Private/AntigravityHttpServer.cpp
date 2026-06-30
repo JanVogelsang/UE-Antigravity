@@ -13,7 +13,6 @@
 #include "Interfaces/IPluginManager.h"
 #include "Async/Async.h"
 #include "HAL/PlatformFileManager.h"
-#include "AntigravitySkillsManager.h"
 #include "AntigravitySettings.h"
 #include "AntigravityCoreModule.h"
 #include "Modules/ModuleManager.h"
@@ -60,7 +59,6 @@ void FAntigravityHttpServer::Start()
 	{
 		Router->BindRoute(FHttpPath(TEXT("/api/tools")), EHttpServerRequestVerbs::VERB_GET, FHttpRequestHandler::CreateStatic(&FAntigravityHttpServer::HandleListToolsRequest));
 		Router->BindRoute(FHttpPath(TEXT("/api/execute_tool")), EHttpServerRequestVerbs::VERB_POST, FHttpRequestHandler::CreateStatic(&FAntigravityHttpServer::HandleExecuteToolRequest));
-		Router->BindRoute(FHttpPath(TEXT("/api/skills")), EHttpServerRequestVerbs::VERB_GET, FHttpRequestHandler::CreateStatic(&FAntigravityHttpServer::HandleGetSkillsRequest));
 		FHttpServerModule::Get().StartAllListeners();
 	}
 }
@@ -309,21 +307,3 @@ bool FAntigravityHttpServer::HandleExecuteToolRequest(const FHttpServerRequest& 
 	return true;
 }
 
-bool FAntigravityHttpServer::HandleGetSkillsRequest(const FHttpServerRequest& Request, const FHttpResultCallback& OnComplete)
-{
-	FAntigravitySkillsManager SkillsManager;
-	SkillsManager.Initialize();
-
-	FString SkillsContext = SkillsManager.GetAllSkillsContextString();
-
-	TSharedPtr<FJsonObject> ResponseObj = MakeShared<FJsonObject>();
-	ResponseObj->SetStringField(TEXT("skills_context"), SkillsContext);
-
-	FString ResponseString;
-	TSharedRef<TJsonWriter<>> Writer = TJsonWriterFactory<>::Create(&ResponseString);
-	FJsonSerializer::Serialize(ResponseObj.ToSharedRef(), Writer);
-
-	TUniquePtr<FHttpServerResponse> Response = FHttpServerResponse::Create(ResponseString, TEXT("application/json"));
-	OnComplete(MoveTemp(Response));
-	return true;
-}

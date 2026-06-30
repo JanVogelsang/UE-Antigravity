@@ -18,15 +18,8 @@ if (-not $TargetProjectDir) {
 Write-Host "Installing to: $TargetProjectDir"
 
 $AntigravityPluginDir = "$TargetProjectDir\.agents\plugins\UnrealEngine"
-$BridgePath = "$PluginDir\bridge.exe"
 
-# 1. Compile Bridge if missing
-if (-not (Test-Path $BridgePath)) {
-    Write-Host "Compiling MCP Bridge..."
-    Start-Process -FilePath "$PluginDir\src\build_bridge.bat" -WorkingDirectory "$PluginDir\src" -Wait -NoNewWindow
-}
-
-# 2. Setup Antigravity plugin directory
+# 1. Setup Antigravity plugin directory
 Write-Host "Setting up Antigravity..."
 if (-not (Test-Path $AntigravityPluginDir)) {
     New-Item -ItemType Directory -Force -Path $AntigravityPluginDir | Out-Null
@@ -34,10 +27,8 @@ if (-not (Test-Path $AntigravityPluginDir)) {
 $ResolvedPluginDir = (Resolve-Path $PluginDir).Path
 $ResolvedDestDir = (Resolve-Path $AntigravityPluginDir).Path
 if ($ResolvedPluginDir -ne $ResolvedDestDir) {
-    Copy-Item -Path "$PluginDir\*" -Destination $AntigravityPluginDir -Recurse -Force -Exclude "main.obj", "bridge.exe"
-    Copy-Item -Path "$PluginDir\bridge.exe" -Destination $AntigravityPluginDir -Force -ErrorAction SilentlyContinue
+    Copy-Item -Path "$PluginDir\*" -Destination $AntigravityPluginDir -Recurse -Force
 }
-
 # 2.5 Setup Workspace AGENTS.md
 Write-Host "Setting up AGENTS.md at workspace root..."
 $TargetAgentsPath = "$TargetProjectDir\AGENTS.md"
@@ -100,10 +91,16 @@ if ($LASTEXITCODE -ne 0) {
     exit 1
 }
 
+Write-Host "Installing Bridge dependencies via pip..."
+& $VenvPython -m pip install -r "$AntigravityPluginDir\bridge\requirements.txt"
+if ($LASTEXITCODE -ne 0) {
+    Write-Error "Failed to install Python dependencies via pip for bridge. Setup process failed."
+    exit 1
+}
+
 # Resolve repository root dynamically (parent of the UnrealEngine folder)
 $RepoRoot = (Get-Item $PluginDir).Parent.FullName -replace '\\', '\\'
 $PluginDirEscaped = $AntigravityPluginDir -replace '\\', '\\'
-$BridgeDestPath = "$AntigravityPluginDir\bridge.exe" -replace '\\', '\\'
 
 if ($useKiloCode) {
     # ── Kilo Code ────────────────────────────────────────────────────────────
@@ -154,9 +151,11 @@ if ($useKiloCode) {
   "mcpServers": {
     "unrealengine": {
       "type": "stdio",
-      "command": "$BridgeDestPath",
+      "command": "$PythonExeEscaped",
+      "args": ["-X", "utf8", "-u", "-m", "bridge.main"],
       "env": {
-        "BRIDGE_PROFILE": "$selectedProfile"
+        "BRIDGE_PROFILE": "$selectedProfile",
+        "PYTHONPATH": "$PluginDirEscaped"
       },
       "enabled": true
     },
@@ -195,7 +194,11 @@ if ($useKiloCode) {
   "mcpServers": {
     "unrealengine": {
       "type": "stdio",
-      "command": "$BridgeDestPath",
+      "command": "$PythonExeEscaped",
+      "args": ["-X", "utf8", "-u", "-m", "bridge.main"],
+      "env": {
+        "PYTHONPATH": "$PluginDirEscaped"
+      },
       "enabled": true
     },
     "cpp-ast-rag": {
@@ -219,6 +222,64 @@ if ($useKiloCode) {
     Write-Host "Installation Complete (Antigravity 2.0)."
     Write-Host "  Antigravity plugin : $AntigravityPluginDir"
     Write-Host "  MCP config         : $PluginConfigPath"
+}
+
+# 4. Setup Git Worktree Hooks (Recommended)
+Write-Host "Setting up Git Worktree Hooks..."
+$TargetGithooksDir = "$TargetProjectDir\.githooks"
+$SourceGithooksDir = "$PluginDir\.githooks"
+if (-not (Test-Path $SourceGithooksDir)) {
+    $SourceGithooksDir = "$AntigravityPluginDir\.githooks"
+}
+
+if (Test-Path $SourceGithooksDir) {
+    if (-not (Test-Path $TargetGithooksDir)) {
+        New-Item -ItemType Directory -Force -Path $TargetGithooksDir | Out-Null
+    }
+
+    # 1. Copy the PowerShell logic script (which has a unique name post-checkout.ps1)
+    $SourcePsHook = Join-Path $SourceGithooksDir "post-checkout.ps1"
+    $TargetPsHook = Join-Path $TargetGithooksDir "post-checkout.ps1"
+    if (Test-Path $SourcePsHook) {
+        Copy-Item -Path $SourcePsHook -Destination $TargetPsHook -Force
+    }
+
+    # 2. Safely merge the bash wrapper
+    $SourceBashHook = Join-Path $SourceGithooksDir "post-checkout"
+    $TargetBashHook = Join-Path $TargetGithooksDir "post-checkout"
+    
+    $HookInvocation = "`npowershell.exe -ExecutionPolicy Bypass -File `"`$(dirname `"`$0`")/post-checkout.ps1`" `"`$1`" `"`$2`" `"`$3`""
+
+    if (-not (Test-Path $TargetBashHook)) {
+        Copy-Item -Path $SourceBashHook -Destination $TargetBashHook -Force
+        Write-Host "Created post-checkout hook wrapper."
+    } else {
+        $ExistingContent = Get-Content -Path $TargetBashHook -Raw
+        if ($ExistingContent -notmatch "post-checkout.ps1") {
+            Add-Content -Path $TargetBashHook -Value $HookInvocation
+            Write-Host "Appended Antigravity worktree hook to existing post-checkout hook."
+        } else {
+            Write-Host "Existing post-checkout hook already contains Antigravity configuration."
+        }
+    }
+
+    # 3. Verify if target project is a Git repository
+    if (Test-Path "$TargetProjectDir\.git") {
+        Push-Location $TargetProjectDir
+        
+        # Check if they already have a custom hooksPath configured
+        $CurrentHooksPath = (git config core.hooksPath) 2>$null
+        if ($null -eq $CurrentHooksPath -or $CurrentHooksPath -eq "" -or $CurrentHooksPath -eq ".githooks") {
+            git config core.hooksPath .githooks
+            Write-Host "Configured target Git repository to use .githooks folder."
+        } else {
+            Write-Host "Warning: Target project already has a custom core.hooksPath configured ($CurrentHooksPath)."
+            Write-Host "To enable Antigravity worktrees, please manually add the post-checkout hook to: $CurrentHooksPath"
+        }
+        Pop-Location
+    } else {
+        Write-Host "Note: Target project does not have a local .git repository. Git hooks path was not configured automatically."
+    }
 }
 
 Write-Host ""

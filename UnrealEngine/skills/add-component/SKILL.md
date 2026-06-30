@@ -1,3 +1,7 @@
+---
+name: add-component
+description: Add and configure a UE component on an existing actor class.
+---
 # Skill: Add Component to Actor
 ## Description
 Add and configure a UE component on an existing actor class.
@@ -24,3 +28,4 @@ Add and configure a UE component on an existing actor class.
 ## Notes
 - Use TObjectPtr<> instead of raw pointers for GC safety
 - VisibleAnywhere shows in viewport, EditAnywhere allows editing
+- If adding a component from a non-core module (e.g., `UMG`, `Niagara`), ensure the module is added to `PublicDependencyModuleNames` in the `.Build.cs` file.

@@ -13,3 +13,21 @@ This directory contains the agent plugin component of the UE-Antigravity integra
 
 ## Project Knowledge & Navigation
 - **Consulting the Project Index**: The entry-point skill `project-index` is auto-loaded by the assistant runner, but the detailed sub-documents in the `references/` subdirectory are not. When you need deep architectural context, gameplay specifications, or system designs, you **MUST** manually read the relevant reference documents under `.agents/skills/project-index/references/` (e.g., `concepts.md`, `gameplay.md`, `systems.md`, `files_index.md`) using the `view_file` tool to align your work with the project's pillars and conventions.
+
+## The Unreal Engine "Ponytail" Ladder
+When writing C++ or Blueprint code, you MUST follow this strict ladder of evaluation. Never write code without checking these rungs first:
+
+1. **Does this need to exist? (YAGNI):** Avoid over-engineering complex C++ class hierarchies or massive Blueprint subsystems if a simpler, localized solution works.
+2. **Already in this codebase? (Reuse):** Aggressively search for existing project-specific `UBlueprintFunctionLibrary` classes, base classes, or macros before creating new ones.
+3. **Does the Engine do it? (Stdlib/Native Platform):** The most important rung for UE. Before writing custom logic, check:
+   * Is there a built-in node for this? (e.g., using `FMath` or `UKismetMathLibrary` instead of custom math).
+   * Is there an Engine subsystem that already handles this? (e.g., using *Enhanced Input*, *Navigation System*, or *Gameplay Ability System*).
+4. **Is there a Plugin for it? (Installed Dependency):** If the project has enabled specific plugins, utilize their features rather than writing redundant native code.
+5. **One line / One Node:** Can this be solved with a simple engine macro or a single specialized node?
+6. **Only then: The minimum that works.**
+
+**Lazy, not Negligent (Caveats):**
+You must NEVER compromise on safety:
+* **Null Checks:** Missing `IsValid()` or `nullptr` checks will hard-crash the UE Editor. This is non-negotiable.
+* **Memory Management:** Proper use of `UPROPERTY()` for garbage collection and `TWeakObjectPtr` where appropriate.
+* **Multiplayer Safety:** Do not take shortcuts that break Server/Client authority (e.g., skipping `Server_` RPCs or `ReplicatedUsing`).

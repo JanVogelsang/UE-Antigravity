@@ -10,9 +10,6 @@ UAntigravityDeveloperSettings::UAntigravityDeveloperSettings()
 {
 	// Safety defaults -- Full Access by default
 	SecurityMode = EAntigravitySecurityMode::FullAccess;
-
-	// Skills defaults
-	bEnableSkillsDebugDiagnostics = false;
 }
 
 const UAntigravityDeveloperSettings* UAntigravityDeveloperSettings::Get()
@@ -52,7 +49,7 @@ FText UAntigravityDeveloperSettings::GetSectionText() const
 
 FText UAntigravityDeveloperSettings::GetSectionDescription() const
 {
-	return FText::FromString(TEXT("Configure the Antigravity AI assistant plugin -- safety settings, protected files, and skills features."));
+	return FText::FromString(TEXT("Configure the Antigravity AI assistant plugin -- safety settings and protected files."));
 }
 
 void UAntigravityDeveloperSettings::PostEditChangeProperty(FPropertyChangedEvent& PropertyChangedEvent)

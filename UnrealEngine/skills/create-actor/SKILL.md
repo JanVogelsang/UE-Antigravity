@@ -1,3 +1,7 @@
+---
+name: create-actor
+description: Create a complete Unreal Engine Actor with C++ class and optional Blueprint child.
+---
 # Skill: Create Actor
 ## Description
 Create a complete Unreal Engine Actor with C++ class and optional Blueprint child.
@@ -13,7 +17,8 @@ Create a complete Unreal Engine Actor with C++ class and optional Blueprint chil
 
 2. **Create the source file** (`Source/[Project]/{{arg}}.cpp`):
    - Implement constructor with CreateDefaultSubobject for components
-   - Set bReplicates if multiplayer is needed
+   - Set `PrimaryActorTick.bCanEverTick = true;` to enable ticking
+   - Set `bReplicates = true;` if multiplayer is needed
    - Implement BeginPlay and Tick
 
 3. **Verify includes** are correct and there are no circular dependencies
@@ -29,6 +34,7 @@ class MYPROJECT_API AMyPickup : public AActor
     GENERATED_BODY()
 public:
     AMyPickup();
+    virtual void Tick(float DeltaTime) override;
 protected:
     virtual void BeginPlay() override;
 private:
