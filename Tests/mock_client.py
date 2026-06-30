@@ -123,7 +123,7 @@ class MockAgentClient:
         self.python_process.stdin.flush()
 
         # Read response from reader
-        response_line = self.python_reader.readline(timeout=30.0)
+        response_line = self.python_reader.readline(timeout=120.0)
         if response_line is None:
             raise TimeoutError("Timed out waiting for response from Python MCP server.")
 

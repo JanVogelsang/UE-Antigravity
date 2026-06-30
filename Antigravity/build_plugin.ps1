@@ -174,7 +174,7 @@ Copy-Item -Path (Join-Path $PackagedPluginDir "Binaries") -Destination $PluginDi
 Copy-Item -Path (Join-Path $PackagedPluginDir "Intermediate") -Destination $PluginDir -Recurse -Force
 
 # Copy to game project
-$GamePluginDir = "C:\Users\Jan\Documents\Unreal Projects\tau-game\Plugins\Antigravity"
+$GamePluginDir = "C:\Users\janv1\Documents\Unreal Projects\tau-game\Plugins\Antigravity"
 if (Test-Path $GamePluginDir) {
     Write-Host "Copying to game project: $GamePluginDir" -ForegroundColor Cyan
     Remove-Item -Path "$GamePluginDir\*" -Recurse -Force -ErrorAction SilentlyContinue

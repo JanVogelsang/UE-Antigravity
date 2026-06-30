@@ -1,3 +1,7 @@
+---
+name: create-interface
+description: Create a Blueprint interface with C++ backing for interactable objects.
+---
 # Skill: Create Blueprint Interface
 ## Description
 Create a Blueprint interface with C++ backing for interactable objects.

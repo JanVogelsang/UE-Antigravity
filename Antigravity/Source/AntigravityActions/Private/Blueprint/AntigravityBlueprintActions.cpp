@@ -2,6 +2,7 @@
 
 #include "Blueprint/AntigravityBlueprintActions.h"
 #include "AntigravityCoreModule.h"
+#include "AntigravityActionsModule.h"
 
 // Kismet / Blueprint API
 #include "Kismet2/KismetEditorUtilities.h"
@@ -372,14 +373,17 @@ FAntigravityActionResult FAntigravityBlueprintActions::ExecuteAction(const TShar
 		{
 			AssetPath = ExpandAssetPath(AssetPath);
 
-			// 1. In-memory Dirty Check
+			// 1. In-memory Dirty Check (Smart Sentinel)
 			UPackage* Package = FindPackage(nullptr, *AssetPath);
 			if (Package && Package->IsDirty())
 			{
-				FAntigravityActionResult FailResult;
-				FailResult.bSuccess = false;
-				FailResult.Errors.Add(FString::Printf(TEXT("SENTINEL ERROR: Asset '%s' has unsaved changes in Unreal Editor. Please save the asset in the editor first."), *AssetPath));
-				return FailResult;
+				if (!FAntigravityActionsModule::AgentDirtiedPackages.Contains(FName(*AssetPath)))
+				{
+					FAntigravityActionResult FailResult;
+					FailResult.bSuccess = false;
+					FailResult.Errors.Add(FString::Printf(TEXT("SENTINEL ERROR: Asset '%s' has unsaved changes made by the user in Unreal Editor. Please save the asset in the editor first."), *AssetPath));
+					return FailResult;
+				}
 			}
 
 			// 2. Source Control Lock Check
@@ -454,6 +458,7 @@ FAntigravityActionResult FAntigravityBlueprintActions::ExecuteAction(const TShar
 		if (Params->TryGetStringField(TEXT("asset_path"), AssetPath))
 		{
 			AssetModificationCounts.FindOrAdd(AssetPath, 0)++;
+			FAntigravityActionsModule::AgentDirtiedPackages.Add(FName(*AssetPath));
 		}
 	}
 
@@ -628,21 +633,51 @@ bool FAntigravityBlueprintActions::DetectInfiniteLoopRisk(UBlueprint* Blueprint,
 {
 	if (!Blueprint) return false;
 	bool bRiskDetected = false;
+	int32 CastCount = 0;
 
+	// Audit UbergraphPages
 	for (UEdGraph* Graph : Blueprint->UbergraphPages)
 	{
 		if (!Graph) continue;
 		for (UEdGraphNode* Node : Graph->Nodes)
 		{
-			UK2Node_Event* EventNode = Cast<UK2Node_Event>(Node);
-			if (!EventNode) continue;
-			FName EventName = EventNode->GetFunctionName();
-			if (EventName == FName(TEXT("ReceiveTick")))
+			if (!Node) continue;
+
+			if (Node->GetClass()->GetName().Contains(TEXT("K2Node_DynamicCast")))
 			{
-				OutWarnings.Add(TEXT("WARNING: EventTick detected. Avoid spawning actors, adding components, or performing heavy operations in Tick — this runs every frame and can cause severe performance degradation."));
-				bRiskDetected = true;
+				CastCount++;
+			}
+
+			UK2Node_Event* EventNode = Cast<UK2Node_Event>(Node);
+			if (EventNode)
+			{
+				FName EventName = EventNode->GetFunctionName();
+				if (EventName == FName(TEXT("ReceiveTick")))
+				{
+					OutWarnings.Add(TEXT("WARNING: EventTick detected. Avoid spawning actors, adding components, or performing heavy operations in Tick — this runs every frame and can cause severe performance degradation."));
+					bRiskDetected = true;
+				}
 			}
 		}
+	}
+
+	// Audit FunctionGraphs for Casts
+	for (UEdGraph* Graph : Blueprint->FunctionGraphs)
+	{
+		if (!Graph) continue;
+		for (UEdGraphNode* Node : Graph->Nodes)
+		{
+			if (Node && Node->GetClass()->GetName().Contains(TEXT("K2Node_DynamicCast")))
+			{
+				CastCount++;
+			}
+		}
+	}
+
+	if (CastCount > 3)
+	{
+		OutWarnings.Add(FString::Printf(TEXT("WARNING: High number of Dynamic Cast nodes (%d) detected. Excess casting creates strong coupling. Consider refactoring to use Blueprint Interfaces or Actor Components for communication."), CastCount));
+		bRiskDetected = true;
 	}
 
 	if (Blueprint->SimpleConstructionScript)

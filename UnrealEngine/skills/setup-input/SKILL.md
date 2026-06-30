@@ -1,3 +1,7 @@
+---
+name: setup-input
+description: Configure the Enhanced Input system with Input Actions and Mapping Contexts.
+---
 # Skill: Setup Enhanced Input
 ## Description
 Configure the Enhanced Input system with Input Actions and Mapping Contexts.
@@ -24,5 +28,6 @@ Configure the Enhanced Input system with Input Actions and Mapping Contexts.
 5. **Implement the handler function**
 
 ## Notes
+- Ensure `"EnhancedInput"` is added to `PublicDependencyModuleNames` in the project's `.Build.cs` file.
 - Include `EnhancedInput/Public/EnhancedInputComponent.h`
 - The project must have the EnhancedInput plugin enabled

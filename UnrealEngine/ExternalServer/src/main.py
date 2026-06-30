@@ -1304,17 +1304,20 @@ async def generate_compile_commands() -> str:
     try:
         process = await asyncio.create_subprocess_exec(
             *cmd,
-            stdout=asyncio.subprocess.PIPE,
-            stderr=asyncio.subprocess.PIPE
+            stdout=asyncio.subprocess.DEVNULL,
+            stderr=asyncio.subprocess.DEVNULL
         )
-        stdout, stderr = await process.communicate()
-        stdout_str = stdout.decode('utf-8', errors='ignore')
-        stderr_str = stderr.decode('utf-8', errors='ignore')
-        status = "succeeded" if process.returncode == 0 else "failed"
-        if status == "succeeded":
-            logger.info("Compile commands generated successfully. Triggering background C++ AST re-indexing...")
-            threading.Thread(target=background_initial_indexing, args=(True,), daemon=True).start()
-        return f"Result of generate_compile_commands ({status}):\nSTDOUT:\n{stdout_str}\nSTDERR:\n{stderr_str}"
+        
+        async def wait_and_index():
+            await process.wait()
+            if process.returncode == 0:
+                logger.info("Compile commands generated successfully. Triggering background C++ AST re-indexing...")
+                threading.Thread(target=background_initial_indexing, args=(True,), daemon=True).start()
+            else:
+                logger.error(f"generate_compile_commands failed with return code {process.returncode}")
+                
+        asyncio.create_task(wait_and_index())
+        return "Compilation generation started in background. The Python AST server will automatically re-index when UBT finishes."
     except Exception as e:
         return f"Result of generate_compile_commands: failed with exception {str(e)}"
 

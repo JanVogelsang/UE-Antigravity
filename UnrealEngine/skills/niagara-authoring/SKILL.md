@@ -1,3 +1,7 @@
+---
+name: niagara-authoring
+description: Create, modify, compile, and visually evaluate AAA-quality Niagara particle systems in the editor.
+---
 # Skill: Niagara VFX Authoring
 ## Description
 Create, modify, compile, and visually evaluate AAA-quality Niagara particle systems in the editor.
@@ -33,4 +37,4 @@ Create, modify, compile, and visually evaluate AAA-quality Niagara particle syst
 ## Performance Optimization Rules
 - **GPU Throttling**: If particle spawn rate $\ge$ 1,000, change the simulation target (`SimTarget`) to GPU Simulation.
 - **Fixed Bounds**: Always enable Fixed Bounds (instead of Dynamic Bounds) for finished systems to avoid runtime bounding calculation overhead.
-- **Translucentsoftness**: For smoke/fire sprites, always assign a material configured with soft-particle `DepthFade` to prevent clipping artifacts.
+- **Translucency Softness**: For smoke/fire sprites, always assign a material configured with soft-particle `DepthFade` to prevent clipping artifacts.

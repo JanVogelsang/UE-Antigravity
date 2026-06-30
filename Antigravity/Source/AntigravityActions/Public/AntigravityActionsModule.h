@@ -5,6 +5,8 @@
 #include "CoreMinimal.h"
 #include "Modules/ModuleManager.h"
 
+class UPackage;
+
 class FAntigravityActionsModule : public IModuleInterface
 {
 public:
@@ -12,4 +14,8 @@ public:
 	virtual void ShutdownModule() override;
 	static FAntigravityActionsModule& Get();
 	static bool IsAvailable();
+
+	static TSet<FName> AgentDirtiedPackages;
+private:
+	void OnPackageDirtyStateChanged(UPackage* ModifiedPackage);
 };

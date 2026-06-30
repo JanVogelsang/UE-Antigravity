@@ -25,7 +25,7 @@ Exposes **100+ advanced editor tools** categorized into specialized domains:
 This repository contains the following components and directories:
 
 *   **[Antigravity](./Antigravity)**: The Unreal Engine Editor plugin. It runs an in-process HTTP loopback server to execute commands safely on the Game Thread.
-*   **[UnrealEngine](./UnrealEngine)**: The Antigravity extension plugin (MCP Server). It registers the tools with the AI assistant and proxies JSON-RPC messages via a lightweight C++ bridge to the Unreal HTTP server.
+*   **[UnrealEngine](./UnrealEngine)**: The Antigravity extension plugin (MCP Server). It registers the tools with the AI assistant and proxies JSON-RPC messages via a lightweight Python bridge to the Unreal HTTP server.
 *   **[Documentation](./Documentation)**: Contains system documentation:
     *   [PROJECT.md](./Documentation/PROJECT.md): Overview of the Dual-MCP architecture, directory layout, and milestones.
     *   [DEVELOPMENT.md](./Documentation/DEVELOPMENT.md): Developer guide for environment setup, compilation, and AST server debugging.
@@ -36,7 +36,7 @@ This repository contains the following components and directories:
 
 ```mermaid
 graph TD
-    A[Google Antigravity] <-->|JSON-RPC via stdio| B(C++ MCP Bridge)
+    A[Google Antigravity] <-->|JSON-RPC via stdio| B(Python MCP Bridge)
     B <-->|HTTP localhost:18777| C[Unreal Engine HTTP Server]
     C <-->|AsyncTask GameThread| D[Unreal Engine Editor]
 ```
@@ -48,7 +48,7 @@ graph TD
 UE-Antigravity operates as a **Dual-MCP Server** system that links your AI coding assistant (e.g., Google Antigravity or Kilo Code) directly to your Unreal Engine environment:
 
 1. **Internal C++ Editor Server**: The C++ plugin runs inside the active Unreal Editor process, listening on port `18777`. It performs game thread operations like reading Blueprint graphs, adding reflection variables, compiling assets, and injecting nodes.
-2. **C++ stdio Bridge**: Translates Model Context Protocol (MCP) standard input/output (stdio) requests from the AI assistant to local HTTP loopback calls targeting the editor.
+2. **Python stdio Bridge**: Translates Model Context Protocol (MCP) standard input/output (stdio) requests from the AI assistant to local HTTP loopback calls targeting the editor.
 3. **External Python AST Server**: Resolves C++ symbols and file structures using `libclang` and watches your C++ source directories. It caches class names, method signatures, properties, and called functions in a local SQLite database and refreshes them automatically whenever files are saved.
 
 ---
@@ -67,7 +67,7 @@ You must install both the C++ editor plugin and the agent plugin to enable the i
 
 ### Step 2: Install Antigravity 2.0 Plugin (also supports Kilo Code)
 
-We provide an automated installer script that compiles the C++ bridge, links rule sets, and writes configuration files for your AI assistant in one step.
+We provide an automated installer script that sets up the Python bridge, links rule sets, and writes configuration files for your AI assistant in one step.
 
 1. Open PowerShell and run the installer script:
    ```powershell
@@ -77,7 +77,7 @@ We provide an automated installer script that compiles the C++ bridge, links rul
    * **Project Root**: Press Enter to install to the default workspace, or specify the path to your target project folder.
    * **LLM Profile**: Pick a default configuration profile (e.g., select `default` or `deepseek-v4`).
 3. The installer will automatically:
-   * Compile the `bridge.exe` proxy binary.
+   * Setup a Python virtual environment and install dependencies for the `bridge` proxy.
    * Install the plugin directory under `.agents/plugins/UnrealEngine`.
    * Create `mcp_config.json` to enable automatic server discovery for Antigravity.
    * Create or merge the server definitions inside `kilo.jsonc` for Kilo Code.

@@ -17,6 +17,7 @@ Before executing or implementing any setup steps, you must perform a diagnostic 
 1. **Perform Setup Diagnostic Check**:
    Evaluate the current project state to identify what is already completed and what remains to be done:
    - **Check for LLVM/Clang**: Check if `libclang.dll` can be resolved in registry or standard paths (e.g., `C:\Program Files\LLVM\bin\libclang.dll`).
+   - **Check for Git and Git LFS**: Verify that `.git` exists, and that `.gitattributes` tracks `*.uasset` and `*.umap` via Git LFS.
    - **Check for Antigravity plugin installation**: Check if the folder `.agents/plugins/UnrealEngine` exists.
    - **Check for compilation database**: Check if `compile_commands.json` exists in the game project directory (e.g., sibling `tau-game` folder).
    - **Check for environment skill**: Check if `.agents/plugins/UnrealEngine/skills/unreal-env/SKILL.md` exists.
@@ -29,6 +30,7 @@ Before executing or implementing any setup steps, you must perform a diagnostic 
    - Detail the findings of your diagnostic check.
    - Present a clear markdown checklist of the setup steps, marking already-completed steps as `[x]` and pending steps as `[ ]`:
      - `[ ] Step 1: Verify LLVM/Clang installation`
+     - `[ ] Step 1.5: Verify Git & Git LFS configuration`
      - `[ ] Step 2: Install Python dependencies (ChromaDB, ONNX runtime, PyPDF)`
      - `[ ] Step 3: Install Antigravity plugin dependencies (Run install.ps1)`
      - `[ ] Step 4: Generate compilation database (compile_commands.json)`
@@ -60,6 +62,29 @@ Before executing or implementing any setup steps, you must perform a diagnostic 
    - If the user provides a custom path, save it by writing `LIBCLANG_PATH` to the `unreal-env` skill under local environment configuration so the external server can find it.
    - Do NOT proceed to compile commands or indexing until LLVM/Clang is verified as available.
 
+### Step 1.5: Verify Git & Git LFS Configuration
+1. **Verify Git and Git LFS tracking**:
+   - Run `git status` or check for a `.git` folder to verify version control.
+   - Run `git lfs env` to verify Git LFS is active, and check `.gitattributes` to verify `*.uasset` and `*.umap` are tracked.
+2. **If Git or Git LFS is missing**:
+   - Inform the user that the plugin strictly requires a Git repository with Git LFS for tracking Unreal Engine binaries to prevent corruption.
+   - Recommend hosting the project on **GitLab**, as their free tier offers a significantly higher Git LFS storage quota compared to GitHub.
+   - Provide the user with an overview of the manual setup instructions:
+     1. `git init`
+     2. Add a `.gitignore` for UE (`Binaries/`, `Intermediate/`, etc.)
+     3. `git lfs install` and track assets: `git lfs track "*.uasset"`, `git lfs track "*.umap"`
+   - **Crucially**, ask the user if they would like you to automatically initialize Git and Git LFS for them.
+   - If the user approves, automatically execute the following commands in the workspace root:
+     ```powershell
+     git init
+     git lfs install
+     git lfs track "*.uasset"
+     git lfs track "*.umap"
+     Add-Content -Path .gitignore -Value "Binaries/`nIntermediate/`nDerivedDataCache/`nSaved/" -Encoding UTF8
+     git add .gitattributes .gitignore
+     git commit -m "Configure Git LFS tracking for Unreal assets"
+     ```
+
 ### Step 2: Install Python Dependencies (ChromaDB, ONNX runtime, PyPDF)
 1. Verify Python is installed and located on the system path.
 2. Install the required runtime dependencies using the system Python interpreter. **Note:** Since installing these packages may take time, you may delegate this step to a background sub-agent (by calling `invoke_subagent` using the `self` role) to execute the installation asynchronously:
@@ -75,6 +100,13 @@ Before executing or implementing any setup steps, you must perform a diagnostic 
      echo "`n`n`n" | powershell -ExecutionPolicy Bypass -File UnrealEngine/install.ps1
      ```
    - Verify that `.agents/plugins/UnrealEngine` was created.
+
+### Step 3.5: Verify Git Hooks Configuration
+1. Run `git config core.hooksPath` to check the current hooks path.
+2. If it is empty or not set to `.githooks`, configure it so the Antigravity worktree hooks activate automatically:
+   ```powershell
+   git config core.hooksPath .githooks
+   ```
 
 ### Step 4: Generate Compilation Database (compile_commands.json)
 1. Trigger `compile_commands.json` generation. If the `cpp-ast-rag` MCP server tools are available, invoke `generate_compile_commands`.
@@ -264,16 +296,13 @@ Consult these detailed documentation files to understand the project architectur
 ### Step 9: Append Workspace Rules (AGENTS.md)
 Check if `.agents/AGENTS.md` exists at the project root.
 - If it does not exist, copy `UnrealEngine/AGENTS.md` to `.agents/AGENTS.md`.
-- If it does exist, inspect its contents. If the "Project Knowledge & Navigation" section is already present, do NOT append. Otherwise, append the following text:
-
-```markdown
-
-
-## Project Knowledge & Navigation
-- **Consulting the Project Index**: The entry-point skill `project-index` is auto-loaded by the assistant runner, but the detailed sub-documents in the `references/` subdirectory are not. When you need deep architectural context, gameplay specifications, or system designs, you **MUST** manually read the relevant reference documents under `.agents/skills/project-index/references/` (e.g., `concepts.md`, `gameplay.md`, `systems.md`, `files_index.md`) using the `view_file` tool to align your work with the project's pillars and conventions.
-```
+- If it does exist, inspect its contents. If the "Ponytail Ladder" or "Project Knowledge & Navigation" sections are already present, do NOT append. Otherwise, read the entire contents of `UnrealEngine/AGENTS.md` using `view_file` or `Get-Content`, and append the entire content to `.agents/AGENTS.md`. This ensures that all critical global instructions and efficiency rules are correctly applied to the workspace.
 
 ### Step 10: Complete and Instruct User
 1. Verify that `.agents/skills/project-index/SKILL.md` and all referenced markdown files under `.agents/skills/project-index/references/` have been written successfully.
-2. Present a short 2-3 sentence summary of the project configuration to the user.
-3. **IMPORTANT**: Instruct the user to restart their AI assistant session or reload the window. Explain that this is necessary because the assistant platform only scans, indexes, and loads workspace skills during conversation startup.
+2. **Track Index in Git**: Add the generated index files to git tracking so they are natively duplicated when creating worktrees:
+   ```powershell
+   git add .agents/skills/project-index/
+   ```
+3. Present a short 2-3 sentence summary of the project configuration to the user.
+4. **IMPORTANT**: Instruct the user to restart their AI assistant session or reload the window. Explain that this is necessary because the assistant platform only scans, indexes, and loads workspace skills during conversation startup.

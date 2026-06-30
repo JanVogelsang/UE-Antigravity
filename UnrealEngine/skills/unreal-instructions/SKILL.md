@@ -1,3 +1,7 @@
+---
+name: unreal-instructions
+description: Global instructions for agent interactions with the Unreal Editor MCP.
+---
 # Unreal Engine MCP - Global Instructions
 
 You are connected to an Unreal Engine instance via the Antigravity MCP plugin. Whenever you perform actions in this ecosystem, you MUST obey these core rules. Think of these as the "laws of physics" for this workspace.
@@ -53,3 +57,48 @@ You are connected to an Unreal Engine instance via the Antigravity MCP plugin. W
   - Before executing common Unreal Engine tasks (such as setting up replication, creating actors, or adding components), check the `Antigravity/Resources/Skills/` folder for any relevant `.md` skill templates.
   - If a matching skill file exists, read its contents and follow its steps as your primary execution guideline.
 - **Read Schemas for Constraints:** When using a tool for the first time, check the schema in `Antigravity/Resources/ToolSchemas/` to understand default values, constraint ranges, and required fields to prevent failed tool execution.
+
+## 8. Standard Operating Procedures (SOPs)
+
+1. **SOP: Placing / Spawning an Object in the Level**
+   - **Step 1**: Identify the asset class you want to spawn (e.g., StaticMeshComponent, a specific Blueprint).
+   - **Step 2**: Use `search_assets` with a `class_filter` to find the exact path. Do NOT use `list_directory`.
+   - **Step 3**: Use the native `spawn_actor` tool to place the object in the world.
+   - **Step 4**: DO NOT attempt to write Python scripts or use console commands to place objects in the level.
+
+2. **SOP: Modifying a Blueprint Graph**
+   - Refer to the dedicated [blueprint-authoring](file:///C:/Users/janv1/Documents/Unreal%20Projects/UE-Antigravity/UnrealEngine/skills/blueprint-authoring/SKILL.md) skill. Follow its detailed 5-step SOP covering state queries, batch operations, T3D generation rules (including critical `NodeGuid` assignment), layout formatting, and pin auditing.
+
+3. **SOP: Asset File Management (Moving, Renaming, Deleting)**
+   - **CRITICAL**: Never use standard terminal shell commands (`mv`, `rm`, `del`) to move or rename Unreal Engine assets (.uasset/.umap) on disk. This will corrupt the project's internal asset registry.
+   - **Step 1**: Before writing custom one-off scripts for standard batch operations, check the pre-built macro scripts library in the plugin's `src/scripts/` directory (e.g., `clean_naming_conventions.py`, `organize_assets_by_type.py`, `find_unreferenced_assets.py`, or `bulk_replace_references.py`).
+   - **Step 2**: If no pre-built macro script exists for the specific task, write and run a custom Python script via `execute_python_script` utilizing `unreal.EditorAssetLibrary` functions (`rename_asset`, `delete_asset`, `duplicate_asset`) to handle asset operations safely.
+
+4. **SOP: Skipping Schema Discovery (Token Conservation)**
+   - **CRITICAL**: If you are performing a standard workflow (e.g., spawning an actor, modifying a Blueprint, finding an asset), **DO NOT waste tokens viewing schema JSON files**.
+   - Trust that native MCP tools like `spawn_actor`, `search_assets`, and `inject_blueprint_nodes_t3d` are available and use them directly according to their standard schemas. Only read schema files if you are using an unfamiliar tool for the very first time.
+
+5. **SOP: Data Asset Creation and Authoring**
+   - **Step 1**: Use `create_data_asset` to instantiate a data asset. Provide the full package path and class name (use `_C` suffix for Blueprint-defined classes).
+   - **Step 2**: Use `get_data_asset_info` if you need to inspect the available fields on an existing Data Asset.
+   - **Step 3**: Use `set_data_asset_properties` to populate fields. Parse values as strings exactly matching C++ reflection formats (e.g., vectors as `"(X=100.0,Y=0.0,Z=2.0)"`, soft asset paths for assets).
+   - **Best Practice**: Prefer **Soft References** (`TSoftObjectPtr`) for heavy assets (meshes, textures, sound cues) when creating/modifying Data Asset definitions to avoid cascade loading memory bottlenecks.
+   - **Rule**: Never use Python scripts to modify Data Assets if these native tools are available.
+
+6. **SOP: Visual UI Design**
+   - **CRITICAL**: Do not build complex UIs blindly. Use the `capture_widget` tool to visually see the widgets you create.
+   - **Step 1**: Use `create_widget_blueprint` to create the asset, then use `instantiate_ui_hierarchy` to construct the entire widget tree hierarchy, properties, slots, fonts, brushes, and event bindings in a single transaction and single compilation.
+   - **Step 2**: Call `capture_widget` with the widget's `asset_path`. The tool will return a Base64 image artifact directly in the chat.
+   - **Step 3**: Visually analyze the Base64 image artifact. Check alignments, padding, and colors.
+   - **Step 4**: Iteratively adjust properties using `instantiate_ui_hierarchy` or specific setters, re-capturing as necessary until the layout perfectly matches the desired design.
+
+## 9. Routing & Sub-Agent Workflow Rules
+
+### Agent Lite Routing (MANDATORY)
+To conserve tokens and maintain task velocity, the Main Agent must route tasks efficiently:
+- **Direct Thread Execution (Lite):** For simple read-only queries (e.g., "how does this Blueprint work?"), simple value edits (e.g., `set_node_pin_default`), or variable renaming, the Main Agent **MUST** run the task directly without spawning sub-agents.
+- **Spawning Sub-agents (Telos Pipeline):** Only delegate to the sub-agent pipeline when the task involves multi-file structural changes, new gameplay logic systems, complex math graph building, or multi-step Blueprint asset creation.
+
+### Sub-Agent Workflow for Blueprint Authoring (Antigravity 4-Layer Context)
+- For complex Blueprint authoring involving multi-file structural changes, new gameplay logic systems, complex math graphs, or multi-step Blueprint asset creation, the Main Agent **MUST** coordinate the specialized `Blueprint Architect`, `Blueprint Engineer`, and `QA Auditor` sub-agents. 
+- Refer to the dedicated [blueprint-authoring](file:///C:/Users/janv1/Documents/Unreal%20Projects/UE-Antigravity/UnrealEngine/skills/blueprint-authoring/SKILL.md) skill for details on sub-agent roles, the mandatory Gap Analysis protocol, and the routing protocol.

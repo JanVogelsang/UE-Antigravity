@@ -4,6 +4,9 @@
 #include "AntigravityCoreModule.h"
 #include "AntigravityHttpServer.h"
 #include "Misc/CoreDelegates.h"
+#include "UObject/Package.h"
+
+TSet<FName> FAntigravityActionsModule::AgentDirtiedPackages;
 
 #if WITH_EDITOR
 #include "AssetRegistry/AssetRegistryModule.h"
@@ -18,6 +21,7 @@ void FAntigravityActionsModule::StartupModule() {
 
 #if WITH_EDITOR
 	ExtraTagsDelegateHandle = UObject::FAssetRegistryTag::OnGetExtraObjectTagsWithContext.AddStatic(&FAntigravityBlueprintActions::HandleGetExtraObjectTags);
+	UPackage::PackageDirtyStateChangedEvent.AddRaw(this, &FAntigravityActionsModule::OnPackageDirtyStateChanged);
 #endif
 
 	if (!IsRunningCommandlet())
@@ -42,6 +46,7 @@ void FAntigravityActionsModule::ShutdownModule() {
 		UObject::FAssetRegistryTag::OnGetExtraObjectTagsWithContext.Remove(ExtraTagsDelegateHandle);
 		ExtraTagsDelegateHandle.Reset();
 	}
+	UPackage::PackageDirtyStateChangedEvent.RemoveAll(this);
 #endif
 	FAntigravityHttpServer::Stop();
 	UE_LOG(LogAntigravity, Log, TEXT("AntigravityActions module shut down.")); 
@@ -50,5 +55,13 @@ FAntigravityActionsModule& FAntigravityActionsModule::Get() { return FModuleMana
 bool FAntigravityActionsModule::IsAvailable() { return FModuleManager::Get().IsModuleLoaded("AntigravityActions"); }
 
 #undef LOCTEXT_NAMESPACE
+
+void FAntigravityActionsModule::OnPackageDirtyStateChanged(UPackage* ModifiedPackage)
+{
+	if (ModifiedPackage && !ModifiedPackage->IsDirty())
+	{
+		AgentDirtiedPackages.Remove(ModifiedPackage->GetFName());
+	}
+}
 
 IMPLEMENT_MODULE(FAntigravityActionsModule, AntigravityActions)

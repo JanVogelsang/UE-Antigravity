@@ -31,7 +31,7 @@ def test_python_mcp_generate_compile_commands(mock_agent_client):
     result = response["result"]
     assert "content" in result
     assert len(result["content"]) > 0
-    assert "generate_compile_commands" in result["content"][0]["text"]
+    assert "Compilation generation started in background" in result["content"][0]["text"]
 
 def test_python_mcp_search_vector_db(mock_agent_client):
     """

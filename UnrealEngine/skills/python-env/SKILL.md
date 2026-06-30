@@ -66,4 +66,4 @@ If you are developing or running the External Python MCP server or any stdio-bas
      subprocess.run([sys.executable, "-m", "pip", "install", ...], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
      ```
 3. **Non-Blocking Handshake**: Do not perform heavy synchronous blocking actions (like AST parsing or index building) during the MCP server startup lifecycle. Move heavy initialization to a background worker thread so the stdio initialization handshake completes immediately.
-4. **Placeholder Substitution**: When replacing placeholders (e.g. `LINK_1`, `LINK_10`) in T3D node definitions, sort placeholders by length descending before replacement to prevent prefix collisions (e.g. replacing `LINK_10` with the value of `LINK_1` + `0`).
+

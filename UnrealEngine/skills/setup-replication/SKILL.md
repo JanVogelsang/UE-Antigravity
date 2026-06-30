@@ -1,3 +1,7 @@
+---
+name: setup-replication
+description: Configure an actor class for network replication in multiplayer UE games.
+---
 # Skill: Setup Actor Replication
 ## Description
 Configure an actor class for network replication in multiplayer UE games.

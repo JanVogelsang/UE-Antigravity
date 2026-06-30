@@ -1,0 +1,3 @@
+#!/bin/bash
+# Pass arguments to PowerShell script
+powershell.exe -ExecutionPolicy Bypass -File "$(dirname "$0")/post-checkout.ps1" "$1" "$2" "$3"

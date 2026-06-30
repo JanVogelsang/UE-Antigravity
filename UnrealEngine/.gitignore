@@ -1,1 +1,18 @@
 mcp_config.json
+
+# Python virtual environments
+ExternalServer/.venv/
+
+# Local caches and databases
+ExternalServer/ast_cache.db
+ExternalServer/vector_db_5.8/
+
+# Locally generated agent environment skill
+skills/unreal-env/
+
+# Git hook log files
+.githooks/*.log
+
+# Python caching
+__pycache__/
+*.pyc
