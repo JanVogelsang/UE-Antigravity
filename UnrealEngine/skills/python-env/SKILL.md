@@ -12,18 +12,18 @@ This skill defines the requirements, environment details, and execution commands
 
 On Windows systems, the default `python` or `pytest` commands in the environment PATH might resolve to a restricted shell Python (such as MSYS2/MinGW) which lacks standard package management (`pip`, `pytest`).
 
-* **For the default development machine (user 'Jan')**:
-  * **Python Path**: `C:\Users\Jan\AppData\Local\Microsoft\WindowsApps\python.exe`
-  * **Pip Command**: `C:\Users\Jan\AppData\Local\Microsoft\WindowsApps\python.exe -m pip`
+* **For standard development machines (default Windows Store Python)**:
+  * **Python Path**: `$env:USERPROFILE\AppData\Local\Microsoft\WindowsApps\python.exe`
+  * **Pip Command**: `$env:USERPROFILE\AppData\Local\Microsoft\WindowsApps\python.exe -m pip`
   * **Dependency Installation**:
     ```powershell
-    & "C:\Users\Jan\AppData\Local\Microsoft\WindowsApps\python.exe" -m pip install -r Tests/requirements.txt --user
+    & "$env:USERPROFILE\AppData\Local\Microsoft\WindowsApps\python.exe" -m pip install -r Tests/requirements.txt --user
     ```
   * **Running the Test Suite**:
     ```powershell
     powershell -File .\run_tests.ps1
     # OR
-    & "C:\Users\Jan\AppData\Local\Microsoft\WindowsApps\python.exe" run_tests.py
+    & "$env:USERPROFILE\AppData\Local\Microsoft\WindowsApps\python.exe" run_tests.py
     ```
 * **For other developer workspaces or CI environments**:
   * Locate the standard user python interpreter or virtual environment.

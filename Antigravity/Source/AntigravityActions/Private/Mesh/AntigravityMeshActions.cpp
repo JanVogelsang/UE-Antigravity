@@ -14,11 +14,6 @@
 FAntigravityMeshActions::FAntigravityMeshActions() {}
 FAntigravityMeshActions::~FAntigravityMeshActions() {}
 FName FAntigravityMeshActions::GetActionName() const { return FName(TEXT("Mesh")); }
-FText FAntigravityMeshActions::GetDisplayName() const { return FText::FromString(TEXT("Mesh Actions")); }
-EAntigravityActionCategory FAntigravityMeshActions::GetCategory() const { return EAntigravityActionCategory::Mesh; }
-EAntigravityRiskLevel FAntigravityMeshActions::GetDefaultRiskLevel() const { return EAntigravityRiskLevel::Low; }
-bool FAntigravityMeshActions::CanUndo() const { return false; }
-bool FAntigravityMeshActions::UndoAction() { return false; }
 
 TArray<FString> FAntigravityMeshActions::GetSupportedToolNames() const
 {
@@ -60,18 +55,6 @@ bool FAntigravityMeshActions::ValidateParams(const TSharedRef<FJsonObject>& Para
 	}
 
 	return true;
-}
-
-FAntigravityActionPlan FAntigravityMeshActions::PreviewAction(const TSharedRef<FJsonObject>& Params)
-{
-	FAntigravityActionPlan Plan;
-	Plan.Summary = TEXT("Mesh/Asset import operation");
-	FAntigravityAction Action;
-	Action.Description = Plan.Summary;
-	Action.Category = EAntigravityActionCategory::Mesh;
-	Action.RiskLevel = EAntigravityRiskLevel::Low;
-	Plan.Actions.Add(Action);
-	return Plan;
 }
 
 FAntigravityActionResult FAntigravityMeshActions::ExecuteAction(const TSharedRef<FJsonObject>& Params)

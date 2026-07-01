@@ -24,11 +24,6 @@
 FAntigravityLevelActions::FAntigravityLevelActions() {}
 FAntigravityLevelActions::~FAntigravityLevelActions() {}
 FName FAntigravityLevelActions::GetActionName() const { return FName(TEXT("Level")); }
-FText FAntigravityLevelActions::GetDisplayName() const { return FText::FromString(TEXT("Level Actions")); }
-EAntigravityActionCategory FAntigravityLevelActions::GetCategory() const { return EAntigravityActionCategory::Level; }
-EAntigravityRiskLevel FAntigravityLevelActions::GetDefaultRiskLevel() const { return EAntigravityRiskLevel::Medium; }
-bool FAntigravityLevelActions::CanUndo() const { return true; }
-bool FAntigravityLevelActions::UndoAction() { return false; }
 
 TArray<FString> FAntigravityLevelActions::GetSupportedToolNames() const
 {
@@ -54,18 +49,6 @@ bool FAntigravityLevelActions::ValidateParams(const TSharedRef<FJsonObject>& Par
 	}
 
 	return true;
-}
-
-FAntigravityActionPlan FAntigravityLevelActions::PreviewAction(const TSharedRef<FJsonObject>& Params)
-{
-	FAntigravityActionPlan Plan;
-	Plan.Summary = TEXT("Level/World operation");
-	FAntigravityAction Action;
-	Action.Description = Plan.Summary;
-	Action.Category = EAntigravityActionCategory::Level;
-	Action.RiskLevel = EAntigravityRiskLevel::Medium;
-	Plan.Actions.Add(Action);
-	return Plan;
 }
 
 FAntigravityActionResult FAntigravityLevelActions::ExecuteAction(const TSharedRef<FJsonObject>& Params)

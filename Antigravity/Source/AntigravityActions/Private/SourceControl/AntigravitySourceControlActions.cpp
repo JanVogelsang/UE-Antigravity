@@ -10,11 +10,6 @@
 FAntigravitySourceControlActions::FAntigravitySourceControlActions() {}
 FAntigravitySourceControlActions::~FAntigravitySourceControlActions() {}
 FName FAntigravitySourceControlActions::GetActionName() const { return FName(TEXT("SourceControl")); }
-FText FAntigravitySourceControlActions::GetDisplayName() const { return FText::FromString(TEXT("Source Control Actions")); }
-EAntigravityActionCategory FAntigravitySourceControlActions::GetCategory() const { return EAntigravityActionCategory::SourceControl; }
-EAntigravityRiskLevel FAntigravitySourceControlActions::GetDefaultRiskLevel() const { return EAntigravityRiskLevel::Medium; }
-bool FAntigravitySourceControlActions::CanUndo() const { return true; }
-bool FAntigravitySourceControlActions::UndoAction() { return false; }
 
 TArray<FString> FAntigravitySourceControlActions::GetSupportedToolNames() const
 {
@@ -27,18 +22,6 @@ TArray<FString> FAntigravitySourceControlActions::GetSupportedToolNames() const
 }
 
 bool FAntigravitySourceControlActions::ValidateParams(const TSharedRef<FJsonObject>& Params, TArray<FString>& OutErrors) const { return true; }
-
-FAntigravityActionPlan FAntigravitySourceControlActions::PreviewAction(const TSharedRef<FJsonObject>& Params)
-{
-	FAntigravityActionPlan Plan;
-	Plan.Summary = TEXT("Source control operation");
-	FAntigravityAction Action;
-	Action.Description = Plan.Summary;
-	Action.Category = EAntigravityActionCategory::SourceControl;
-	Action.RiskLevel = EAntigravityRiskLevel::Medium;
-	Plan.Actions.Add(Action);
-	return Plan;
-}
 
 FAntigravityActionResult FAntigravitySourceControlActions::ExecuteAction(const TSharedRef<FJsonObject>& Params)
 {

@@ -16,4 +16,4 @@ if sys.platform == "win32" and hasattr(os, "add_dll_directory"):
                 pass
 
 import pytest
-sys.exit(pytest.main(["-v", "-s"]))
+sys.exit(pytest.main(["-v", "-s"] + sys.argv[1:]))

@@ -13,11 +13,6 @@
 FAntigravitySettingsActions::FAntigravitySettingsActions() {}
 FAntigravitySettingsActions::~FAntigravitySettingsActions() {}
 FName FAntigravitySettingsActions::GetActionName() const { return FName(TEXT("Settings")); }
-FText FAntigravitySettingsActions::GetDisplayName() const { return FText::FromString(TEXT("Settings Actions")); }
-EAntigravityActionCategory FAntigravitySettingsActions::GetCategory() const { return EAntigravityActionCategory::Settings; }
-EAntigravityRiskLevel FAntigravitySettingsActions::GetDefaultRiskLevel() const { return EAntigravityRiskLevel::High; }
-bool FAntigravitySettingsActions::CanUndo() const { return false; }
-bool FAntigravitySettingsActions::UndoAction() { return false; }
 
 TArray<FString> FAntigravitySettingsActions::GetSupportedToolNames() const
 {
@@ -60,19 +55,6 @@ bool FAntigravitySettingsActions::ValidateParams(const TSharedRef<FJsonObject>& 
 	}
 
 	return true;
-}
-
-FAntigravityActionPlan FAntigravitySettingsActions::PreviewAction(const TSharedRef<FJsonObject>& Params)
-{
-	FAntigravityActionPlan Plan;
-	Plan.Summary = TEXT("Settings modification (HIGH RISK)");
-	Plan.MaxRiskLevel = EAntigravityRiskLevel::High;
-	FAntigravityAction Action;
-	Action.Description = Plan.Summary;
-	Action.Category = EAntigravityActionCategory::Settings;
-	Action.RiskLevel = EAntigravityRiskLevel::High;
-	Plan.Actions.Add(Action);
-	return Plan;
 }
 
 FAntigravityActionResult FAntigravitySettingsActions::ExecuteAction(const TSharedRef<FJsonObject>& Params)

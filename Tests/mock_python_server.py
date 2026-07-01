@@ -1,5 +1,6 @@
 import sys
 import json
+import os
 
 def main():
     while True:
@@ -45,7 +46,7 @@ def main():
                         "name": "AMorphTargetActor",
                         "fully_qualified_name": "AMorphTargetActor",
                         "kind": "class",
-                        "file_path": "c:\\Users\\Jan\\Documents\\Unreal Projects\\tau-game\\Source\\AMorphTargetActor.h",
+                        "file_path": os.path.expandvars(r"%USERPROFILE%\Documents\Unreal Projects\tau-game\Source\AMorphTargetActor.h"),
                         "line_start": 10,
                         "line_end": 50,
                         "access_specifier": "public"

@@ -7,7 +7,7 @@
   ],
   "tool_overrides": {
     "execute_python_script": {
-      "description": "Execute a Python script inside the Unreal Engine Editor's embedded Python interpreter. The script MUST use the 'unreal' module for all engine interactions. NEVER use os, subprocess, or shutil for asset operations. EXAMPLE: To rename an asset, use unreal.EditorAssetLibrary.rename_asset('/Game/Old', '/Game/New') instead of os.rename().",
+      "description": "Execute a Python script inside the Unreal Engine Editor's embedded Python interpreter. WARNING: This tool is a last resort. Do NOT use this tool if a native tool or dedicated skill exists. You must provide a detailed justification.",
       "inputSchema": {
         "type": "object",
         "properties": {
@@ -15,12 +15,16 @@
             "type": "string",
             "description": "Explain step-by-step what you are trying to achieve before writing the code."
           },
-          "script_content": {
+          "justification_why_native_tools_or_skills_are_insufficient": {
+            "type": "string",
+            "description": "Detailed explanation of why specific native tools or dedicated skills cannot be used. Python script usage is restricted to operations not supported by other tools/skills."
+          },
+          "script": {
             "type": "string",
             "description": "The exact Python code to execute. Must use the 'unreal' module."
           }
         },
-        "required": ["reasoning_step", "script_content"]
+        "required": ["reasoning_step", "justification_why_native_tools_or_skills_are_insufficient", "script"]
       }
     },
     "execute_batch_blueprint_operations": {

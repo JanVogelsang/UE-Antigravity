@@ -92,11 +92,6 @@ FAntigravityGASActions::~FAntigravityGASActions() {}
 // ============================================================================
 
 FName FAntigravityGASActions::GetActionName() const { return FName(TEXT("GAS")); }
-FText FAntigravityGASActions::GetDisplayName() const { return LOCTEXT("DisplayName", "Gameplay Ability System"); }
-EAntigravityActionCategory FAntigravityGASActions::GetCategory() const { return EAntigravityActionCategory::Blueprint; }
-EAntigravityRiskLevel FAntigravityGASActions::GetDefaultRiskLevel() const { return EAntigravityRiskLevel::Medium; }
-bool FAntigravityGASActions::CanUndo() const { return true; }
-bool FAntigravityGASActions::UndoAction() { return GEditor && GEditor->UndoTransaction(); }
 
 TArray<FString> FAntigravityGASActions::GetSupportedToolNames() const
 {
@@ -112,35 +107,6 @@ TArray<FString> FAntigravityGASActions::GetSupportedToolNames() const
 bool FAntigravityGASActions::ValidateParams(const TSharedRef<FJsonObject>& Params, TArray<FString>& OutErrors) const
 {
 	return true;
-}
-
-FAntigravityActionPlan FAntigravityGASActions::PreviewAction(const TSharedRef<FJsonObject>& Params)
-{
-	FAntigravityActionPlan Plan;
-	FString Action;
-	Params->TryGetStringField(TEXT("action"), Action);
-	if (Action.IsEmpty()) Params->TryGetStringField(TEXT("tool_name"), Action);
-
-	if (Action == TEXT("gas_register_tags"))
-		Plan.Summary = TEXT("Register gameplay tags in DefaultGameplayTags.ini");
-	else if (Action == TEXT("gas_create_attribute_set"))
-		Plan.Summary = TEXT("Generate C++ AttributeSet class");
-	else if (Action == TEXT("gas_setup_asc"))
-		Plan.Summary = TEXT("Add AbilitySystemComponent to Blueprint actor");
-	else if (Action == TEXT("gas_create_effect"))
-		Plan.Summary = TEXT("Create GameplayEffect Blueprint");
-	else if (Action == TEXT("gas_create_ability"))
-		Plan.Summary = TEXT("Create GameplayAbility Blueprint");
-	else
-		Plan.Summary = TEXT("GAS operation");
-
-	Plan.MaxRiskLevel = EAntigravityRiskLevel::Medium;
-	FAntigravityAction A;
-	A.Description = Plan.Summary;
-	A.Category = EAntigravityActionCategory::Blueprint;
-	A.RiskLevel = EAntigravityRiskLevel::Medium;
-	Plan.Actions.Add(A);
-	return Plan;
 }
 
 FAntigravityActionResult FAntigravityGASActions::ExecuteAction(const TSharedRef<FJsonObject>& Params)

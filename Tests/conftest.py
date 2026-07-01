@@ -9,8 +9,8 @@ import threading
 import json
 from mock_client import MockAgentClient
 
-UNREAL_PATH = r"D:\UE_5.7\Engine\Binaries\Win64\UnrealEditor-Cmd.exe"
-PROJECT_PATH = r"c:\Users\Jan\Documents\Unreal Projects\tau-game\Tau.uproject"
+UNREAL_PATH = None
+PROJECT_PATH = os.path.expandvars(r"%USERPROFILE%\Documents\Unreal Projects\tau-game\Tau.uproject")
 PORT = 18777
 
 def is_port_open(port):
@@ -25,184 +25,107 @@ def is_port_open(port):
 @pytest.fixture(scope="session")
 def unreal_process():
     """
-    Spawns a mock C++ HTTP server in a background thread on port 18777
-    to handle all editor-side tool execution calls.
+    Ensures that the Unreal Editor is running. If not, auto-launches it or prompts the user.
     """
     if is_port_open(PORT):
-        print(f"\nDetecting active Unreal Editor on port {PORT}. Bypassing mock server.")
+        print(f"\n[INFO] Detecting active Unreal Editor on port {PORT}. Proceeding.")
         yield None
         return
 
-    import urllib.parse
-    import uuid
-    import re
-
-    # A simple mock HTTP server for editor tools
-    class MockEditorHandler(http.server.BaseHTTPRequestHandler):
-        # Global variable state for blueprints to support add/get roundtrip
-        blueprint_vars = {
-            "/Game/Blueprints/BP_ContainerTest": [
-                {"name": "MyArray", "type": "TArray<float>", "category": "Default"},
-                {"name": "MySet", "type": "TSet<FString>", "category": "Default"},
-                {"name": "MyMap", "type": "TMap<FString, int32>", "category": "Default"}
-            ],
-            "/Game/Blueprint/Player/BP_RoundPawn": [
-                {"name": "Health", "type": "float", "category": "Combat"}
-            ],
-            "/Game/Blueprints/BP_MyCharacter": []
-        }
-
-        def log_message(self, format, *args):
+    # Auto-launch Editor
+    project_path = os.path.normpath(PROJECT_PATH)
+    
+    unreal_exe = None
+    engine_association = "5.8"  # Default fallback version
+    
+    # Parse EngineAssociation from .uproject JSON
+    if os.path.exists(project_path):
+        try:
+            with open(project_path, "r") as f:
+                uproject_data = json.load(f)
+                if "EngineAssociation" in uproject_data:
+                    engine_association = str(uproject_data["EngineAssociation"])
+        except Exception:
             pass
-            
-        def do_POST(self):
-            content_length = int(self.headers['Content-Length'])
-            post_data = self.rfile.read(content_length)
-            req = json.loads(post_data.decode('utf-8'))
-            
-            name = req.get("name")
-            args = req.get("arguments", {})
-            
-            response = {"bSuccess": False, "ResultMessage": "", "Errors": [], "Warnings": []}
-            
-            if name == "get_blueprint_schema":
-                asset_path = args.get("asset_path", "")
-                if not asset_path:
-                    response["Errors"].append("Missing required field: asset_path")
-                elif asset_path == "/Game/Meshes/SM_Chair":
-                    response["Errors"].append("Asset is not a Blueprint: '/Game/Meshes/SM_Chair'")
-                elif asset_path == "/Game/Blueprints/BP_MyCharacter":
-                    response["bSuccess"] = True
-                    response["ResultMessage"] = json.dumps({
-                        "asset_name": "BP_MyCharacter",
-                        "parent_class": "Character",
-                        "variables": MockEditorHandler.blueprint_vars.get(asset_path, []),
-                        "custom_events": []
-                    })
-                elif asset_path == "/Game/UI/WBP_MainMenu":
-                    response["bSuccess"] = True
-                    response["ResultMessage"] = json.dumps({
-                        "asset_name": "WBP_MainMenu",
-                        "parent_class": "UserWidget",
-                        "variables": [],
-                        "custom_events": []
-                    })
-                elif asset_path == "/Game/Animations/ABP_Mannequin":
-                    response["bSuccess"] = True
-                    response["ResultMessage"] = json.dumps({
-                        "asset_name": "ABP_Mannequin",
-                        "parent_class": "AnimInstance",
-                        "variables": [],
-                        "custom_events": []
-                    })
-                elif asset_path == "/Game/Blueprints/BP_ContainerTest":
-                    response["bSuccess"] = True
-                    response["ResultMessage"] = json.dumps({
-                        "asset_name": "BP_ContainerTest",
-                        "parent_class": "Actor",
-                        "variables": MockEditorHandler.blueprint_vars[asset_path],
-                        "custom_events": []
-                    })
-                elif asset_path == "/Game/Blueprint/Player/BP_RoundPawn":
-                    response["bSuccess"] = True
-                    response["ResultMessage"] = json.dumps({
-                        "asset_name": "BP_RoundPawn",
-                        "parent_class": "Pawn",
-                        "variables": MockEditorHandler.blueprint_vars[asset_path],
-                        "custom_events": []
-                    })
-                else:
-                    response["Errors"].append(f"Failed to load Blueprint fallback: '{asset_path}'")
-                    
-            elif name == "inject_blueprint_nodes_t3d":
-                asset_path = args.get("asset_path", "")
-                t3d_text = args.get("t3d_text", "")
-                if not asset_path:
-                    response["Errors"].append("Blueprint not found")
-                else:
-                    response["bSuccess"] = True
-                    # Resolve placeholders safely (sort by length descending to prevent prefix corruption)
-                    placeholders = set(re.findall(r'(GUID_[A-Za-z0-9_]+|LINK_[A-Za-z0-9_]+|NODEREF_[A-Za-z0-9_]+)', t3d_text))
-                    sorted_placeholders = sorted(placeholders, key=len, reverse=True)
-                    resolved_t3d = t3d_text
-                    for p in sorted_placeholders:
-                        resolved_t3d = resolved_t3d.replace(p, uuid.uuid4().hex)
-                    response["ResultMessage"] = (
-                        f"Injected 3 nodes into graph 'EventGraph' of '{asset_path}'.\n"
-                        f"Compile: SUCCESS.\n"
-                        f"ResolvedT3D:\n{resolved_t3d}"
-                    )
-                    
-            elif name == "get_cpp_reflection_info":
-                class_name = args.get("class_name", "")
-                if class_name in ("Actor", "AActor"):
-                    response["bSuccess"] = True
-                    res_obj = {"class_name": "Actor", "parent_class": "Object", "is_abstract": False, "is_blueprint_spawnable": True}
-                    if args.get("include_properties", True):
-                        res_obj["properties"] = []
-                    if args.get("include_functions", True):
-                        res_obj["functions"] = []
-                    if args.get("include_interfaces", True):
-                        res_obj["interfaces"] = []
-                    if args.get("include_metadata", True):
-                        res_obj["metadata"] = {}
-                    response["ResultMessage"] = json.dumps(res_obj)
-                else:
-                    response["Errors"].append(f"Class '{class_name}' not found")
-                    
-            elif name == "add_blueprint_variable":
-                asset_path = args.get("asset_path", "")
-                var_name = args.get("variable_name", "")
-                var_type = args.get("variable_type", "")
-                
-                # Normalize types for roundtrip comparison
-                if "TArray" in var_type:
-                    var_type = "TArray<float>"
-                elif "TSet" in var_type:
-                    var_type = "TSet<FString>"
-                elif "TMap" in var_type:
-                    var_type = "TMap<FString, int32>"
-                    
-                if asset_path in MockEditorHandler.blueprint_vars:
-                    # check if already exists
-                    if not any(v["name"] == var_name for v in MockEditorHandler.blueprint_vars[asset_path]):
-                        MockEditorHandler.blueprint_vars[asset_path].append({
-                            "name": var_name,
-                            "type": var_type,
-                            "category": args.get("category", "Default")
-                        })
-                response["bSuccess"] = True
-                response["ResultMessage"] = "Added variable successfully."
-                
-            self.send_response(200)
-            self.send_header('Content-Type', 'application/json')
-            self.end_headers()
-            self.wfile.write(json.dumps(response).encode('utf-8'))
-            
-        def do_GET(self):
-            if self.path == "/api/tools":
-                self.send_response(200)
-                self.send_header('Content-Type', 'application/json')
-                self.end_headers()
-                self.wfile.write(json.dumps({"tools": []}).encode('utf-8'))
-            else:
-                self.send_response(404)
-                self.end_headers()
 
-    server = http.server.HTTPServer(("127.0.0.1", PORT), MockEditorHandler)
-    server_thread = threading.Thread(target=server.serve_forever, daemon=True)
-    server_thread.start()
-    print(f"\nStarted mock C++ HTTP server on port {PORT}")
-    
-    yield server
-    
-    server.shutdown()
-    server.server_close()
-    print(f"\nStopped mock C++ HTTP server on port {PORT}")
+    try:
+        import winreg
+        installed_dir = None
+        # Check standard launcher registry path first
+        if "." in engine_association:
+            try:
+                with winreg.OpenKey(winreg.HKEY_LOCAL_MACHINE, rf"SOFTWARE\EpicGames\Unreal Engine\{engine_association}") as key:
+                    installed_dir, _ = winreg.QueryValueEx(key, "InstalledDirectory")
+            except Exception:
+                pass
+        
+        # Check custom builds registry path if launcher query failed
+        if not installed_dir:
+            try:
+                with winreg.OpenKey(winreg.HKEY_CURRENT_USER, r"Software\Epic Games\Unreal Engine\Builds") as key:
+                    installed_dir, _ = winreg.QueryValueEx(key, engine_association)
+            except Exception:
+                pass
+
+        if installed_dir:
+            for name in ["UnrealEditor-Cmd.exe", "UnrealEditor.exe"]:
+                p = os.path.join(installed_dir, "Engine", "Binaries", "Win64", name)
+                if os.path.exists(p):
+                    unreal_exe = p
+                    break
+    except Exception:
+        pass
+
+    if not unreal_exe:
+        fallbacks = [
+            rf"C:\Program Files\Epic Games\UE_{engine_association}\Engine\Binaries\Win64\UnrealEditor-Cmd.exe",
+            rf"C:\Program Files\Epic Games\UE_{engine_association}\Engine\Binaries\Win64\UnrealEditor.exe",
+            r"C:\Program Files\Epic Games\UE_5.8\Engine\Binaries\Win64\UnrealEditor-Cmd.exe",
+            r"C:\Program Files\Epic Games\UE_5.8\Engine\Binaries\Win64\UnrealEditor.exe",
+            r"C:\Program Files\Epic Games\UE_5.7\Engine\Binaries\Win64\UnrealEditor-Cmd.exe",
+            r"C:\Program Files\Epic Games\UE_5.7\Engine\Binaries\Win64\UnrealEditor.exe",
+        ]
+        for p in fallbacks:
+            if os.path.exists(p):
+                unreal_exe = p
+                break
+
+    proc = None
+    if unreal_exe and os.path.exists(project_path):
+        print(f"\n[INFO] Unreal Editor is closed. Auto-launching:\n  Editor: {unreal_exe}\n  Project: {project_path}")
+        proc = subprocess.Popen([unreal_exe, project_path])
+    else:
+        print(f"\n[WARNING] Could not locate Unreal Editor executable or project file at '{project_path}'.")
+
+    print(f"\n[IMPORTANT] Waiting for Unreal Editor to start on port {PORT}...")
+    print("If it does not start automatically, please open your editor project manually.")
+
+    start_time = time.time()
+    timeout = 180.0
+    opened = False
+    while time.time() - start_time < timeout:
+        if is_port_open(PORT):
+            opened = True
+            break
+        time.sleep(1.0)
+
+    if not opened:
+        pytest.exit(f"\n[ERROR] Unreal Editor did not start or register on port {PORT} within {timeout} seconds.\n"
+                    f"Please open the editor manually and verify the Antigravity plugin is loaded.")
+
+    yield proc
+
+    if proc:
+        print("\n[INFO] Shutting down spawned Unreal Editor instance...")
+        proc.terminate()
+        try:
+            proc.wait(timeout=10.0)
+        except subprocess.TimeoutExpired:
+            proc.kill()
 
 @pytest.fixture(scope="session")
 def is_live_editor(unreal_process):
-    return unreal_process is None
+    return True
 
 @pytest.fixture(scope="session")
 def unreal_port_wait(unreal_process):

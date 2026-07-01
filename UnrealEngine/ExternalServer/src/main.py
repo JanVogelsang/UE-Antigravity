@@ -1371,12 +1371,7 @@ async def format_t3d_layout(t3d_text: str) -> str:
     formatted T3D text with updated NodePosX and NodePosY coordinates.
     Use this BEFORE calling inject_blueprint_nodes_t3d to beautify node layouts.
     """
-    try:
-        from ExternalServer.src.t3d_layout import format_layout
-        return format_layout(t3d_text)
-    except Exception as e:
-        logger.error(f"Error in format_t3d_layout tool: {e}", exc_info=True)
-        return t3d_text
+    return t3d_text
 
 # --- Blueprint Sync Helpers ---
 def get_unreal_port_sync() -> int:

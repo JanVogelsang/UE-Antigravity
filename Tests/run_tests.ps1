@@ -12,4 +12,4 @@ if (-not (Test-Path $python_exe)) {
 }
 
 Write-Host "Running pytest suite via explicit Python 3.13 interpreter..." -ForegroundColor Cyan
-& $python_exe "$PSScriptRoot\run_tests.py"
+& $python_exe "$PSScriptRoot\run_tests.py" $args

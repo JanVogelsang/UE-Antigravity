@@ -102,7 +102,31 @@ namespace
 				BaseName = SubCategoryObject->GetName();
 			}
 
-			if (PinCategory == UEdGraphSchema_K2::PC_Real)
+			if (PinCategory == UEdGraphSchema_K2::PC_Boolean)
+			{
+				return TEXT("bool");
+			}
+			else if (PinCategory == UEdGraphSchema_K2::PC_Int)
+			{
+				return TEXT("int32");
+			}
+			else if (PinCategory == UEdGraphSchema_K2::PC_String)
+			{
+				return TEXT("FString");
+			}
+			else if (PinCategory == UEdGraphSchema_K2::PC_Name)
+			{
+				return TEXT("FName");
+			}
+			else if (PinCategory == UEdGraphSchema_K2::PC_Text)
+			{
+				return TEXT("FText");
+			}
+			else if (PinCategory == UEdGraphSchema_K2::PC_Byte && !SubCategoryObject)
+			{
+				return TEXT("uint8");
+			}
+			else if (PinCategory == UEdGraphSchema_K2::PC_Real)
 			{
 				if (PinSubCategory == UEdGraphSchema_K2::PC_Float)
 				{
@@ -163,11 +187,6 @@ FAntigravityBlueprintActions::FAntigravityBlueprintActions() {}
 FAntigravityBlueprintActions::~FAntigravityBlueprintActions() {}
 
 FName FAntigravityBlueprintActions::GetActionName() const { return FName(TEXT("Blueprint")); }
-FText FAntigravityBlueprintActions::GetDisplayName() const { return FText::FromString(TEXT("Blueprint Actions")); }
-EAntigravityActionCategory FAntigravityBlueprintActions::GetCategory() const { return EAntigravityActionCategory::Blueprint; }
-EAntigravityRiskLevel FAntigravityBlueprintActions::GetDefaultRiskLevel() const { return EAntigravityRiskLevel::Medium; }
-bool FAntigravityBlueprintActions::CanUndo() const { return true; }
-bool FAntigravityBlueprintActions::UndoAction() { return false; }
 
 TArray<FString> FAntigravityBlueprintActions::GetSupportedToolNames() const
 {
@@ -326,27 +345,6 @@ bool FAntigravityBlueprintActions::ValidateParams(const TSharedRef<FJsonObject>&
 	}
 
 	return true;
-}
-
-// ============================================================================
-// PreviewAction
-// ============================================================================
-
-FAntigravityActionPlan FAntigravityBlueprintActions::PreviewAction(const TSharedRef<FJsonObject>& Params)
-{
-	FAntigravityActionPlan Plan;
-	FString AssetPath = Params->GetStringField(TEXT("asset_path"));
-	Plan.Summary = FString::Printf(TEXT("Blueprint operation at %s"), *AssetPath);
-
-	FAntigravityAction Action;
-	Action.Description = Plan.Summary;
-	Action.Category = EAntigravityActionCategory::Blueprint;
-	Action.RiskLevel = EAntigravityRiskLevel::Medium;
-	Action.AffectedAssets.Add(AssetPath);
-	Plan.Actions.Add(Action);
-	Plan.MaxRiskLevel = EAntigravityRiskLevel::Medium;
-
-	return Plan;
 }
 
 // ============================================================================
@@ -3044,7 +3042,57 @@ FString FAntigravityBlueprintActions::BuildCompactConnectionReport(const TSet<UE
 
 void FAntigravityBlueprintActions::ResolvePinType(const FString& TypeName, FEdGraphPinType& OutPinType)
 {
-	const FString TypeLower = TypeName.ToLower();
+	FString TrimmedType = TypeName.TrimStartAndEnd();
+
+	if (TrimmedType.StartsWith(TEXT("TArray<"), ESearchCase::IgnoreCase) && TrimmedType.EndsWith(TEXT(">")))
+	{
+		FString InnerType = TrimmedType.Mid(7, TrimmedType.Len() - 8).TrimStartAndEnd();
+		ResolvePinType(InnerType, OutPinType);
+		OutPinType.ContainerType = EPinContainerType::Array;
+		return;
+	}
+	else if (TrimmedType.StartsWith(TEXT("TSet<"), ESearchCase::IgnoreCase) && TrimmedType.EndsWith(TEXT(">")))
+	{
+		FString InnerType = TrimmedType.Mid(5, TrimmedType.Len() - 6).TrimStartAndEnd();
+		ResolvePinType(InnerType, OutPinType);
+		OutPinType.ContainerType = EPinContainerType::Set;
+		return;
+	}
+	else if (TrimmedType.StartsWith(TEXT("TMap<"), ESearchCase::IgnoreCase) && TrimmedType.EndsWith(TEXT(">")))
+	{
+		int32 Depth = 0;
+		int32 CommaIdx = INDEX_NONE;
+		for (int32 i = 5; i < TrimmedType.Len() - 1; ++i)
+		{
+			TCHAR Ch = TrimmedType[i];
+			if (Ch == '<') Depth++;
+			else if (Ch == '>') Depth--;
+			else if (Ch == ',' && Depth == 0)
+			{
+				CommaIdx = i;
+				break;
+			}
+		}
+
+		if (CommaIdx != INDEX_NONE)
+		{
+			FString KeyTypeStr = TrimmedType.Mid(5, CommaIdx - 5).TrimStartAndEnd();
+			FString ValueTypeStr = TrimmedType.Mid(CommaIdx + 1, TrimmedType.Len() - 1 - (CommaIdx + 1)).TrimStartAndEnd();
+
+			ResolvePinType(KeyTypeStr, OutPinType);
+
+			FEdGraphPinType ValuePinType;
+			ResolvePinType(ValueTypeStr, ValuePinType);
+
+			OutPinType.PinValueType.TerminalCategory = ValuePinType.PinCategory;
+			OutPinType.PinValueType.TerminalSubCategory = ValuePinType.PinSubCategory;
+			OutPinType.PinValueType.TerminalSubCategoryObject = ValuePinType.PinSubCategoryObject;
+			OutPinType.ContainerType = EPinContainerType::Map;
+			return;
+		}
+	}
+
+	const FString TypeLower = TrimmedType.ToLower();
 
 	if (TypeLower == TEXT("bool") || TypeLower == TEXT("boolean"))
 	{
@@ -3080,7 +3128,7 @@ void FAntigravityBlueprintActions::ResolvePinType(const FString& TypeName, FEdGr
 	{
 		OutPinType.PinCategory = UEdGraphSchema_K2::PC_Name;
 	}
-	else if (TypeLower == TEXT("byte"))
+	else if (TypeLower == TEXT("byte") || TypeLower == TEXT("uint8"))
 	{
 		OutPinType.PinCategory = UEdGraphSchema_K2::PC_Byte;
 	}

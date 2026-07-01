@@ -31,11 +31,6 @@ FAntigravityMaterialActions::FAntigravityMaterialActions() {}
 FAntigravityMaterialActions::~FAntigravityMaterialActions() {}
 
 FName FAntigravityMaterialActions::GetActionName() const { return FName(TEXT("Material")); }
-FText FAntigravityMaterialActions::GetDisplayName() const { return FText::FromString(TEXT("Material Actions")); }
-EAntigravityActionCategory FAntigravityMaterialActions::GetCategory() const { return EAntigravityActionCategory::Material; }
-EAntigravityRiskLevel FAntigravityMaterialActions::GetDefaultRiskLevel() const { return EAntigravityRiskLevel::Medium; }
-bool FAntigravityMaterialActions::CanUndo() const { return true; }
-bool FAntigravityMaterialActions::UndoAction() { return false; }
 
 TArray<FString> FAntigravityMaterialActions::GetSupportedToolNames() const
 {
@@ -69,20 +64,6 @@ bool FAntigravityMaterialActions::ValidateParams(const TSharedRef<FJsonObject>& 
 	}
 
 	return true;
-}
-
-FAntigravityActionPlan FAntigravityMaterialActions::PreviewAction(const TSharedRef<FJsonObject>& Params)
-{
-	FAntigravityActionPlan Plan;
-	FString AssetPath = Params->GetStringField(TEXT("asset_path"));
-	Plan.Summary = FString::Printf(TEXT("Material operation at %s"), *AssetPath);
-	FAntigravityAction Action;
-	Action.Description = Plan.Summary;
-	Action.Category = EAntigravityActionCategory::Material;
-	Action.RiskLevel = EAntigravityRiskLevel::Low;
-	Action.AffectedAssets.Add(AssetPath);
-	Plan.Actions.Add(Action);
-	return Plan;
 }
 
 FAntigravityActionResult FAntigravityMaterialActions::ExecuteAction(const TSharedRef<FJsonObject>& Params)

@@ -36,11 +36,6 @@ FAntigravityNiagaraActions::FAntigravityNiagaraActions() {}
 FAntigravityNiagaraActions::~FAntigravityNiagaraActions() {}
 
 FName FAntigravityNiagaraActions::GetActionName() const { return FName(TEXT("Niagara")); }
-FText FAntigravityNiagaraActions::GetDisplayName() const { return FText::FromString(TEXT("Niagara Actions")); }
-EAntigravityActionCategory FAntigravityNiagaraActions::GetCategory() const { return EAntigravityActionCategory::Level; }
-EAntigravityRiskLevel FAntigravityNiagaraActions::GetDefaultRiskLevel() const { return EAntigravityRiskLevel::Medium; }
-bool FAntigravityNiagaraActions::CanUndo() const { return true; }
-bool FAntigravityNiagaraActions::UndoAction() { return false; }
 
 TArray<FString> FAntigravityNiagaraActions::GetSupportedToolNames() const
 {
@@ -104,23 +99,6 @@ bool FAntigravityNiagaraActions::ValidateParams(const TSharedRef<FJsonObject>& P
 	}
 
 	return true;
-}
-
-FAntigravityActionPlan FAntigravityNiagaraActions::PreviewAction(const TSharedRef<FJsonObject>& Params)
-{
-	FAntigravityActionPlan Plan;
-	FString TargetPath = Params->HasField(TEXT("asset_path")) ? Params->GetStringField(TEXT("asset_path")) : Params->GetStringField(TEXT("system_path"));
-	Plan.Summary = FString::Printf(TEXT("Niagara operation on %s"), *TargetPath);
-
-	FAntigravityAction Action;
-	Action.Description = Plan.Summary;
-	Action.Category = EAntigravityActionCategory::Level;
-	Action.RiskLevel = EAntigravityRiskLevel::Medium;
-	Action.AffectedAssets.Add(TargetPath);
-	Plan.Actions.Add(Action);
-	Plan.MaxRiskLevel = EAntigravityRiskLevel::Medium;
-
-	return Plan;
 }
 
 FAntigravityActionResult FAntigravityNiagaraActions::ExecuteAction(const TSharedRef<FJsonObject>& Params)

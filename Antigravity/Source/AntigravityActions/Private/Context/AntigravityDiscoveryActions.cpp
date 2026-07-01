@@ -14,11 +14,6 @@ FAntigravityDiscoveryActions::FAntigravityDiscoveryActions() {}
 FAntigravityDiscoveryActions::~FAntigravityDiscoveryActions() {}
 
 FName FAntigravityDiscoveryActions::GetActionName() const { return FName(TEXT("Discovery")); }
-FText FAntigravityDiscoveryActions::GetDisplayName() const { return FText::FromString(TEXT("Tool Discovery")); }
-EAntigravityActionCategory FAntigravityDiscoveryActions::GetCategory() const { return EAntigravityActionCategory::General; }
-EAntigravityRiskLevel FAntigravityDiscoveryActions::GetDefaultRiskLevel() const { return EAntigravityRiskLevel::Low; }
-bool FAntigravityDiscoveryActions::CanUndo() const { return false; }
-bool FAntigravityDiscoveryActions::UndoAction() { return false; }
 
 TArray<FString> FAntigravityDiscoveryActions::GetSupportedToolNames() const
 {
@@ -31,18 +26,6 @@ TArray<FString> FAntigravityDiscoveryActions::GetSupportedToolNames() const
 bool FAntigravityDiscoveryActions::ValidateParams(const TSharedRef<FJsonObject>& Params, TArray<FString>& OutErrors) const
 {
 	return true;
-}
-
-FAntigravityActionPlan FAntigravityDiscoveryActions::PreviewAction(const TSharedRef<FJsonObject>& Params)
-{
-	FAntigravityActionPlan Plan;
-	Plan.Summary = TEXT("Tool discovery queries (read-only)");
-	FAntigravityAction Action;
-	Action.Description = Plan.Summary;
-	Action.Category = EAntigravityActionCategory::General;
-	Action.RiskLevel = EAntigravityRiskLevel::Low;
-	Plan.Actions.Add(Action);
-	return Plan;
 }
 
 FAntigravityActionResult FAntigravityDiscoveryActions::ExecuteAction(const TSharedRef<FJsonObject>& Params)

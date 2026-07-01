@@ -3,7 +3,7 @@ import json
 import asyncio
 import httpx
 import os
-import difflib
+
 from pathlib import Path
 from contextlib import AsyncExitStack
 
@@ -26,12 +26,7 @@ tool_owners = {}
 ue_session = None
 ue_stack = None
 
-SYNONYM_VERBS = [
-    {"spawn", "place", "create", "add"},
-    {"destroy", "delete", "remove", "clear"},
-    {"get", "find", "query", "read", "inspect"},
-    {"set", "modify", "update", "write", "change"}
-]
+
 
 def load_profile(client_name=""):
     profile_name = os.environ.get("BRIDGE_PROFILE")
@@ -52,49 +47,7 @@ def load_profile(client_name=""):
     return {}
 
 def are_tools_similar(tool1, tool2):
-    name1 = tool1.get("name", "").lower()
-    name2 = tool2.get("name", "").lower()
-    desc1 = tool1.get("description", "").lower()
-    desc2 = tool2.get("description", "").lower()
-    
-    if name1 == name2:
-        return True
-        
-    parts1 = name1.split('_')
-    parts2 = name2.split('_')
-    
-    verb1 = parts1[0] if parts1 else ""
-    verb2 = parts2[0] if parts2 else ""
-    
-    # Check if verbs are synonyms
-    verbs_are_synonyms = False
-    if verb1 == verb2:
-        verbs_are_synonyms = True
-    else:
-        for group in SYNONYM_VERBS:
-            if verb1 in group and verb2 in group:
-                verbs_are_synonyms = True
-                break
-                
-    if not verbs_are_synonyms:
-        return False
-        
-    # If verbs are synonyms, check if the rest of the name is highly similar
-    suffix1 = "_".join(parts1[1:])
-    suffix2 = "_".join(parts2[1:])
-    
-    if suffix1 == suffix2:
-        return True
-        
-    if difflib.SequenceMatcher(None, suffix1, suffix2).ratio() > 0.8:
-        return True
-        
-    # Check description similarity as fallback
-    if len(desc1) > 20 and len(desc2) > 20:
-        if difflib.SequenceMatcher(None, desc1, desc2).ratio() > 0.7:
-            return True
-            
-    return False
+    return tool1.get("name", "").lower() == tool2.get("name", "").lower()
 
 async def fetch_antigravity_tools():
     async with httpx.AsyncClient() as client:

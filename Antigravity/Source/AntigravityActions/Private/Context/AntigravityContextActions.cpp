@@ -14,11 +14,6 @@ FAntigravityContextActions::FAntigravityContextActions() {}
 FAntigravityContextActions::~FAntigravityContextActions() {}
 
 FName FAntigravityContextActions::GetActionName() const { return FName(TEXT("Context")); }
-FText FAntigravityContextActions::GetDisplayName() const { return FText::FromString(TEXT("Context Exploration")); }
-EAntigravityActionCategory FAntigravityContextActions::GetCategory() const { return EAntigravityActionCategory::General; }
-EAntigravityRiskLevel FAntigravityContextActions::GetDefaultRiskLevel() const { return EAntigravityRiskLevel::Low; }
-bool FAntigravityContextActions::CanUndo() const { return false; }
-bool FAntigravityContextActions::UndoAction() { return false; }
 
 TArray<FString> FAntigravityContextActions::GetSupportedToolNames() const
 {
@@ -30,18 +25,6 @@ TArray<FString> FAntigravityContextActions::GetSupportedToolNames() const
 bool FAntigravityContextActions::ValidateParams(const TSharedRef<FJsonObject>& Params, TArray<FString>& OutErrors) const
 {
 	return true;
-}
-
-FAntigravityActionPlan FAntigravityContextActions::PreviewAction(const TSharedRef<FJsonObject>& Params)
-{
-	FAntigravityActionPlan Plan;
-	Plan.Summary = TEXT("Context exploration (read-only)");
-	FAntigravityAction Action;
-	Action.Description = Plan.Summary;
-	Action.Category = EAntigravityActionCategory::General;
-	Action.RiskLevel = EAntigravityRiskLevel::Low;
-	Plan.Actions.Add(Action);
-	return Plan;
 }
 
 FAntigravityActionResult FAntigravityContextActions::ExecuteAction(const TSharedRef<FJsonObject>& Params)

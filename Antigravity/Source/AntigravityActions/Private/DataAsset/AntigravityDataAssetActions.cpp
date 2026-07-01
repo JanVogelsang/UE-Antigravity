@@ -19,11 +19,6 @@ FAntigravityDataAssetActions::FAntigravityDataAssetActions() {}
 FAntigravityDataAssetActions::~FAntigravityDataAssetActions() {}
 
 FName FAntigravityDataAssetActions::GetActionName() const { return FName(TEXT("DataAsset")); }
-FText FAntigravityDataAssetActions::GetDisplayName() const { return LOCTEXT("DisplayName", "Data Asset Tools"); }
-EAntigravityActionCategory FAntigravityDataAssetActions::GetCategory() const { return EAntigravityActionCategory::General; }
-EAntigravityRiskLevel FAntigravityDataAssetActions::GetDefaultRiskLevel() const { return EAntigravityRiskLevel::Medium; }
-bool FAntigravityDataAssetActions::CanUndo() const { return true; }
-bool FAntigravityDataAssetActions::UndoAction() { return GEditor && GEditor->UndoTransaction(); }
 
 TArray<FString> FAntigravityDataAssetActions::GetSupportedToolNames() const
 {
@@ -37,41 +32,6 @@ TArray<FString> FAntigravityDataAssetActions::GetSupportedToolNames() const
 bool FAntigravityDataAssetActions::ValidateParams(const TSharedRef<FJsonObject>& Params, TArray<FString>& OutErrors) const
 {
 	return true;
-}
-
-FAntigravityActionPlan FAntigravityDataAssetActions::PreviewAction(const TSharedRef<FJsonObject>& Params)
-{
-	FAntigravityActionPlan Plan;
-	FString Action;
-	Params->TryGetStringField(TEXT("action"), Action);
-	if (Action.IsEmpty()) Params->TryGetStringField(TEXT("tool_name"), Action);
-
-	if (Action == TEXT("create_data_asset"))
-	{
-		FString AssetPath;
-		Params->TryGetStringField(TEXT("asset_path"), AssetPath);
-		Plan.Summary = FString::Printf(TEXT("Create Data Asset: %s"), *AssetPath);
-	}
-	else if (Action == TEXT("set_data_asset_properties"))
-	{
-		FString AssetPath;
-		Params->TryGetStringField(TEXT("asset_path"), AssetPath);
-		Plan.Summary = FString::Printf(TEXT("Set properties on Data Asset: %s"), *AssetPath);
-	}
-	else
-	{
-		FString AssetPath;
-		Params->TryGetStringField(TEXT("asset_path"), AssetPath);
-		Plan.Summary = FString::Printf(TEXT("Inspect Data Asset: %s"), *AssetPath);
-	}
-
-	Plan.MaxRiskLevel = EAntigravityRiskLevel::Medium;
-	FAntigravityAction A;
-	A.Description = Plan.Summary;
-	A.Category = EAntigravityActionCategory::General;
-	A.RiskLevel = EAntigravityRiskLevel::Medium;
-	Plan.Actions.Add(A);
-	return Plan;
 }
 
 FAntigravityActionResult FAntigravityDataAssetActions::ExecuteAction(const TSharedRef<FJsonObject>& Params)

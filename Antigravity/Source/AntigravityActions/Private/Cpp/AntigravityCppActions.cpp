@@ -24,11 +24,6 @@ FAntigravityCppActions::FAntigravityCppActions() {}
 FAntigravityCppActions::~FAntigravityCppActions() {}
 
 FName FAntigravityCppActions::GetActionName() const { return FName(TEXT("Cpp")); }
-FText FAntigravityCppActions::GetDisplayName() const { return FText::FromString(TEXT("C++ Generation Actions")); }
-EAntigravityActionCategory FAntigravityCppActions::GetCategory() const { return EAntigravityActionCategory::Cpp; }
-EAntigravityRiskLevel FAntigravityCppActions::GetDefaultRiskLevel() const { return EAntigravityRiskLevel::High; }
-bool FAntigravityCppActions::CanUndo() const { return false; }
-bool FAntigravityCppActions::UndoAction() { return false; }
 
 TArray<FString> FAntigravityCppActions::GetSupportedToolNames() const
 {
@@ -110,30 +105,6 @@ bool FAntigravityCppActions::ValidateParams(const TSharedRef<FJsonObject>& Param
 		}
 	}
 	return true;
-}
-
-FAntigravityActionPlan FAntigravityCppActions::PreviewAction(const TSharedRef<FJsonObject>& Params)
-{
-	FAntigravityActionPlan Plan;
-	Plan.Summary = TEXT("C++ code generation (HIGH RISK — requires compilation)");
-	Plan.MaxRiskLevel = EAntigravityRiskLevel::High;
-
-	FAntigravityAction Action;
-	Action.Description = Plan.Summary;
-	Action.Category = EAntigravityActionCategory::Cpp;
-	Action.RiskLevel = EAntigravityRiskLevel::High;
-
-	FString ClassName;
-	if (Params->TryGetStringField(TEXT("class_name"), ClassName))
-	{
-		FString HeaderPath = FPaths::Combine(FPaths::GameSourceDir(), FApp::GetProjectName(), TEXT("Public"), ClassName + TEXT(".h"));
-		FString CppPath = FPaths::Combine(FPaths::GameSourceDir(), FApp::GetProjectName(), TEXT("Private"), ClassName + TEXT(".cpp"));
-		Action.AffectedPaths.Add(HeaderPath);
-		Action.AffectedPaths.Add(CppPath);
-	}
-
-	Plan.Actions.Add(Action);
-	return Plan;
 }
 
 FAntigravityActionResult FAntigravityCppActions::ExecuteAction(const TSharedRef<FJsonObject>& Params)

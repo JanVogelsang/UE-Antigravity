@@ -33,13 +33,7 @@ public:
 	virtual ~FAntigravityPIEActions();
 
 	virtual FName GetActionName() const override;
-	virtual FText GetDisplayName() const override;
-	virtual EAntigravityActionCategory GetCategory() const override;
-	virtual EAntigravityRiskLevel GetDefaultRiskLevel() const override;
-	virtual FAntigravityActionPlan PreviewAction(const TSharedRef<FJsonObject>& Params) override;
 	virtual FAntigravityActionResult ExecuteAction(const TSharedRef<FJsonObject>& Params) override;
-	virtual bool CanUndo() const override;
-	virtual bool UndoAction() override;
 	virtual TArray<FString> GetSupportedToolNames() const override;
 	virtual bool ValidateParams(const TSharedRef<FJsonObject>& Params, TArray<FString>& OutErrors) const override;
 
@@ -53,6 +47,18 @@ private:
 	/** Stop the current PIE session. */
 	FAntigravityActionResult ExecuteStopPIE(const TSharedRef<FJsonObject>& Params, FAntigravityActionResult& Result);
 
+	/** Extract visible UI widgets. */
+	FAntigravityActionResult ExecuteExtractUIState(const TSharedRef<FJsonObject>& Params, FAntigravityActionResult& Result);
+
+	/** Trigger an interaction on a specific UI element. */
+	FAntigravityActionResult ExecuteTriggerUIElement(const TSharedRef<FJsonObject>& Params, FAntigravityActionResult& Result);
+
+	/** Query current world state actors. */
+	FAntigravityActionResult ExecuteQueryWorldState(const TSharedRef<FJsonObject>& Params, FAntigravityActionResult& Result);
+
 	/** Whether PIE is currently running. */
 	static bool IsPIERunning();
+
+	/** Cache for raw Slate widgets to trigger them programmatically. */
+	TMap<FString, TWeakPtr<SWidget>> CachedSlateWidgets;
 };

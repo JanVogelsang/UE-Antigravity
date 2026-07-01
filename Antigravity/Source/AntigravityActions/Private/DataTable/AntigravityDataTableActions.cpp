@@ -28,11 +28,6 @@ FAntigravityDataTableActions::~FAntigravityDataTableActions() {}
 // ============================================================================
 
 FName FAntigravityDataTableActions::GetActionName() const { return FName(TEXT("DataTable")); }
-FText FAntigravityDataTableActions::GetDisplayName() const { return LOCTEXT("DisplayName", "DataTable Tools"); }
-EAntigravityActionCategory FAntigravityDataTableActions::GetCategory() const { return EAntigravityActionCategory::General; }
-EAntigravityRiskLevel FAntigravityDataTableActions::GetDefaultRiskLevel() const { return EAntigravityRiskLevel::Medium; }
-bool FAntigravityDataTableActions::CanUndo() const { return true; }
-bool FAntigravityDataTableActions::UndoAction() { return GEditor && GEditor->UndoTransaction(); }
 
 TArray<FString> FAntigravityDataTableActions::GetSupportedToolNames() const
 {
@@ -45,33 +40,6 @@ TArray<FString> FAntigravityDataTableActions::GetSupportedToolNames() const
 bool FAntigravityDataTableActions::ValidateParams(const TSharedRef<FJsonObject>& Params, TArray<FString>& OutErrors) const
 {
 	return true;
-}
-
-FAntigravityActionPlan FAntigravityDataTableActions::PreviewAction(const TSharedRef<FJsonObject>& Params)
-{
-	FAntigravityActionPlan Plan;
-	FString Action;
-	Params->TryGetStringField(TEXT("action"), Action);
-	if (Action.IsEmpty()) Params->TryGetStringField(TEXT("tool_name"), Action);
-
-	if (Action == TEXT("create_data_table"))
-	{
-		FString AssetPath;
-		Params->TryGetStringField(TEXT("asset_path"), AssetPath);
-		Plan.Summary = FString::Printf(TEXT("Create DataTable: %s"), *AssetPath);
-	}
-	else
-	{
-		Plan.Summary = TEXT("Import JSON data into DataTable");
-	}
-
-	Plan.MaxRiskLevel = EAntigravityRiskLevel::Medium;
-	FAntigravityAction A;
-	A.Description = Plan.Summary;
-	A.Category = EAntigravityActionCategory::General;
-	A.RiskLevel = EAntigravityRiskLevel::Medium;
-	Plan.Actions.Add(A);
-	return Plan;
 }
 
 FAntigravityActionResult FAntigravityDataTableActions::ExecuteAction(const TSharedRef<FJsonObject>& Params)

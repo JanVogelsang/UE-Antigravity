@@ -25,13 +25,20 @@ Configure an actor class for network replication in multiplayer UE games.
    ```
 
 3. **Mark properties for replication**:
+   
+   **Standard Replication (No callback)**:
    ```cpp
    UPROPERTY(Replicated)
    float Health;
-   UPROPERTY(ReplicatedUsing=OnRep_Health)
-   float Health;
+   ```
+   
+   **Replication with RepNotify Callback (Client side effect)**:
+   ```cpp
+   UPROPERTY(ReplicatedUsing=OnRep_Shield)
+   float Shield;
+   
    UFUNCTION()
-   void OnRep_Health();
+   void OnRep_Shield(float OldShield);
    ```
 
 4. **Server RPCs** for player actions:

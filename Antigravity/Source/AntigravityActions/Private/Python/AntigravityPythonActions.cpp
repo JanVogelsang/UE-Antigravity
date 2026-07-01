@@ -31,11 +31,6 @@ FAntigravityPythonActions::~FAntigravityPythonActions() {}
 // ============================================================================
 
 FName FAntigravityPythonActions::GetActionName() const { return FName(TEXT("Python")); }
-FText FAntigravityPythonActions::GetDisplayName() const { return LOCTEXT("DisplayName", "Python Scripting"); }
-EAntigravityActionCategory FAntigravityPythonActions::GetCategory() const { return EAntigravityActionCategory::General; }
-EAntigravityRiskLevel FAntigravityPythonActions::GetDefaultRiskLevel() const { return EAntigravityRiskLevel::High; }
-bool FAntigravityPythonActions::CanUndo() const { return false; }
-bool FAntigravityPythonActions::UndoAction() { return false; }
 
 TArray<FString> FAntigravityPythonActions::GetSupportedToolNames() const
 {
@@ -44,34 +39,64 @@ TArray<FString> FAntigravityPythonActions::GetSupportedToolNames() const
 
 bool FAntigravityPythonActions::ValidateParams(const TSharedRef<FJsonObject>& Params, TArray<FString>& OutErrors) const
 {
-	if (!Params->HasField(TEXT("script")))
+	if (!Params->HasField(TEXT("script")) && !Params->HasField(TEXT("script_content")))
 	{
-		OutErrors.Add(TEXT("Missing required field: 'script'"));
+		OutErrors.Add(TEXT("Missing required field: 'script' or 'script_content'"));
 		return false;
 	}
+	
+	FString Justification;
+	if (!Params->TryGetStringField(TEXT("justification_why_native_tools_or_skills_are_insufficient"), Justification) || Justification.TrimStartAndEnd().IsEmpty())
+	{
+		OutErrors.Add(TEXT("Missing or empty required field: 'justification_why_native_tools_or_skills_are_insufficient'. You MUST provide a detailed justification explaining why native tools or dedicated skills cannot accomplish this task."));
+		return false;
+	}
+	
+	FString Trimmed = Justification.TrimStartAndEnd();
+	if (Trimmed.Len() < 10)
+	{
+		OutErrors.Add(TEXT("The provided 'justification_why_native_tools_or_skills_are_insufficient' is too short. Please provide a detailed, meaningful explanation."));
+		return false;
+	}
+	
+	if (Trimmed.Len() > 1000)
+	{
+		OutErrors.Add(TEXT("The provided 'justification_why_native_tools_or_skills_are_insufficient' is too long (max 1000 characters). Please keep it concise."));
+		return false;
+	}
+
+	TArray<FString> Words;
+	Trimmed.ParseIntoArrayWS(Words);
+	if (Words.Num() < 4)
+	{
+		OutErrors.Add(TEXT("The provided 'justification_why_native_tools_or_skills_are_insufficient' is too vague. Please write a complete explanation (at least 4 words) explaining why native tools or skills are insufficient."));
+		return false;
+	}
+
+	// Basic low-effort phrase check
+	TArray<FString> LowEffortPhrases = {
+		TEXT("no native tools"),
+		TEXT("python is better"),
+		TEXT("just testing"),
+		TEXT("test script"),
+		TEXT("testing python"),
+		TEXT("needed for python"),
+		TEXT("not available"),
+		TEXT("custom script"),
+		TEXT("none exists")
+	};
+
+	FString LowerJustification = Trimmed.ToLower();
+	for (const FString& Phrase : LowEffortPhrases)
+	{
+		if (LowerJustification == Phrase || LowerJustification.Contains(Phrase))
+		{
+			OutErrors.Add(FString::Printf(TEXT("The justification '%s' is flagged as a low-effort placeholder. Please provide a genuine, detailed reason."), *Trimmed));
+			return false;
+		}
+	}
+	
 	return true;
-}
-
-FAntigravityActionPlan FAntigravityPythonActions::PreviewAction(const TSharedRef<FJsonObject>& Params)
-{
-	FAntigravityActionPlan Plan;
-
-	FString Script;
-	Params->TryGetStringField(TEXT("script"), Script);
-
-	int32 LineCount = 1;
-	for (const TCHAR& Ch : Script) { if (Ch == TEXT('\n')) ++LineCount; }
-
-	Plan.Summary = FString::Printf(TEXT("Execute Python script (%d lines)"), LineCount);
-	Plan.MaxRiskLevel = EAntigravityRiskLevel::High;
-
-	FAntigravityAction Action;
-	Action.Description = Plan.Summary;
-	Action.Category = EAntigravityActionCategory::General;
-	Action.RiskLevel = EAntigravityRiskLevel::High;
-	Plan.Actions.Add(Action);
-
-	return Plan;
 }
 
 FAntigravityActionResult FAntigravityPythonActions::ExecuteAction(const TSharedRef<FJsonObject>& Params)
@@ -118,8 +143,11 @@ FAntigravityActionResult FAntigravityPythonActions::ExecutePythonScript(
 	FString Script;
 	if (!Params->TryGetStringField(TEXT("script"), Script) || Script.IsEmpty())
 	{
-		Result.Errors.Add(TEXT("Missing or empty 'script' field."));
-		return Result;
+		if (!Params->TryGetStringField(TEXT("script_content"), Script) || Script.IsEmpty())
+		{
+			Result.Errors.Add(TEXT("Missing or empty 'script' or 'script_content' field."));
+			return Result;
+		}
 	}
 
 	// 3. Validate against denylist
@@ -193,7 +221,9 @@ FAntigravityActionResult FAntigravityPythonActions::ExecutePythonScript(
 	}
 
 	// 8. Execute via IPythonScriptPlugin
-	UE_LOG(LogAntigravity, Log, TEXT("PythonActions: Executing script %s (timeout: %ds)"), *ScriptPath, TimeoutSeconds);
+	FString Justification;
+	Params->TryGetStringField(TEXT("justification_why_native_tools_or_skills_are_insufficient"), Justification);
+	UE_LOG(LogAntigravity, Log, TEXT("PythonActions: Executing script %s (timeout: %ds). Justification: %s"), *ScriptPath, TimeoutSeconds, *Justification);
 
 	double StartTime = FPlatformTime::Seconds();
 

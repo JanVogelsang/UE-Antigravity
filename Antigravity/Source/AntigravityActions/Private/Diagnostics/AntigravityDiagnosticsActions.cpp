@@ -72,11 +72,6 @@ FAntigravityDiagnosticsActions::~FAntigravityDiagnosticsActions()
 // ============================================================================
 
 FName FAntigravityDiagnosticsActions::GetActionName() const { return FName(TEXT("Diagnostics")); }
-FText FAntigravityDiagnosticsActions::GetDisplayName() const { return LOCTEXT("DisplayName", "Diagnostics & Message Log"); }
-EAntigravityActionCategory FAntigravityDiagnosticsActions::GetCategory() const { return EAntigravityActionCategory::General; }
-EAntigravityRiskLevel FAntigravityDiagnosticsActions::GetDefaultRiskLevel() const { return EAntigravityRiskLevel::Low; }
-bool FAntigravityDiagnosticsActions::CanUndo() const { return false; }
-bool FAntigravityDiagnosticsActions::UndoAction() { return false; }
 
 TArray<FString> FAntigravityDiagnosticsActions::GetSupportedToolNames() const
 {
@@ -86,35 +81,6 @@ TArray<FString> FAntigravityDiagnosticsActions::GetSupportedToolNames() const
 bool FAntigravityDiagnosticsActions::ValidateParams(const TSharedRef<FJsonObject>& Params, TArray<FString>& OutErrors) const
 {
 	return true; // All params optional
-}
-
-FAntigravityActionPlan FAntigravityDiagnosticsActions::PreviewAction(const TSharedRef<FJsonObject>& Params)
-{
-	FString ToolName;
-	Params->TryGetStringField(TEXT("_tool_name"), ToolName);
-
-	FAntigravityActionPlan Plan;
-	if (ToolName == TEXT("shutdown_editor"))
-	{
-		Plan.Summary = TEXT("Shutdown the Unreal Editor");
-		Plan.MaxRiskLevel = EAntigravityRiskLevel::High;
-		FAntigravityAction Action;
-		Action.Description = Plan.Summary;
-		Action.Category = EAntigravityActionCategory::General;
-		Action.RiskLevel = EAntigravityRiskLevel::High;
-		Plan.Actions.Add(Action);
-	}
-	else
-	{
-		Plan.Summary = TEXT("Read recent Output Log entries (read-only)");
-		Plan.MaxRiskLevel = EAntigravityRiskLevel::Low;
-		FAntigravityAction Action;
-		Action.Description = Plan.Summary;
-		Action.Category = EAntigravityActionCategory::General;
-		Action.RiskLevel = EAntigravityRiskLevel::Low;
-		Plan.Actions.Add(Action);
-	}
-	return Plan;
 }
 
 FAntigravityActionResult FAntigravityDiagnosticsActions::ExecuteAction(const TSharedRef<FJsonObject>& Params)

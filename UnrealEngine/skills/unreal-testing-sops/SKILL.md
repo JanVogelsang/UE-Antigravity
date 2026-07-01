@@ -60,23 +60,29 @@ This method utilizes the custom C++ executive debug commands to jump directly to
 4. **Trigger Start Round (Fleet Management)**:
    - Tool: `execute_console_command` -> `command`: `"TauDebugStartRound"`
 
-#### Option C: Visual Mouse-Clicking (Fallback - High Token Cost)
-Use this option only if input action bindings and debug console commands are both unavailable.
+#### Option C: Programmatic UI Actions (Native MCP & Python Fallbacks)
+Use this option when input action bindings or console command cheats are not available for UI transitions.
 
 1. **Start PIE Session**:
    - Tool: `start_pie_session`
-2. **Locate PvP Button Visually**:
-   - Tool: `capture_viewport` (costs image tokens)
-   - *Reasoning*: Locate the "PvPButton" in the captured image.
-3. **Click PvP Button**:
-   - Use a Python script via `execute_python_script` to programmatically trigger the button click event (which avoids coordinates altogether and is more robust than coordinate clicks):
+2. **Navigate UI programmatically using Native MCP Tools (Recommended)**:
+   - **Extract the active UI Tree**:
+     - Tool: `extract_ui_state`
+     - *Reasoning*: This returns a JSON hierarchy of all visible UMG widgets and Slate elements, along with their names (e.g., `W_TauMainMenu_C_0.PvPButton`).
+   - **Trigger the Button Click**:
+     - Tool: `trigger_ui_element` -> `widget_path`: `"W_TauMainMenu_C_0.PvPButton"` (using the name retrieved from `extract_ui_state`).
+3. **Python Scripting Fallback (If native tools are not available)**:
+   - If utilizing a custom Python execution tool, get the active running PIE game world via the `UnrealEditorSubsystem` (since `EditorLevelLibrary.get_editor_world()` retrieves the static editor world, which does not contain PIE runtime widgets):
      ```python
      import unreal
-     # Get the Main Menu widget and call click on the PvPButton
-     widgets = unreal.WidgetBlueprintLibrary.get_all_widgets_of_class(unreal.EditorLevelLibrary.get_editor_world(), unreal.UserWidget, True)
+     # Get the active PIE game world
+     editor_subsystem = unreal.get_editor_subsystem(unreal.UnrealEditorSubsystem)
+     game_world = editor_subsystem.get_game_world()
+     
+     # Query widgets in the PIE world
+     widgets = unreal.WidgetBlueprintLibrary.get_all_widgets_of_class(game_world, unreal.UserWidget, True)
      for w in widgets:
          if w.get_name() == "W_TauMainMenu_C" or "MainMenu" in w.get_name():
-             # Find PvPButton and call Click/OnClicked
              pvp_button = w.get_editor_property("PvPButton")
              if pvp_button:
                  pvp_button.on_clicked.broadcast()
@@ -85,11 +91,15 @@ Use this option only if input action bindings and debug console commands are bot
      ```
 4. **Wait for Loading**:
    - Pause execution for 2-3 seconds.
-5. **Locate and Click Start Round Button**:
-   - Programmatically click the `StartRoundButton` on `W_FleetManagementUI`:
+5. **Navigate/Click next screen programmatically**:
+   - Use the native `extract_ui_state` and `trigger_ui_element` on the newly loaded `W_FleetManagementUI` widgets.
+   - Or use the Python fallback in the game world context:
      ```python
      import unreal
-     widgets = unreal.WidgetBlueprintLibrary.get_all_widgets_of_class(unreal.EditorLevelLibrary.get_editor_world(), unreal.UserWidget, True)
+     editor_subsystem = unreal.get_editor_subsystem(unreal.UnrealEditorSubsystem)
+     game_world = editor_subsystem.get_game_world()
+     
+     widgets = unreal.WidgetBlueprintLibrary.get_all_widgets_of_class(game_world, unreal.UserWidget, True)
      for w in widgets:
          if "FleetManagement" in w.get_name():
              start_button = w.get_editor_property("StartRoundButton")

@@ -48,11 +48,6 @@ FAntigravityBehaviorTreeActions::~FAntigravityBehaviorTreeActions() {}
 // ============================================================================
 
 FName FAntigravityBehaviorTreeActions::GetActionName() const { return FName(TEXT("BehaviorTree")); }
-FText FAntigravityBehaviorTreeActions::GetDisplayName() const { return LOCTEXT("DisplayName", "Behavior Tree & AI"); }
-EAntigravityActionCategory FAntigravityBehaviorTreeActions::GetCategory() const { return EAntigravityActionCategory::Blueprint; }
-EAntigravityRiskLevel FAntigravityBehaviorTreeActions::GetDefaultRiskLevel() const { return EAntigravityRiskLevel::Medium; }
-bool FAntigravityBehaviorTreeActions::CanUndo() const { return true; }
-bool FAntigravityBehaviorTreeActions::UndoAction() { return GEditor && GEditor->UndoTransaction(); }
 
 TArray<FString> FAntigravityBehaviorTreeActions::GetSupportedToolNames() const
 {
@@ -67,36 +62,6 @@ TArray<FString> FAntigravityBehaviorTreeActions::GetSupportedToolNames() const
 bool FAntigravityBehaviorTreeActions::ValidateParams(const TSharedRef<FJsonObject>& Params, TArray<FString>& OutErrors) const
 {
 	return true;
-}
-
-FAntigravityActionPlan FAntigravityBehaviorTreeActions::PreviewAction(const TSharedRef<FJsonObject>& Params)
-{
-	FAntigravityActionPlan Plan;
-	FString Action;
-	Params->TryGetStringField(TEXT("action"), Action);
-	if (Action.IsEmpty()) Params->TryGetStringField(TEXT("tool_name"), Action);
-
-	FString AssetPath;
-	Params->TryGetStringField(TEXT("asset_path"), AssetPath);
-
-	if (Action == TEXT("create_blackboard"))
-		Plan.Summary = FString::Printf(TEXT("Create Blackboard: %s"), *AssetPath);
-	else if (Action == TEXT("create_behavior_tree"))
-		Plan.Summary = FString::Printf(TEXT("Create Behavior Tree: %s"), *AssetPath);
-	else if (Action == TEXT("inject_bt_nodes"))
-		Plan.Summary = FString::Printf(TEXT("Inject nodes into BT: %s"), *AssetPath);
-	else if (Action == TEXT("configure_navmesh"))
-		Plan.Summary = TEXT("Configure NavMesh for current level");
-	else
-		Plan.Summary = TEXT("Behavior Tree operation");
-
-	Plan.MaxRiskLevel = EAntigravityRiskLevel::Medium;
-	FAntigravityAction A;
-	A.Description = Plan.Summary;
-	A.Category = EAntigravityActionCategory::Blueprint;
-	A.RiskLevel = EAntigravityRiskLevel::Medium;
-	Plan.Actions.Add(A);
-	return Plan;
 }
 
 FAntigravityActionResult FAntigravityBehaviorTreeActions::ExecuteAction(const TSharedRef<FJsonObject>& Params)

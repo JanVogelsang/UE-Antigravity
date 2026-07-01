@@ -49,11 +49,6 @@ FAntigravityAnimationActions::FAntigravityAnimationActions() {}
 FAntigravityAnimationActions::~FAntigravityAnimationActions() {}
 
 FName FAntigravityAnimationActions::GetActionName() const { return FName(TEXT("Animation")); }
-FText FAntigravityAnimationActions::GetDisplayName() const { return FText::FromString(TEXT("Animation Actions")); }
-EAntigravityActionCategory FAntigravityAnimationActions::GetCategory() const { return EAntigravityActionCategory::Blueprint; }
-EAntigravityRiskLevel FAntigravityAnimationActions::GetDefaultRiskLevel() const { return EAntigravityRiskLevel::Medium; }
-bool FAntigravityAnimationActions::CanUndo() const { return false; }
-bool FAntigravityAnimationActions::UndoAction() { return false; }
 
 TArray<FString> FAntigravityAnimationActions::GetSupportedToolNames() const
 {
@@ -74,28 +69,6 @@ bool FAntigravityAnimationActions::ValidateParams(const TSharedRef<FJsonObject>&
 		return false;
 	}
 	return true;
-}
-
-// ============================================================================
-// PreviewAction
-// ============================================================================
-
-FAntigravityActionPlan FAntigravityAnimationActions::PreviewAction(const TSharedRef<FJsonObject>& Params)
-{
-	FAntigravityActionPlan Plan;
-	FString AssetPath;
-	Params->TryGetStringField(TEXT("asset_path"), AssetPath);
-	Plan.Summary = FString::Printf(TEXT("Animation operation at %s"), *AssetPath);
-
-	FAntigravityAction Action;
-	Action.Description = Plan.Summary;
-	Action.Category = EAntigravityActionCategory::Blueprint;
-	Action.RiskLevel = EAntigravityRiskLevel::Medium;
-	Action.AffectedAssets.Add(AssetPath);
-	Plan.Actions.Add(Action);
-	Plan.MaxRiskLevel = EAntigravityRiskLevel::Medium;
-
-	return Plan;
 }
 
 // ============================================================================

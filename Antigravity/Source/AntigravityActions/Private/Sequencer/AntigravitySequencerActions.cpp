@@ -39,11 +39,6 @@ FAntigravitySequencerActions::~FAntigravitySequencerActions() {}
 // ============================================================================
 
 FName FAntigravitySequencerActions::GetActionName() const { return FName(TEXT("Sequencer")); }
-FText FAntigravitySequencerActions::GetDisplayName() const { return LOCTEXT("DisplayName", "Sequencer & Cinematics"); }
-EAntigravityActionCategory FAntigravitySequencerActions::GetCategory() const { return EAntigravityActionCategory::Level; }
-EAntigravityRiskLevel FAntigravitySequencerActions::GetDefaultRiskLevel() const { return EAntigravityRiskLevel::Medium; }
-bool FAntigravitySequencerActions::CanUndo() const { return true; }
-bool FAntigravitySequencerActions::UndoAction() { return GEditor && GEditor->UndoTransaction(); }
 
 TArray<FString> FAntigravitySequencerActions::GetSupportedToolNames() const
 {
@@ -57,34 +52,6 @@ TArray<FString> FAntigravitySequencerActions::GetSupportedToolNames() const
 bool FAntigravitySequencerActions::ValidateParams(const TSharedRef<FJsonObject>& Params, TArray<FString>& OutErrors) const
 {
 	return true;
-}
-
-FAntigravityActionPlan FAntigravitySequencerActions::PreviewAction(const TSharedRef<FJsonObject>& Params)
-{
-	FAntigravityActionPlan Plan;
-	FString Action;
-	Params->TryGetStringField(TEXT("action"), Action);
-	if (Action.IsEmpty()) Params->TryGetStringField(TEXT("tool_name"), Action);
-
-	FString AssetPath;
-	Params->TryGetStringField(TEXT("asset_path"), AssetPath);
-
-	if (Action == TEXT("create_level_sequence"))
-		Plan.Summary = FString::Printf(TEXT("Create Level Sequence: %s"), *AssetPath);
-	else if (Action == TEXT("add_sequencer_track"))
-		Plan.Summary = FString::Printf(TEXT("Add track to sequence: %s"), *AssetPath);
-	else if (Action == TEXT("add_sequencer_keyframe"))
-		Plan.Summary = TEXT("Add keyframe to sequencer track");
-	else
-		Plan.Summary = TEXT("Sequencer operation");
-
-	Plan.MaxRiskLevel = EAntigravityRiskLevel::Medium;
-	FAntigravityAction A;
-	A.Description = Plan.Summary;
-	A.Category = EAntigravityActionCategory::Level;
-	A.RiskLevel = EAntigravityRiskLevel::Medium;
-	Plan.Actions.Add(A);
-	return Plan;
 }
 
 FAntigravityActionResult FAntigravitySequencerActions::ExecuteAction(const TSharedRef<FJsonObject>& Params)

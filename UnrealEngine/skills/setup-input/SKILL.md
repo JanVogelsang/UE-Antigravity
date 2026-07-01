@@ -19,13 +19,36 @@ Configure the Enhanced Input system with Input Actions and Mapping Contexts.
    void Handle{{arg}}(const FInputActionValue& Value);
    ```
 
-4. **In BeginPlay**, bind the action:
+4. **In the character/pawn class**, override `SetupPlayerInputComponent` to bind the action:
    ```cpp
-   if (UEnhancedInputComponent* EIC = Cast<UEnhancedInputComponent>(InputComponent))
-       EIC->BindAction({{arg}}Action, ETriggerEvent::Triggered, this, &AMyChar::Handle{{arg}});
+   // Header
+   virtual void SetupPlayerInputComponent(class UInputComponent* PlayerInputComponent) override;
+
+   // Source
+   void AMyCharacter::SetupPlayerInputComponent(UInputComponent* PlayerInputComponent)
+   {
+       Super::SetupPlayerInputComponent(PlayerInputComponent);
+       
+       if (UEnhancedInputComponent* EIC = Cast<UEnhancedInputComponent>(PlayerInputComponent))
+       {
+           EIC->BindAction({{arg}}Action, ETriggerEvent::Triggered, this, &AMyCharacter::Handle{{arg}});
+       }
+   }
    ```
 
-5. **Implement the handler function**
+5. **Implement the handler function** in C++:
+   ```cpp
+   void AMyCharacter::Handle{{arg}}(const FInputActionValue& Value)
+   {
+       // Retrieve input value (e.g. float or Vector2D depending on configuration)
+       // float AxisValue = Value.Get<float>();
+   }
+   ```
+
+6. **Blueprint Binding Alternative**:
+   - In a Blueprint Character graph, search for the `EnhancedInputComponent` or right-click and search for `"EnhancedAction IA_{{arg}}"`.
+   - Add the **Enhanced Action IA_{{arg}}** node.
+   - Wire your game logic nodes to the **Triggered** pin.
 
 ## Notes
 - Ensure `"EnhancedInput"` is added to `PublicDependencyModuleNames` in the project's `.Build.cs` file.

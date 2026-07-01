@@ -121,11 +121,6 @@ FAntigravityWidgetActions::FAntigravityWidgetActions() {}
 FAntigravityWidgetActions::~FAntigravityWidgetActions() {}
 
 FName FAntigravityWidgetActions::GetActionName() const { return FName(TEXT("Widget")); }
-FText FAntigravityWidgetActions::GetDisplayName() const { return FText::FromString(TEXT("Widget Actions")); }
-EAntigravityActionCategory FAntigravityWidgetActions::GetCategory() const { return EAntigravityActionCategory::Blueprint; }
-EAntigravityRiskLevel FAntigravityWidgetActions::GetDefaultRiskLevel() const { return EAntigravityRiskLevel::Medium; }
-bool FAntigravityWidgetActions::CanUndo() const { return true; }
-bool FAntigravityWidgetActions::UndoAction() { return false; }
 
 TArray<FString> FAntigravityWidgetActions::GetSupportedToolNames() const
 {
@@ -250,27 +245,6 @@ bool FAntigravityWidgetActions::ValidateParams(const TSharedRef<FJsonObject>& Pa
 	}
 
 	return true;
-}
-
-// ============================================================================
-// PreviewAction
-// ============================================================================
-
-FAntigravityActionPlan FAntigravityWidgetActions::PreviewAction(const TSharedRef<FJsonObject>& Params)
-{
-	FAntigravityActionPlan Plan;
-	FString AssetPath = Params->GetStringField(TEXT("asset_path"));
-	Plan.Summary = FString::Printf(TEXT("Widget Blueprint operation at %s"), *AssetPath);
-
-	FAntigravityAction Action;
-	Action.Description = Plan.Summary;
-	Action.Category = EAntigravityActionCategory::Blueprint;
-	Action.RiskLevel = EAntigravityRiskLevel::Medium;
-	Action.AffectedAssets.Add(AssetPath);
-	Plan.Actions.Add(Action);
-	Plan.MaxRiskLevel = EAntigravityRiskLevel::Medium;
-
-	return Plan;
 }
 
 // ============================================================================

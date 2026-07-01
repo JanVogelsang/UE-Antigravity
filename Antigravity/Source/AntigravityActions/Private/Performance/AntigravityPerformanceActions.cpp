@@ -19,11 +19,6 @@
 FAntigravityPerformanceActions::FAntigravityPerformanceActions() {}
 FAntigravityPerformanceActions::~FAntigravityPerformanceActions() {}
 FName FAntigravityPerformanceActions::GetActionName() const { return FName(TEXT("Performance")); }
-FText FAntigravityPerformanceActions::GetDisplayName() const { return FText::FromString(TEXT("Performance Actions")); }
-EAntigravityActionCategory FAntigravityPerformanceActions::GetCategory() const { return EAntigravityActionCategory::Performance; }
-EAntigravityRiskLevel FAntigravityPerformanceActions::GetDefaultRiskLevel() const { return EAntigravityRiskLevel::Low; }
-bool FAntigravityPerformanceActions::CanUndo() const { return false; }
-bool FAntigravityPerformanceActions::UndoAction() { return false; }
 
 TArray<FString> FAntigravityPerformanceActions::GetSupportedToolNames() const
 {
@@ -52,18 +47,6 @@ TArray<FString> FAntigravityPerformanceActions::GetSupportedToolNames() const
 }
 
 bool FAntigravityPerformanceActions::ValidateParams(const TSharedRef<FJsonObject>& Params, TArray<FString>& OutErrors) const { return true; }
-
-FAntigravityActionPlan FAntigravityPerformanceActions::PreviewAction(const TSharedRef<FJsonObject>& Params)
-{
-	FAntigravityActionPlan Plan;
-	Plan.Summary = TEXT("Performance profiling / optimization operation");
-	FAntigravityAction Action;
-	Action.Description = Plan.Summary;
-	Action.Category = EAntigravityActionCategory::Performance;
-	Action.RiskLevel = EAntigravityRiskLevel::Low;
-	Plan.Actions.Add(Action);
-	return Plan;
-}
 
 // ---------------------------------------------------------------------------
 // Helper: get the editor world safely

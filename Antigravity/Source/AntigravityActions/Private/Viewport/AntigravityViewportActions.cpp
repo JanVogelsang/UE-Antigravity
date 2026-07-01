@@ -23,11 +23,6 @@ FAntigravityViewportActions::~FAntigravityViewportActions() {}
 // ============================================================================
 
 FName FAntigravityViewportActions::GetActionName() const { return FName(TEXT("Viewport")); }
-FText FAntigravityViewportActions::GetDisplayName() const { return LOCTEXT("DisplayName", "Viewport Capture"); }
-EAntigravityActionCategory FAntigravityViewportActions::GetCategory() const { return EAntigravityActionCategory::General; }
-EAntigravityRiskLevel FAntigravityViewportActions::GetDefaultRiskLevel() const { return EAntigravityRiskLevel::Low; }
-bool FAntigravityViewportActions::CanUndo() const { return false; }
-bool FAntigravityViewportActions::UndoAction() { return false; }
 
 TArray<FString> FAntigravityViewportActions::GetSupportedToolNames() const
 {
@@ -38,20 +33,6 @@ bool FAntigravityViewportActions::ValidateParams(const TSharedRef<FJsonObject>& 
 {
 	// No required params â€” all optional
 	return true;
-}
-
-FAntigravityActionPlan FAntigravityViewportActions::PreviewAction(const TSharedRef<FJsonObject>& Params)
-{
-	FAntigravityActionPlan Plan;
-	Plan.Summary = TEXT("Capture editor viewport screenshot (read-only)");
-	Plan.MaxRiskLevel = EAntigravityRiskLevel::Low;
-
-	FAntigravityAction Action;
-	Action.Description = Plan.Summary;
-	Action.Category = EAntigravityActionCategory::General;
-	Action.RiskLevel = EAntigravityRiskLevel::Low;
-	Plan.Actions.Add(Action);
-	return Plan;
 }
 
 FAntigravityActionResult FAntigravityViewportActions::ExecuteAction(const TSharedRef<FJsonObject>& Params)

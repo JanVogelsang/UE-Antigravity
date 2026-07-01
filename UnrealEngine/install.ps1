@@ -14,6 +14,7 @@ if (-not $TargetProjectDir) {
 if (-not $TargetProjectDir) {
     $TargetProjectDir = $ProjectRoot
 }
+$TargetProjectDir = $TargetProjectDir.TrimEnd('\')
 
 Write-Host "Installing to: $TargetProjectDir"
 

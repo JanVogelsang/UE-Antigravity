@@ -38,11 +38,6 @@ FAntigravityPCGActions::FAntigravityPCGActions() {}
 FAntigravityPCGActions::~FAntigravityPCGActions() {}
 
 FName FAntigravityPCGActions::GetActionName() const { return FName(TEXT("PCG")); }
-FText FAntigravityPCGActions::GetDisplayName() const { return FText::FromString(TEXT("PCG Actions")); }
-EAntigravityActionCategory FAntigravityPCGActions::GetCategory() const { return EAntigravityActionCategory::Level; }
-EAntigravityRiskLevel FAntigravityPCGActions::GetDefaultRiskLevel() const { return EAntigravityRiskLevel::Medium; }
-bool FAntigravityPCGActions::CanUndo() const { return true; }
-bool FAntigravityPCGActions::UndoAction() { return false; }
 
 TArray<FString> FAntigravityPCGActions::GetSupportedToolNames() const
 {
@@ -102,23 +97,6 @@ bool FAntigravityPCGActions::ValidateParams(const TSharedRef<FJsonObject>& Param
 	}
 
 	return true;
-}
-
-// ============================================================================
-// PreviewAction
-// ============================================================================
-
-FAntigravityActionPlan FAntigravityPCGActions::PreviewAction(const TSharedRef<FJsonObject>& Params)
-{
-	FAntigravityActionPlan Plan;
-	Plan.Summary = TEXT("PCG procedural content generation operation");
-	FAntigravityAction Action;
-	Action.Description = Plan.Summary;
-	Action.Category = EAntigravityActionCategory::Level;
-	Action.RiskLevel = EAntigravityRiskLevel::Medium;
-	Plan.Actions.Add(Action);
-	Plan.MaxRiskLevel = EAntigravityRiskLevel::Medium;
-	return Plan;
 }
 
 // ============================================================================

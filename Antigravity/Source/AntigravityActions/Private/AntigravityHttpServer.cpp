@@ -171,20 +171,38 @@ namespace
 	{
 		FHttpResultCallback OnComplete;
 		FAntigravityActionResult Result;
-		FTSTicker::FDelegateHandle TickerHandle;
-		double StartTime;
+		FDelegateHandle PostPIEStartedHandle;
+		FTSTicker::FDelegateHandle TimeoutTickerHandle;
 
 		FStartPIEWaiter(const FHttpResultCallback& InOnComplete, const FAntigravityActionResult& InResult)
 			: OnComplete(InOnComplete)
 			, Result(InResult)
 		{
-			StartTime = FPlatformTime::Seconds();
 		}
 
-		~FStartPIEWaiter() = default;
+		~FStartPIEWaiter()
+		{
+			Cleanup();
+		}
+
+		void Cleanup()
+		{
+			if (PostPIEStartedHandle.IsValid())
+			{
+				FEditorDelegates::PostPIEStarted.Remove(PostPIEStartedHandle);
+				PostPIEStartedHandle.Reset();
+			}
+			if (TimeoutTickerHandle.IsValid())
+			{
+				FTSTicker::GetCoreTicker().RemoveTicker(TimeoutTickerHandle);
+				TimeoutTickerHandle.Reset();
+			}
+		}
 
 		void SendResponse()
 		{
+			Cleanup();
+
 			TSharedPtr<FJsonObject> ResultObj = MakeShared<FJsonObject>();
 			ResultObj->SetBoolField(TEXT("bSuccess"), Result.bSuccess);
 			ResultObj->SetStringField(TEXT("ResultMessage"), Result.ResultMessage);
@@ -261,23 +279,24 @@ bool FAntigravityHttpServer::HandleExecuteToolRequest(const FHttpServerRequest& 
 			{
 				TSharedRef<FStartPIEWaiter> Waiter = MakeShared<FStartPIEWaiter>(OnComplete, Result);
 
-				Waiter->TickerHandle = FTSTicker::GetCoreTicker().AddTicker(FTickerDelegate::CreateLambda([Waiter](float DeltaTime) -> bool {
-					if (FPlatformTime::Seconds() - Waiter->StartTime > 10.0)
+				Waiter->PostPIEStartedHandle = FEditorDelegates::PostPIEStarted.AddLambda([Waiter](bool bIsSimulating)
+				{
+					Waiter->Result.bSuccess = true;
+					Waiter->Result.ResultMessage = TEXT("PIE session started successfully.");
+					Waiter->SendResponse();
+				});
+
+				double StartTime = FPlatformTime::Seconds();
+				Waiter->TimeoutTickerHandle = FTSTicker::GetCoreTicker().AddTicker(FTickerDelegate::CreateLambda([Waiter, StartTime](float DeltaTime) -> bool
+				{
+					if (FPlatformTime::Seconds() - StartTime > 10.0)
 					{
 						Waiter->Result.bSuccess = false;
 						Waiter->Result.Errors.Add(TEXT("Timed out waiting for PIE session to start (10s)."));
 						Waiter->SendResponse();
-						return false; // Remove ticker delegate safely (which will release Waiter reference)
+						return false;
 					}
-					// Check if PIE started
-					if (GEditor && GEditor->IsPlaySessionInProgress())
-					{
-						Waiter->Result.bSuccess = true;
-						Waiter->Result.ResultMessage = TEXT("PIE session started successfully.");
-						Waiter->SendResponse();
-						return false; // Remove ticker delegate safely (which will release Waiter reference)
-					}
-					return true; // Keep ticking
+					return true;
 				}));
 
 				return; // Defer response

@@ -16,11 +16,6 @@
 FAntigravityInputActions::FAntigravityInputActions() {}
 FAntigravityInputActions::~FAntigravityInputActions() {}
 FName FAntigravityInputActions::GetActionName() const { return FName(TEXT("Input")); }
-FText FAntigravityInputActions::GetDisplayName() const { return FText::FromString(TEXT("Enhanced Input Actions")); }
-EAntigravityActionCategory FAntigravityInputActions::GetCategory() const { return EAntigravityActionCategory::Settings; }
-EAntigravityRiskLevel FAntigravityInputActions::GetDefaultRiskLevel() const { return EAntigravityRiskLevel::Medium; }
-bool FAntigravityInputActions::CanUndo() const { return false; }
-bool FAntigravityInputActions::UndoAction() { return false; }
 
 TArray<FString> FAntigravityInputActions::GetSupportedToolNames() const
 {
@@ -54,19 +49,6 @@ bool FAntigravityInputActions::ValidateParams(const TSharedRef<FJsonObject>& Par
 	}
 
 	return true;
-}
-
-FAntigravityActionPlan FAntigravityInputActions::PreviewAction(const TSharedRef<FJsonObject>& Params)
-{
-	FAntigravityActionPlan Plan;
-	Plan.Summary = TEXT("Enhanced Input asset operation");
-	Plan.MaxRiskLevel = EAntigravityRiskLevel::Medium;
-	FAntigravityAction Action;
-	Action.Description = Plan.Summary;
-	Action.Category = EAntigravityActionCategory::Settings;
-	Action.RiskLevel = EAntigravityRiskLevel::Medium;
-	Plan.Actions.Add(Action);
-	return Plan;
 }
 
 // Helper: resolve EInputActionValueType from string

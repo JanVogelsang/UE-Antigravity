@@ -4,9 +4,74 @@
 
 $ErrorActionPreference = "Stop"
 
-$unreal_exe = "D:\UE_5.7\Engine\Binaries\Win64\UnrealEditor-Cmd.exe"
-$project_path = "c:\Users\Jan\Documents\Unreal Projects\tau-game\Tau.uproject"
-$python_exe = "C:\Users\Jan\AppData\Local\Microsoft\WindowsApps\python.exe"
+# Resolve project path dynamically
+$project_path = "$env:USERPROFILE\Documents\Unreal Projects\tau-game\Tau.uproject"
+
+# Resolve Python dynamically
+$python_exe = "$env:USERPROFILE\AppData\Local\Microsoft\WindowsApps\python.exe"
+if (-not (Test-Path $python_exe)) {
+    $python_exe = (Get-Command python -ErrorAction SilentlyContinue).Source
+    if (-not $python_exe) {
+        Write-Error "Python executable not found in PATH or standard location."
+        exit 1
+    }
+}
+
+# Resolve Unreal Engine dynamically based on the project's EngineAssociation
+$engine_association = "5.8" # Default fallback
+if (Test-Path $project_path) {
+    try {
+        $uproject_json = Get-Content -Raw -Path $project_path | ConvertFrom-Json
+        if ($uproject_json.EngineAssociation) {
+            $engine_association = $uproject_json.EngineAssociation
+        }
+    } catch {
+        Write-Host "Warning: Failed to parse uproject JSON. Using default association." -ForegroundColor Yellow
+    }
+}
+
+$installed_dir = $null
+
+if ($engine_association -match "^\d+\.\d+$") {
+    $RegistryPath = "HKLM:\SOFTWARE\EpicGames\Unreal Engine\$engine_association"
+    $installed_dir = (Get-ItemProperty -Path $RegistryPath -Name InstalledDirectory -ErrorAction SilentlyContinue).InstalledDirectory
+    
+    if (-not $installed_dir) {
+        $BuildsKey = "HKCU:\Software\Epic Games\Unreal Engine\Builds"
+        if (Test-Path $BuildsKey) {
+            $installed_dir = (Get-ItemProperty -Path $BuildsKey -Name $engine_association -ErrorAction SilentlyContinue).$engine_association
+        }
+    }
+    
+    if (-not $installed_dir) {
+        $FallbackPaths = @(
+            "C:\Program Files\Epic Games\UE_$engine_association",
+            "C:\Program Files\Epic Games\UE_$engine_association",
+            "D:\Epic Games\UE_$engine_association"
+        )
+        foreach ($p in $FallbackPaths) {
+            if (Test-Path $p) {
+                $installed_dir = $p
+                break
+            }
+        }
+    }
+} else {
+    $BuildsKey = "HKCU:\Software\Epic Games\Unreal Engine\Builds"
+    if (Test-Path $BuildsKey) {
+        $installed_dir = (Get-ItemProperty -Path $BuildsKey -Name $engine_association -ErrorAction SilentlyContinue).$engine_association
+    }
+}
+
+if (-not $installed_dir) {
+    $installed_dir = "C:\Program Files\Epic Games\UE_5.8"
+}
+
+$installed_dir = $installed_dir.TrimEnd('\')
+$unreal_exe = Join-Path $installed_dir "Engine\Binaries\Win64\UnrealEditor-Cmd.exe"
+if (-not (Test-Path $unreal_exe)) {
+    $unreal_exe = Join-Path $installed_dir "Engine\Binaries\Win64\UnrealEditor.exe"
+}
 
 Write-Host "=================================================================" -ForegroundColor Magenta
 Write-Host "             UE-Antigravity Consolidated Test Runner            " -ForegroundColor Magenta
@@ -14,7 +79,7 @@ Write-Host "=================================================================" -
 
 # 1. Verify environment paths
 if (-not (Test-Path $unreal_exe)) {
-    Write-Error "Unreal Editor command line executable not found at: $unreal_exe"
+    Write-Error "Unreal Editor executable not found at: $unreal_exe"
     exit 1
 }
 if (-not (Test-Path $project_path)) {
@@ -22,7 +87,7 @@ if (-not (Test-Path $project_path)) {
     exit 1
 }
 if (-not (Test-Path $python_exe)) {
-    Write-Error "Windows Store Python not found at: $python_exe"
+    Write-Error "Python interpreter not found at: $python_exe"
     exit 1
 }
 
@@ -44,7 +109,8 @@ $cpp_exit_code = $process.ExitCode
 
 if ($cpp_exit_code -ne 0) {
     Write-Host "`n[-] C++ Automation Tests FAILED with exit code: $cpp_exit_code" -ForegroundColor Red
-    Write-Host "Check the project logs at: c:\Users\Jan\Documents\Unreal Projects\tau-game\Saved\Logs\Tau.log" -ForegroundColor Yellow
+    $project_dir = Split-Path -Parent $project_path
+    Write-Host "Check the project logs at: $project_dir\Saved\Logs\Tau.log" -ForegroundColor Yellow
     exit $cpp_exit_code
 } else {
     Write-Host "`n[+] C++ Headless Automation Tests PASSED successfully!" -ForegroundColor Green

@@ -202,63 +202,7 @@ FAntigravityActionResult FAntigravityActionRouter::RouteToolCall(const FAntigrav
 	return Result;
 }
 
-FAntigravityActionPlan FAntigravityActionRouter::PreviewToolCall(const FAntigravityToolCall& ToolCall)
-{
-	TSharedPtr<IAntigravityActionExecutor> Executor = FindExecutorForTool(ToolCall.ToolName);
-	if (!Executor.IsValid())
-	{
-		FAntigravityActionPlan Plan;
-		Plan.Summary = FString::Printf(TEXT("ERROR: No executor for tool '%s'"), *ToolCall.ToolName);
-		return Plan;
-	}
 
-	// Validate asset_path for preview too
-	{
-		FString ValidationError;
-		if (!ValidateAssetPathParam(ToolCall.InputParams, ValidationError))
-		{
-			FAntigravityActionPlan Plan;
-			Plan.Summary = FString::Printf(TEXT("ERROR: %s"), *ValidationError);
-			return Plan;
-		}
-	}
-
-	TSharedRef<FJsonObject> ParamsWithToolName = MakeShared<FJsonObject>();
-	if (ToolCall.InputParams.IsValid())
-	{
-		for (const auto& Pair : ToolCall.InputParams->Values)
-		{
-			ParamsWithToolName->SetField(Pair.Key, Pair.Value);
-		}
-	}
-	ParamsWithToolName->SetStringField(TEXT("_tool_name"), ToolCall.ToolName);
-	ParamsWithToolName->SetStringField(TEXT("tool_name"), ToolCall.ToolName);
-
-	// Validate params for preview too
-	TArray<FString> PreviewValidationErrors;
-	if (!Executor->ValidateParams(ParamsWithToolName, PreviewValidationErrors))
-	{
-		FAntigravityActionPlan Plan;
-		Plan.Summary = FString::Printf(TEXT("Validation Error: %s"), *FString::Join(PreviewValidationErrors, TEXT("; ")));
-		return Plan;
-	}
-
-	return Executor->PreviewAction(ParamsWithToolName);
-}
-
-TArray<FName> FAntigravityActionRouter::GetRegisteredExecutorNames() const
-{
-	TArray<FName> Names;
-	for (const auto& Pair : ExecutorMap) { Names.AddUnique(Pair.Value->GetActionName()); }
-	return Names;
-}
-
-TArray<FString> FAntigravityActionRouter::GetRegisteredToolNames() const
-{
-	TArray<FString> Names;
-	ExecutorMap.GetKeys(Names);
-	return Names;
-}
 
 TSharedPtr<IAntigravityActionExecutor> FAntigravityActionRouter::FindExecutorForTool(const FString& ToolName) const
 {

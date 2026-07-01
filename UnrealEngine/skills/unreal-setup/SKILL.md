@@ -19,7 +19,7 @@ Before executing or implementing any setup steps, you must perform a diagnostic 
    - **Check for LLVM/Clang**: Check if `libclang.dll` can be resolved in registry or standard paths (e.g., `C:\Program Files\LLVM\bin\libclang.dll`).
    - **Check for Git and Git LFS**: Verify that `.git` exists, and that `.gitattributes` tracks `*.uasset` and `*.umap` via Git LFS.
    - **Check for Antigravity plugin installation**: Check if the folder `.agents/plugins/UnrealEngine` exists.
-   - **Check for compilation database**: Check if `compile_commands.json` exists in the game project directory (e.g., sibling `tau-game` folder).
+   - **Check for compilation database**: Check if `compile_commands.json` exists in the game project directory.
    - **Check for environment skill**: Check if `.agents/plugins/UnrealEngine/skills/unreal-env/SKILL.md` exists.
    - **Check for C++ AST database cache**: Check if `ast_cache.db` exists in the external server directory and contains indexed symbol tables.
    - **Check for project index skill**: Check if `.agents/skills/project-index/SKILL.md` and references under `references/` exist.
@@ -112,9 +112,11 @@ Before executing or implementing any setup steps, you must perform a diagnostic 
 1. Trigger `compile_commands.json` generation. If the `cpp-ast-rag` MCP server tools are available, invoke `generate_compile_commands`.
 2. Otherwise, run the Unreal Build Tool command directly in the shell:
    ```powershell
-   & "C:\Program Files\Epic Games\UE_5.7\Engine\Build\BatchFiles\Build.bat" -Mode=GenerateClangDatabase -Project="[Path to Tau.uproject]" TauEditor Win64 Development -OutputDir="[Path to tau-game]"
+   # CRITICAL: Ensure "[Path to project directory]" does NOT end with a trailing backslash.
+   # A trailing backslash before a closing quote (e.g. "C:\Path\") escapes the quote on Windows, corrupting the command line.
+   & "[UnrealEnginePath]\Engine\Build\BatchFiles\Build.bat" -Mode=GenerateClangDatabase -Project="[Path to ProjectName.uproject]" [ProjectName]Editor Win64 Development -OutputDir="[Path to project directory]"
    ```
-   (Resolve the actual paths dynamically based on your findings).
+   (Resolve the actual paths dynamically based on your findings, ensuring no trailing backslashes are present).
 3. Verify that `compile_commands.json` exists in the game project folder.
 
 ### Step 5: Generate/Refresh Local Environment Skill (unreal-env)
@@ -131,7 +133,7 @@ Before executing or implementing any setup steps, you must perform a diagnostic 
 
 ### Step 7: Full Workspace Scanning
 1. **Find and Parse UProject File**:
-   - Locate the `*.uproject` file in the workspace root or parent folder (e.g., `tau-game/Tau.uproject`).
+   - Locate the `*.uproject` file in the workspace root or parent folder (e.g., `[ProjectName]/[ProjectName].uproject`).
    - Read and parse it to extract:
      - Engine Association / Unreal Version
      - Modules (Name, Type, LoadingPhase)

@@ -7,7 +7,7 @@
   ],
   "tool_overrides": {
     "execute_python_script": {
-      "description": "Execute a Python script. / 执行 Python 脚本。 The script MUST use the 'unreal' module for all engine interactions. / 脚本必须使用 'unreal' 模块进行所有引擎交互。 NEVER use os, subprocess, or shutil for asset operations. / 切勿使用 os、subprocess 或 shutil 进行资产操作。 EXAMPLE: Use unreal.EditorAssetLibrary.rename_asset() instead of os.rename().",
+      "description": "Execute a Python script. WARNING: This tool is a last resort. Do NOT use this tool if a native tool or dedicated skill exists. You must provide a detailed justification. / 执行 Python 脚本。警告：此工具是最后手段。如果存在原生工具或专用技能，请勿使用此工具。您必须提供详细的理由。",
       "inputSchema": {
         "type": "object",
         "properties": {
@@ -15,12 +15,16 @@
             "type": "string",
             "description": "Explain what you are trying to achieve before writing the code. / 在编写代码之前解释你想要实现的目标。"
           },
-          "script_content": {
+          "justification_why_native_tools_or_skills_are_insufficient": {
+            "type": "string",
+            "description": "Detailed explanation of why specific native tools or dedicated skills cannot be used. / 详细解释为什么不能使用特定的原生工具或专用技能。"
+          },
+          "script": {
             "type": "string",
             "description": "The exact Python code to execute. / 要执行的确切 Python 代码。"
           }
         },
-        "required": ["reasoning_step", "script_content"]
+        "required": ["reasoning_step", "justification_why_native_tools_or_skills_are_insufficient", "script"]
       }
     },
     "execute_batch_blueprint_operations": {

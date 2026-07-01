@@ -38,7 +38,7 @@ public:
 protected:
     virtual void BeginPlay() override;
 private:
-    UPROPERTY(VisibleAnywhere)
-    UStaticMeshComponent* MeshComponent;
+    UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category="Components")
+    TObjectPtr<UStaticMeshComponent> MeshComponent;
 };
 ```

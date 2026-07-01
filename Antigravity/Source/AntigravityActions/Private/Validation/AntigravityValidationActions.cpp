@@ -23,11 +23,6 @@ FAntigravityValidationActions::~FAntigravityValidationActions() {}
 // ============================================================================
 
 FName FAntigravityValidationActions::GetActionName() const { return FName(TEXT("Validation")); }
-FText FAntigravityValidationActions::GetDisplayName() const { return LOCTEXT("DisplayName", "Validation & Testing"); }
-EAntigravityActionCategory FAntigravityValidationActions::GetCategory() const { return EAntigravityActionCategory::General; }
-EAntigravityRiskLevel FAntigravityValidationActions::GetDefaultRiskLevel() const { return EAntigravityRiskLevel::Low; }
-bool FAntigravityValidationActions::CanUndo() const { return false; }
-bool FAntigravityValidationActions::UndoAction() { return false; }
 
 TArray<FString> FAntigravityValidationActions::GetSupportedToolNames() const
 {
@@ -40,29 +35,6 @@ TArray<FString> FAntigravityValidationActions::GetSupportedToolNames() const
 bool FAntigravityValidationActions::ValidateParams(const TSharedRef<FJsonObject>& Params, TArray<FString>& OutErrors) const
 {
 	return true;
-}
-
-FAntigravityActionPlan FAntigravityValidationActions::PreviewAction(const TSharedRef<FJsonObject>& Params)
-{
-	FAntigravityActionPlan Plan;
-	FString Action;
-	Params->TryGetStringField(TEXT("action"), Action);
-	if (Action.IsEmpty()) Params->TryGetStringField(TEXT("tool_name"), Action);
-
-	if (Action == TEXT("validate_assets"))
-		Plan.Summary = TEXT("Run UE Data Validation on assets (read-only)");
-	else if (Action == TEXT("run_automation_tests"))
-		Plan.Summary = TEXT("Run Unreal Automation Tests");
-	else
-		Plan.Summary = TEXT("Validation operation");
-
-	Plan.MaxRiskLevel = EAntigravityRiskLevel::Low;
-	FAntigravityAction A;
-	A.Description = Plan.Summary;
-	A.Category = EAntigravityActionCategory::General;
-	A.RiskLevel = EAntigravityRiskLevel::Low;
-	Plan.Actions.Add(A);
-	return Plan;
 }
 
 FAntigravityActionResult FAntigravityValidationActions::ExecuteAction(const TSharedRef<FJsonObject>& Params)

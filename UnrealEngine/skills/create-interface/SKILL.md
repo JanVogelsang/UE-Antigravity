@@ -27,8 +27,10 @@ Create a Blueprint interface with C++ backing for interactable objects.
    };
    ```
 
-3. **Call via interface**:
+3. **Call via interface** (handles both C++ and Blueprint-implemented interfaces correctly):
    ```cpp
-   if (I{{arg}}* Iface = Cast<I{{arg}}>(TargetActor))
-       Iface->Execute_Interact(TargetActor, this);
+   if (TargetActor->GetClass()->ImplementsInterface(U{{arg}}::StaticClass()))
+   {
+       I{{arg}}::Execute_Interact(TargetActor, this);
+   }
    ```
