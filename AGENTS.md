@@ -39,6 +39,8 @@ Before writing code or utilizing MCP tools, you **MUST** read the detailed guide
 *   **AST Updates**: Whenever new C++ files or headers are added, invoke `generate_compile_commands` to regenerate `compile_commands.json` so the Python AST server remains accurate.
 *   **Blueprint Node Generation**: Always include a unique, valid `NodeGuid` (32-char hex string) when generating T3D representations.
 *   **The "Ponytail" Ladder**: Follow strict evaluation before writing new C++ or Blueprint logic.
+*   **Automation Test Run Safeguards**: Semicolon-chain `; Quit` to test commands to avoid hanging standalone processes.
+*   **Ticking Guardrails**: Never place high-overhead logic or unchecked array accesses inside `Tick` or `NativeTick` functions.
 
 ### 4. Target Project Context vs. Plugin Context
 Do not confuse the UE-Antigravity plugin development context with the context of the game project using it.
@@ -47,19 +49,19 @@ Do not confuse the UE-Antigravity plugin development context with the context of
 
 ## 5. Installing & Testing on a Target Project
 
-These steps should be used whenever you need to verify that changes to the `UE-Antigravity` repository correctly integrate with a host game. We use the local project `C:\Users\janv1\Documents\Unreal Projects\tau-game` as our standard target project for this example.
+These steps should be used whenever you need to verify that changes to the `UE-Antigravity` repository correctly integrate with a host game. We use the local project `$env:USERPROFILE\Documents\Unreal Projects\tau-game` as our standard target project for this example.
 
 ### 5.1 Install the C++ Editor Plugin (`Antigravity`)
 
 The C++ Editor plugin handles game-thread operations and must be present in the target project's `Plugins` directory.
 
 #### Manual Developer Installation
-1. Locate the target game project directory (e.g., `C:\Users\janv1\Documents\Unreal Projects\tau-game`).
+1. Locate the target game project directory (e.g., `$env:USERPROFILE\Documents\Unreal Projects\tau-game`).
 2. If it does not exist, create a `Plugins` folder at the root of the target project.
 3. Copy the entire `Antigravity` folder from the `UE-Antigravity` repository into the target project's `Plugins` folder:
    ```powershell
    # Run from the UE-Antigravity repository root
-   Copy-Item -Path ".\Antigravity" -Destination "C:\Users\janv1\Documents\Unreal Projects\tau-game\Plugins\Antigravity" -Recurse -Force
+   Copy-Item -Path ".\Antigravity" -Destination "$env:USERPROFILE\Documents\Unreal Projects\tau-game\Plugins\Antigravity" -Recurse -Force
    ```
 4. **Compile the Plugin**: Open the target project (`tau-game`) in the Unreal Engine Editor. If Unreal Engine prompts to rebuild missing modules for the `Antigravity` plugin, choose **Yes**.
 
@@ -67,7 +69,7 @@ The C++ Editor plugin handles game-thread operations and must be present in the 
 1. **Copy Files**: Verify/create a `Plugins` directory at the target project root and copy the `Antigravity` folder:
    ```powershell
    # Run from the UE-Antigravity repository root
-   $TargetPluginsDir = "C:\Users\janv1\Documents\Unreal Projects\tau-game\Plugins\Antigravity"
+   $TargetPluginsDir = "$env:USERPROFILE\Documents\Unreal Projects\tau-game\Plugins\Antigravity"
    if (-not (Test-Path $TargetPluginsDir)) {
        New-Item -ItemType Directory -Force -Path $TargetPluginsDir | Out-Null
    }
@@ -78,7 +80,7 @@ The C++ Editor plugin handles game-thread operations and must be present in the 
    # Example UBT headless build command:
    # Locate UnrealEngine path (e.g., from registry HKLM:\SOFTWARE\EpicGames\Unreal Engine)
    # Or invoke the project's build batch file if available:
-   & "C:\Program Files\Epic Games\UE_5.5\Engine\Build\BatchFiles\Build.bat" tau-gameEditor Win64 Development "C:\Users\janv1\Documents\Unreal Projects\tau-game\tau-game.uproject" -waitmutex
+   & "C:\Program Files\Epic Games\UE_5.5\Engine\Build\BatchFiles\Build.bat" tau-gameEditor Win64 Development "$env:USERPROFILE\Documents\Unreal Projects\tau-game\tau-game.uproject" -waitmutex
    ```
 
 ### 5.2 Install the Agent Plugin (`UnrealEngine`)
@@ -91,7 +93,7 @@ The Agent plugin sets up the Python AST server, the MCP JSON-RPC bridge, and age
    powershell -ExecutionPolicy Bypass -File .\UnrealEngine\install.ps1
    ```
 2. When the script prompts for the `target project root directory`, enter the absolute path to the target project:
-   `C:\Users\janv1\Documents\Unreal Projects\tau-game`
+   `$env:USERPROFILE\Documents\Unreal Projects\tau-game`
 3. When prompted for an AI assistant, select your target assistant (press Enter for Antigravity 2.0).
 4. The installer script will automatically:
    - Create a Python virtual environment inside the target project.
@@ -103,7 +105,7 @@ The Agent plugin sets up the Python AST server, the MCP JSON-RPC bridge, and age
 1. **Non-Interactive Installation**: The `install.ps1` script utilizes interactive CLI prompts (`Read-Host`). To run it autonomously, pipe the target directory and assistant choice into standard input:
    ```powershell
    # Pipe project path (first prompt) and default assistant option '0' (second prompt)
-   "C:\Users\janv1\Documents\Unreal Projects\tau-game", "0" | powershell -ExecutionPolicy Bypass -File .\UnrealEngine\install.ps1
+   "$env:USERPROFILE\Documents\Unreal Projects\tau-game", "0" | powershell -ExecutionPolicy Bypass -File .\UnrealEngine\install.ps1
    ```
    This will automatically:
    - Create a Python virtual environment inside the target project.
@@ -125,7 +127,7 @@ To verify the integration manually, you must open an agent conversation *inside*
 
 #### Autonomous Agent Verification (Target Workspace Verification)
 To verify the integration, a conversation context must be active inside the target project workspace (`tau-game`). Because you cannot manually open a new UI conversation, you must either:
-- Invoke a workspace-branched subagent targeting the `tau-game` directory using the `invoke_subagent` tool with `Workspace: "branch"` or `"share"` pointing to `C:\Users\janv1\Documents\Unreal Projects\tau-game`.
+- Invoke a workspace-branched subagent targeting the `tau-game` directory using the `invoke_subagent` tool with `Workspace: "branch"` or `"share"` pointing to `C:\Users\janv1\Documents\Unreal Projects\tau-game` (resolve to local path dynamically).
 - Or, ask the user to open a conversation window inside the `tau-game` project workspace and run the verification commands.
 
 Inside the target workspace, the verifying agent should run:
@@ -164,3 +166,4 @@ When deploying compiled plugin binaries or files to target projects, adhere to t
        *   In PowerShell: Use `$env:USERPROFILE`.
        *   In Python: Use `os.path.expanduser('~')`.
        *   In C++: Use `FPaths::ProjectDir()` or similar engine utilities where possible.
+

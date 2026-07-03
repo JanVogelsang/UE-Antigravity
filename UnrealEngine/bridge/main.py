@@ -3,6 +3,7 @@ import json
 import asyncio
 import httpx
 import os
+import hashlib
 
 from pathlib import Path
 from contextlib import AsyncExitStack
@@ -22,9 +23,12 @@ except ImportError:
     sys.exit(1)
 
 PROFILE_DIR = Path(__file__).resolve().parent.parent / "profiles"
+CACHE_PATH = PROFILE_DIR / "discovered_tools_cache.json"
 tool_owners = {}
 ue_session = None
 ue_stack = None
+discover_lock = asyncio.Lock()
+last_tools_hash = ""
 
 
 
@@ -49,7 +53,18 @@ def load_profile(client_name=""):
 def are_tools_similar(tool1, tool2):
     return tool1.get("name", "").lower() == tool2.get("name", "").lower()
 
+async def is_port_open_async(port):
+    try:
+        _, writer = await asyncio.wait_for(asyncio.open_connection("127.0.0.1", port), timeout=0.2)
+        writer.close()
+        await writer.wait_closed()
+        return True
+    except Exception:
+        return False
+
 async def fetch_antigravity_tools():
+    if not await is_port_open_async(18777):
+        return []
     async with httpx.AsyncClient() as client:
         try:
             resp = await client.get("http://127.0.0.1:18777/api/tools", timeout=2.0)
@@ -61,6 +76,8 @@ async def fetch_antigravity_tools():
     return []
 
 async def init_ue58_client(port):
+    if not await is_port_open_async(port):
+        return None, None
     stack = AsyncExitStack()
     try:
         streams = await stack.enter_async_context(sse_client(f"http://127.0.0.1:{port}/sse", timeout=30.0))
@@ -71,62 +88,122 @@ async def init_ue58_client(port):
         await stack.aclose()
         return None, None
 
-async def discover_tools(ue_port, profile):
-    global tool_owners, ue_session, ue_stack
-    
-    native_tools = []
-    if ue_session is None:
-        ue_stack, ue_session = await init_ue58_client(ue_port)
-        
-    if ue_session:
+def save_tools_cache(tools, owners):
+    try:
+        cache_data = {
+            "tools": tools,
+            "tool_owners": owners
+        }
+        with open(CACHE_PATH, "w") as f:
+            json.dump(cache_data, f, indent=2)
+    except Exception as e:
+        print(f"Error saving tools cache: {e}", file=sys.stderr)
+
+def load_tools_cache():
+    if CACHE_PATH.exists():
         try:
-            native_resp = await ue_session.list_tools()
-            for t in native_resp.tools:
-                native_tools.append({
-                    "name": t.name,
-                    "description": t.description or "",
-                    "inputSchema": t.inputSchema or {}
-                })
+            with open(CACHE_PATH) as f:
+                return json.load(f)
         except Exception as e:
-            print(f"Error fetching native tools (connection lost?): {e}", file=sys.stderr)
-            ue_session = None
-            if ue_stack:
-                await ue_stack.aclose()
-                ue_stack = None
-                
-    ag_tools = await fetch_antigravity_tools()
+            print(f"Error loading tools cache: {e}", file=sys.stderr)
+    return None
+
+async def discover_tools(ue_port, profile):
+    global tool_owners, ue_session, ue_stack, last_tools_hash
     
-    filtered_ag_tools = []
-    for ag_tool in ag_tools:
-        is_duplicate = False
-        for nat_tool in native_tools:
-            if are_tools_similar(ag_tool, nat_tool):
-                is_duplicate = True
-                break
-        if not is_duplicate:
-            filtered_ag_tools.append(ag_tool)
+    async with discover_lock:
+        native_tools = []
+        if ue_session is None:
+            ue_stack, ue_session = await init_ue58_client(ue_port)
             
-    final_tools = []
-    tool_owners.clear()
-    
-    disabled_tools = profile.get("disabled_tools", [])
-    tool_overrides = profile.get("tool_overrides", {})
-    
-    for t in native_tools:
-        if t["name"] in disabled_tools: continue
-        tool_owners[t["name"]] = "native"
-        if t["name"] in tool_overrides:
-            t.update(tool_overrides[t["name"]])
-        final_tools.append(t)
+        if ue_session:
+            try:
+                native_resp = await ue_session.list_tools()
+                for t in native_resp.tools:
+                    native_tools.append({
+                        "name": t.name,
+                        "description": t.description or "",
+                        "inputSchema": t.inputSchema or {}
+                    })
+            except Exception as e:
+                print(f"Error fetching native tools (connection lost?): {e}", file=sys.stderr)
+                ue_session = None
+                if ue_stack:
+                    await ue_stack.aclose()
+                    ue_stack = None
+                    
+        ag_tools = await fetch_antigravity_tools()
         
-    for t in filtered_ag_tools:
-        if t["name"] in disabled_tools: continue
-        tool_owners[t["name"]] = "antigravity"
-        if t["name"] in tool_overrides:
-            t.update(tool_overrides[t["name"]])
-        final_tools.append(t)
+        if not native_tools and not ag_tools:
+            cache = load_tools_cache()
+            if cache:
+                cached_tools = cache.get("tools", [])
+                cached_owners = cache.get("tool_owners", {})
+                
+                disabled_tools = profile.get("disabled_tools", [])
+                tool_overrides = profile.get("tool_overrides", {})
+                
+                final_tools = []
+                tool_owners.clear()
+                for t in cached_tools:
+                    name = t["name"]
+                    if name in disabled_tools: continue
+                    tool_owners[name] = cached_owners.get(name, "native")
+                    if name in tool_overrides:
+                        t.update(tool_overrides[name])
+                    final_tools.append(t)
+                
+                # Update hash based on the tools to return to the client
+                sorted_tools = sorted(final_tools, key=lambda x: x["name"])
+                last_tools_hash = hashlib.md5(json.dumps(sorted_tools, sort_keys=True).encode()).hexdigest()
+                return final_tools
         
-    return final_tools
+        filtered_ag_tools = []
+        for ag_tool in ag_tools:
+            is_duplicate = False
+            for nat_tool in native_tools:
+                if are_tools_similar(ag_tool, nat_tool):
+                    is_duplicate = True
+                    break
+            if not is_duplicate:
+                filtered_ag_tools.append(ag_tool)
+                
+        raw_tools = []
+        raw_owners = {}
+        for t in native_tools:
+            raw_tools.append(t)
+            raw_owners[t["name"]] = "native"
+        for t in filtered_ag_tools:
+            raw_tools.append(t)
+            raw_owners[t["name"]] = "antigravity"
+            
+        if raw_tools:
+            save_tools_cache(raw_tools, raw_owners)
+            
+        final_tools = []
+        tool_owners.clear()
+        
+        disabled_tools = profile.get("disabled_tools", [])
+        tool_overrides = profile.get("tool_overrides", {})
+        
+        for t in native_tools:
+            if t["name"] in disabled_tools: continue
+            tool_owners[t["name"]] = "native"
+            if t["name"] in tool_overrides:
+                t.update(tool_overrides[t["name"]])
+            final_tools.append(t)
+            
+        for t in filtered_ag_tools:
+            if t["name"] in disabled_tools: continue
+            tool_owners[t["name"]] = "antigravity"
+            if t["name"] in tool_overrides:
+                t.update(tool_overrides[t["name"]])
+            final_tools.append(t)
+            
+        # Update hash based on the tools to return to the client
+        sorted_tools = sorted(final_tools, key=lambda x: x["name"])
+        last_tools_hash = hashlib.md5(json.dumps(sorted_tools, sort_keys=True).encode()).hexdigest()
+        return final_tools
 
 async def call_antigravity_tool(name, arguments, profile):
     payload = {"name": name, "arguments": arguments}
@@ -166,6 +243,25 @@ async def call_antigravity_tool(name, arguments, profile):
                 "isError": True
             }
 
+async def poll_tools_loop(ue_port, profile):
+    global last_tools_hash
+    while True:
+        await asyncio.sleep(3.0)
+        try:
+            old_hash = last_tools_hash
+            # discover_tools updates last_tools_hash
+            tools = await discover_tools(ue_port, profile)
+            new_hash = last_tools_hash
+            
+            if new_hash != old_hash:
+                notification = {
+                    "jsonrpc": "2.0",
+                    "method": "notifications/tools/list_changed"
+                }
+                print(json.dumps(notification), flush=True)
+        except Exception as e:
+            print(f"Error in background polling: {e}", file=sys.stderr)
+
 async def main_loop():
     global ue_stack, ue_session, tool_owners
     loop = asyncio.get_event_loop()
@@ -192,99 +288,109 @@ async def main_loop():
     }
     print(json.dumps(resp), flush=True)
 
-    while True:
-        line = await loop.run_in_executor(None, sys.stdin.readline)
-        if not line: break
-        
-        try:
-            msg = json.loads(line)
-        except:
-            continue
+    poll_task = asyncio.create_task(poll_tools_loop(ue_port, profile))
+
+    try:
+        while True:
+            line = await loop.run_in_executor(None, sys.stdin.readline)
+            if not line: break
             
-        method = msg.get("method")
-        msg_id = msg.get("id")
-        
-        if method == "tools/list":
-            final_tools = await discover_tools(ue_port, profile)
-            out = {
-                "jsonrpc": "2.0",
-                "id": msg_id,
-                "result": {"tools": final_tools}
-            }
-            print(json.dumps(out), flush=True)
-            
-        elif method == "tools/call":
-            params = msg.get("params", {})
-            name = params.get("name", "")
-            args = params.get("arguments", {})
-            
-            # Lazy load tool owners if not populated or if requested tool is missing
-            if not tool_owners or name not in tool_owners:
-                await discover_tools(ue_port, profile)
+            try:
+                msg = json.loads(line)
+            except:
+                continue
                 
-            owner = tool_owners.get(name)
-            result_obj = None
+            method = msg.get("method")
+            msg_id = msg.get("id")
             
-            if owner == "native":
-                if ue_session is None:
-                    ue_stack, ue_session = await init_ue58_client(ue_port)
+            if method == "tools/list":
+                final_tools = await discover_tools(ue_port, profile)
+                out = {
+                    "jsonrpc": "2.0",
+                    "id": msg_id,
+                    "result": {"tools": final_tools}
+                }
+                print(json.dumps(out), flush=True)
+                
+            elif method == "tools/call":
+                params = msg.get("params", {})
+                name = params.get("name", "")
+                args = params.get("arguments", {})
+                
+                # Lazy load tool owners if not populated or if requested tool is missing
+                if not tool_owners or name not in tool_owners:
+                    await discover_tools(ue_port, profile)
                     
-                if ue_session:
-                    try:
-                        res = await ue_session.call_tool(name, arguments=args)
-                        content = []
-                        for c in res.content:
-                            if c.type == "text":
-                                content.append({"type": "text", "text": c.text})
-                            elif c.type == "image":
-                                content.append({"type": "image", "data": c.data, "mimeType": c.mimeType})
+                owner = tool_owners.get(name)
+                result_obj = None
+                
+                if owner == "native":
+                    if ue_session is None:
+                        async with discover_lock:
+                            if ue_session is None:
+                                ue_stack, ue_session = await init_ue58_client(ue_port)
+                        
+                    if ue_session:
+                        try:
+                            res = await ue_session.call_tool(name, arguments=args)
+                            content = []
+                            for c in res.content:
+                                if c.type == "text":
+                                    content.append({"type": "text", "text": c.text})
+                                elif c.type == "image":
+                                    content.append({"type": "image", "data": c.data, "mimeType": c.mimeType})
+                            result_obj = {
+                                "content": content,
+                                "isError": res.isError
+                            }
+                        except Exception as e:
+                            ue_session = None
+                            if ue_stack:
+                                await ue_stack.aclose()
+                                ue_stack = None
+                            result_obj = {
+                                "content": [{"type": "text", "text": f"Error calling native tool: {e}"}],
+                                "isError": True
+                            }
+                    else:
                         result_obj = {
-                            "content": content,
-                            "isError": res.isError
-                        }
-                    except Exception as e:
-                        ue_session = None
-                        if ue_stack:
-                            await ue_stack.aclose()
-                            ue_stack = None
-                        result_obj = {
-                            "content": [{"type": "text", "text": f"Error calling native tool: {e}"}],
+                            "content": [{"type": "text", "text": "Native UE 5.8 server is not connected."}],
                             "isError": True
                         }
+                elif owner == "antigravity":
+                    result_obj = await call_antigravity_tool(name, args, profile)
                 else:
                     result_obj = {
-                        "content": [{"type": "text", "text": "Native UE 5.8 server is not connected."}],
+                        "content": [{"type": "text", "text": f"Tool '{name}' not found."}],
                         "isError": True
                     }
-            elif owner == "antigravity":
-                result_obj = await call_antigravity_tool(name, args, profile)
-            else:
-                result_obj = {
-                    "content": [{"type": "text", "text": f"Tool '{name}' not found."}],
-                    "isError": True
+                    
+                out = {
+                    "jsonrpc": "2.0",
+                    "id": msg_id,
+                    "result": result_obj
                 }
-                
-            out = {
-                "jsonrpc": "2.0",
-                "id": msg_id,
-                "result": result_obj
-            }
-            print(json.dumps(out), flush=True)
-            
-        elif method == "notifications/initialized":
-            pass
-            
-        elif method == "ping":
-            out = {"jsonrpc": "2.0", "id": msg_id, "result": {}}
-            print(json.dumps(out), flush=True)
-            
-        else:
-            if msg_id is not None:
-                out = {"jsonrpc": "2.0", "id": msg_id, "error": {"code": -32601, "message": f"Method '{method}' not found"}}
                 print(json.dumps(out), flush=True)
-
-    if ue_stack:
-        await ue_stack.aclose()
+                
+            elif method == "notifications/initialized":
+                pass
+                
+            elif method == "ping":
+                out = {"jsonrpc": "2.0", "id": msg_id, "result": {}}
+                print(json.dumps(out), flush=True)
+                
+            else:
+                if msg_id is not None:
+                    out = {"jsonrpc": "2.0", "id": msg_id, "error": {"code": -32601, "message": f"Method '{method}' not found"}}
+                    print(json.dumps(out), flush=True)
+    finally:
+        poll_task.cancel()
+        try:
+            await poll_task
+        except asyncio.CancelledError:
+            pass
+        if ue_stack:
+            await ue_stack.aclose()
 
 if __name__ == "__main__":
     try:

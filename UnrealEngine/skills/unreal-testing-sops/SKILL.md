@@ -164,3 +164,33 @@ This is the workflow for the Antigravity agent to test performance, analyze resu
     ]
   }
   ```
+
+---
+
+## SOP-003: E2E Latent Testing & Run Isolation Guardrails
+
+### 1. Isolated Run Command Line Flags
+When running automation tests from the command line (especially in headless or build environments), **always** include the `-Nomessaging` flag.
+* **Why:** By default, Unreal Engine's automation system utilizes UDP Messaging to discover other testing workers. If multiple editor/game instances are running concurrently, they will peer with each other, leading to port conflicts and deadlocks in enqueued latent commands.
+* **Example CLI Pattern:**
+  ```powershell
+  & "UnrealEditor-Cmd.exe" "Project.uproject" -game -nullrhi -ExecCmds="Automation RunTests TestName" -stdout -unattended -nopause -unbuffered -Nomessaging
+  ```
+
+### 2. Loading Screen & World Transition Race Conditions
+When writing latent commands that search for widgets (e.g., waiting for screen activation after loading a map), you **must** verify that the map load is fully complete and all garbage collection has dropped.
+* **Why:** `open Map` transitions are asynchronous. A simple check for `GetAllWidgetsOfClass` can return `true` on the old widget instances *before* the level swap teardown and GC starts, resulting in immediate null pointers/timeouts once the new map begins loading.
+* **Implementation:** Always verify with the loading screen subsystem (`ULoadingScreenManager`) that the loading screen has fully closed before accepting widgets:
+  ```cpp
+  if (UGameInstance* GI = World->GetGameInstance())
+  {
+      if (ULoadingScreenManager* LSM = GI->GetSubsystem<ULoadingScreenManager>())
+      {
+          if (LSM->GetLoadingScreenDisplayStatus())
+          {
+              return false; // Skip widget checks, the loading screen is still up
+          }
+      }
+  }
+  ```
+

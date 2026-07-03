@@ -38,7 +38,7 @@ Before executing or implementing any setup steps, you must perform a diagnostic 
      - `[ ] Step 6: Verify C++ AST caching & Vector DB indexing`
      - `[ ] Step 7: Full Workspace Scanning (uproject, configs, assets)`
      - `[ ] Step 8: Create OKF project-index skill & references`
-     - `[ ] Step 9: Append workspace rules to AGENTS.md`
+     - `[ ] Step 9: Append workspace rules and game description to AGENTS.md`
    - Explicitly request feedback/approval for the proposed setup plan and **STOP** to wait for the user's approval.
 
 3. **Initialize Task List**:
@@ -295,10 +295,16 @@ Consult these detailed documentation files to understand the project architectur
 - **Automation Scripts:** [e.g., run_tests.ps1, build_plugin.ps1]
 ```
 
-### Step 9: Append Workspace Rules (AGENTS.md)
+### Step 9: Append Workspace Rules and Game Description (AGENTS.md)
 Check if `.agents/AGENTS.md` exists at the project root.
 - If it does not exist, copy `UnrealEngine/AGENTS.md` to `.agents/AGENTS.md`.
 - If it does exist, inspect its contents. If the "Ponytail Ladder" or "Project Knowledge & Navigation" sections are already present, do NOT append. Otherwise, read the entire contents of `UnrealEngine/AGENTS.md` using `view_file` or `Get-Content`, and append the entire content to `.agents/AGENTS.md`. This ensures that all critical global instructions and efficiency rules are correctly applied to the workspace.
+
+After setting up the workspace rules, extend `.agents/AGENTS.md` (or the copied file) by inserting a short and precise description of the game:
+1. Check if a game description or summary is already created in the workspace (e.g., in the root `AGENTS.md` under a `## Game Summary` or `## Game Description` section, or in `.agents/skills/project-index/references/concepts.md` under `## Core Gameplay Fantasy - Overview`).
+2. If such a description is found, format it nicely and insert it near the top of `.agents/AGENTS.md` under a `## Game Summary` section (if not already present).
+3. If no description is found, generate a concise 2-3 sentence overview summarizing the game's core loop, genre, and key systems based on the indexed files (from `concepts.md` or from parsing the codebase), and insert it under a `## Game Summary` section in `.agents/AGENTS.md`.
+
 
 ### Step 10: Complete and Instruct User
 1. Verify that `.agents/skills/project-index/SKILL.md` and all referenced markdown files under `.agents/skills/project-index/references/` have been written successfully.

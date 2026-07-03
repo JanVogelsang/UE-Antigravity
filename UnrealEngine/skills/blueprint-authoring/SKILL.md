@@ -20,6 +20,20 @@ When modifying or creating a Blueprint Graph, you MUST follow this sequence:
 ## T3D Placeholder Substitution
 When replacing placeholders (e.g. `LINK_1`, `LINK_10`) in T3D node definitions, sort placeholders by length descending before replacement to prevent prefix collisions (e.g. replacing `LINK_10` with the value of `LINK_1` + `0`).
 
+## Python Sub-Object Bypassing (Design Time)
+In Unreal Python, internal blueprint sub-objects (like `WidgetTree` elements in UMG or added Components in a standard Blueprint) are often protected and cannot be accessed via standard property reflection (e.g., `bp.get_editor_property('WidgetTree')`).
+To modify these sub-objects via Python scripts in the editor, bypass this restriction by loading the sub-object directly from its path using colon notation (`AssetPath.AssetName:SubObjectName`):
+```python
+import unreal
+# Load the sub-object directly
+widget_obj = unreal.load_object(None, '/Game/UI/Path/W_MyWidget.W_MyWidget:WidgetTree.SubWidgetName')
+if widget_obj:
+    slot = widget_obj.slot  # Access the layout slot (e.g., CanvasPanelSlot)
+    slot.set_z_order(-1)
+    slot.set_anchors(unreal.Anchors(minimum=unreal.Vector2D(0,0), maximum=unreal.Vector2D(1,1)))
+```
+Always follow this pattern instead of attempting complex reflection hacks.
+
 ## Sub-Agent Workflow for Blueprint Authoring (Antigravity 4-Layer Context)
 
 When complex authoring is required, the Main Agent coordinates three specialized sub-agents:

@@ -1,10 +1,10 @@
 # UE-Antigravity - Agent Guidance
 
-This directory contains the agent plugin component of the UE-Antigravity integration.
+This file contains workspace-specific rules, constraints, and instructions for AI agents operating in this project.
 
 ## Agent Efficiency & Robustness Guidelines
 - **MCP Tool Priority**: Always prefer native Unreal Engine MCP tools and dedicated skills over `execute_python_script`. Only use `execute_python_script` when no native tool or dedicated skill exists for the specific task. If you must use `execute_python_script`, you are required to provide a detailed justification in the `justification_why_native_tools_or_skills_are_insufficient` parameter. Using Python to bypass specific tools/skills is strictly prohibited.
-- **Wait Durations & Scheduling**: Avoid active polling loops or shell-based sleep commands. Use the platform's native `schedule` tool (with `DurationSeconds`) when waiting for long background tasks. Ensure wait commands/timeouts for Editor start, compilation, and PIE loading are realistic (e.g., 5-15 seconds) to prevent premature check-in timeouts.
+- **Wait Durations & Scheduling**: Avoid active polling loops or shell-based sleep commands. Use the platform's native `schedule` tool (with `DurationSeconds`) when waiting for long background tasks. Ensure wait commands/timeouts for Editor start, compilation, and PIE loading are realistic (e.g., 30-90 seconds for Editor start, and 60-180 seconds for C++ compilation) to prevent premature check-in timeouts.
 - **Log Parsing Efficiency**: When reading active logs via commands, always use `Get-Content -Path <LogPath> -Tail <N>` (PowerShell) or `tail -n <N>` (Unix/macOS) instead of reading the entire file.
 - **Precision File Reading with `view_file`**: Use the native `view_file` tool rather than command-line utilities (like `cat` or `Get-Content`) to view source files. Specify `StartLine` and `EndLine` whenever possible to read only the target lines, keeping token overhead minimal.
 - **Handling Failures and Stuck Processes**: If an editor session, compilation command, or automation test fails or hangs, do not retry blindly. Check the tail of the log file, report the issue clearly, and immediately ask the user for assistance or verification.
@@ -14,6 +14,15 @@ This directory contains the agent plugin component of the UE-Antigravity integra
 
 ## Project Knowledge & Navigation
 - **Consulting the Project Index**: The entry-point skill `project-index` is auto-loaded by the assistant runner, but the detailed sub-documents in the `references/` subdirectory are not. When you need deep architectural context, gameplay specifications, or system designs, you **MUST** manually read the relevant reference documents under `.agents/skills/project-index/references/` (e.g., `concepts.md`, `gameplay.md`, `systems.md`, `files_index.md`) using the `view_file` tool to align your work with the project's pillars and conventions.
+  * Always consult the documentation index and symbol directories (e.g., `files_index.md`) first to locate specific assets or screen classes before running generic directory searches (`Get-ChildItem -Recurse`).
+- **AST & Header Verification**:
+  * Before calling any class method, you MUST verify its exact signature in its respective C++ header file. Do NOT guess names or properties (e.g., verify `GetCurrency()` instead of guessing `GetCurrencyPoints()`).
+  * Utilize the `compile_commands.json` database or lookups to trace unfamiliar types or includes.
+- **Automation Test Run Safeguards**:
+  * When running automated CLI tests via `UnrealEditor-Cmd.exe`, always append `; Quit` to the end of the `-ExecCmds` string (e.g. `-ExecCmds="Automation RunTests [ProjectOrTestName]; Quit"`). This prevents standalone engine processes from hanging indefinitely.
+- **Ticking Guardrails**:
+  * Never place high-overhead logic (like widget tree iterations, attribute matching, or regex lookups) inside ticking functions (`NativeTick`, `Tick`).
+  * Ensure any array access inside a ticking function is preceded by a bounds check or `INDEX_NONE` check to prevent Access Violation crashes.
 
 ## The Unreal Engine "Ponytail" Ladder
 When writing C++ or Blueprint code, you MUST follow this strict ladder of evaluation. Never write code without checking these rungs first:
