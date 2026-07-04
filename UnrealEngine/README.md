@@ -1,6 +1,6 @@
-# Antigravity UnrealEngine MCP Plugin
+# AgentFramework UnrealEngine MCP Plugin
 
-This is the Antigravity agent plugin component of the **UE-Antigravity** integration. It provides the Model Context Protocol (MCP) server configuration that allows AI assistants to communicate with the Unreal Engine Editor.
+This is the AgentFramework agent plugin component of the **UE-AgentFramework** integration. It provides the Model Context Protocol (MCP) server configuration that allows AI assistants to communicate with the Unreal Engine Editor.
 
 ## Architecture
 
@@ -14,7 +14,7 @@ The bridge supports a **profile-based configuration** that automatically adapts 
 
 **Resolution order:**
 1. `BRIDGE_PROFILE` environment variable (highest priority)
-2. Auto-detection from MCP `clientInfo.name` (e.g., Antigravity is detected automatically)
+2. Auto-detection from MCP `clientInfo.name` (e.g., AgentFramework is detected automatically)
 3. `profiles/default.json` (fallback)
 
 #### Available Profiles
@@ -22,7 +22,7 @@ The bridge supports a **profile-based configuration** that automatically adapts 
 | Profile | Image Support | Tool Overrides | Use Case |
 |---|---|---|---|
 | `default` | No | None | Safe fallback for unknown clients |
-| `antigravity` | Yes | None | Auto-detected when using Antigravity |
+| `agentframework` | Yes | None | Auto-detected when using AgentFramework |
 | `deepseek-v4` | No | CoT triggers, strict schemas | DeepSeek V4 via Kilo Code |
 | `kimi-k2` | No | Bilingual CoT (EN/ZH) | Kimi K2.6 via Kilo Code |
 | `claude` | Yes | None | Claude via Kilo Code or Claude Desktop |
@@ -54,9 +54,9 @@ To add support for a new LLM, create a new JSON file in the `profiles/` director
 
 ## Supported Clients
 
-### Antigravity (Auto-detected)
+### AgentFramework (Auto-detected)
 
-No additional configuration is needed. The bridge automatically detects Antigravity via the MCP `clientInfo` handshake and loads the `antigravity` profile.
+No additional configuration is needed. The bridge automatically detects AgentFramework via the MCP `clientInfo` handshake and loads the `agentframework` profile.
 
 ### Kilo Code (JetBrains IDEs)
 
@@ -79,6 +79,33 @@ Configure the MCP server in your project's `kilo.jsonc`:
 
 Copy the skill file to `.kilocode/rules/unreal-workflow.md` so the LLM follows the standard operating procedures.
 
+### Claude Code (CLI)
+
+Configure the MCP servers in your project's `.mcp.json` file (this is generated automatically by running the `install.ps1` script):
+
+```json
+{
+  "mcpServers": {
+    "unrealengine": {
+      "command": "C:\\path\\to\\.venv\\Scripts\\python.exe",
+      "args": ["-X", "utf8", "-u", "-m", "bridge.main"],
+      "env": {
+        "PYTHONPATH": "C:\\path\\to\\UnrealEngine"
+      }
+    },
+    "cpp-ast-rag": {
+      "command": "C:\\path\\to\\.venv\\Scripts\\python.exe",
+      "args": ["-u", "-m", "ExternalServer.src.main"],
+      "env": {
+        "PYTHONPATH": "C:\\path\\to\\UnrealEngine"
+      }
+    }
+  }
+}
+```
+
+Claude Code will automatically detect `.mcp.json` and prompt for approval when starting a session in the repository. The installer also automatically copies your custom guidelines to `CLAUDE.md` and links relevant skills to `.claude/skills/`.
+
 ### Other MCP Clients (Claude Desktop, Cursor, etc.)
 
 Any client that supports the MCP stdio transport can use this bridge. Configure the server command pointing to `bridge.exe` and set the `BRIDGE_PROFILE` environment variable to match your model.
@@ -96,7 +123,7 @@ Run the installation script from the plugin directory:
 The script will:
 1. Ask for your target project root directory.
 2. Compile the bridge if needed.
-3. Copy the plugin files to `.agents/plugins/UnrealEngine/` for Antigravity.
+3. Copy the plugin files to `.agents/plugins/UnrealEngine/` for AgentFramework.
 4. Create a hardlink for the skill file in `.kilocode/rules/` for Kilo Code.
 5. Let you select an LLM profile and generate `kilo.jsonc`.
 

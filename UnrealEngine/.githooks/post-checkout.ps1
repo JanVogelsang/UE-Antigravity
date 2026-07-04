@@ -35,11 +35,11 @@ $WorktreeAgentsDir = Join-Path $WorktreeRoot ".agents"
 $WorktreePluginDir = Join-Path $WorktreeAgentsDir "plugins\UnrealEngine"
 
 if (Test-Path $WorktreePluginDir) {
-    Log-Message "Antigravity plugin already initialized in this worktree. Skipping."
+    Log-Message "AgentFramework plugin already initialized in this worktree. Skipping."
     exit 0
 }
 
-Log-Message "Initializing Antigravity workspace in new worktree: $WorktreeRoot"
+Log-Message "Initializing AgentFramework workspace in new worktree: $WorktreeRoot"
 
 # 3. Locate Main Repository Root
 try {
@@ -225,4 +225,4 @@ if (Test-Path $EnvGenScript) {
     Log-Message "Warning: Environment generation script not found at $EnvGenScript"
 }
 
-Log-Message "Worktree Antigravity setup completed successfully."
+Log-Message "Worktree AgentFramework setup completed successfully."

@@ -48,7 +48,7 @@ def download_and_extract_db(ue_version: str, persist_directory: str) -> bool:
     and extracts it to the persist_directory.
     """
     base_url = os.environ.get(
-        "UE_ANTIGRAVITY_VECTOR_DB_URL",
+        "UE_AGENTFRAMEWORK_VECTOR_DB_URL",
         "https://github.com/JanVogelsang/UE-Antigravity/releases/download/vector-dbs"
     )
     download_url = f"{base_url}/vector_db_{ue_version}.zip"

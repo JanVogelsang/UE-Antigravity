@@ -1,4 +1,4 @@
-# Consolidated Test Runner for UE-Antigravity Dual-MCP
+# Consolidated Test Runner for UE-AgentFramework Dual-MCP
 # This script runs both the C++ headless Unreal Editor automation tests
 # and the Python integration/unit tests sequentially.
 
@@ -74,7 +74,7 @@ if (-not (Test-Path $unreal_exe)) {
 }
 
 Write-Host "=================================================================" -ForegroundColor Magenta
-Write-Host "             UE-Antigravity Consolidated Test Runner            " -ForegroundColor Magenta
+Write-Host "             UE-AgentFramework Consolidated Test Runner            " -ForegroundColor Magenta
 Write-Host "=================================================================" -ForegroundColor Magenta
 
 # 1. Verify environment paths
@@ -93,12 +93,12 @@ if (-not (Test-Path $python_exe)) {
 
 # 2. Run C++ Headless Automation Tests
 Write-Host "`n[1/2] Running C++ Headless Unreal Editor Automation Tests..." -ForegroundColor Cyan
-Write-Host "Command: UnrealEditor-Cmd.exe -NullRHI -NoSound -NoSourceControl -unattended -ExecCmds=`"Automation RunTests Antigravity; Quit`"" -ForegroundColor DarkGray
+Write-Host "Command: UnrealEditor-Cmd.exe -NullRHI -NoSound -NoSourceControl -unattended -ExecCmds=`"Automation RunTests AgentFramework; Quit`"" -ForegroundColor DarkGray
 
 # We temporarily override the environment to prevent buffering if possible
 $processInfo = New-Object System.Diagnostics.ProcessStartInfo
 $processInfo.FileName = $unreal_exe
-$processInfo.Arguments = "`"$project_path`" -NullRHI -NoSound -NoSourceControl -unattended -ExecCmds=`"Automation RunTests Antigravity; Quit`" -log"
+$processInfo.Arguments = "`"$project_path`" -NullRHI -NoSound -NoSourceControl -unattended -ExecCmds=`"Automation RunTests AgentFramework; Quit`" -log"
 $processInfo.UseShellExecute = $false
 $processInfo.RedirectStandardOutput = $false
 $processInfo.RedirectStandardError = $false

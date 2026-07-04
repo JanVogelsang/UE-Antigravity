@@ -1,6 +1,6 @@
-# UE-Antigravity Test Infrastructure & E2E Testing Plan
+# UE-AgentFramework Test Infrastructure & E2E Testing Plan
 
-This document details the test infrastructure, directory structure, execution flows, and the testing matrix for the UE-Antigravity Dual-MCP integration.
+This document details the test infrastructure, directory structure, execution flows, and the testing matrix for the UE-AgentFramework Dual-MCP integration.
 
 ---
 
@@ -35,7 +35,7 @@ The automated End-to-End (E2E) test suite validates the integration of the Dual-
 All E2E test files are located in the `Tests/` directory at the project root:
 
 ```
-UE-Antigravity/
+UE-AgentFramework/
 ├── Tests/
 │   ├── requirements.txt      # pytest, requests, and pytest-asyncio
 │   ├── conftest.py           # Pytest fixtures managing Unreal Editor & Python subprocesses

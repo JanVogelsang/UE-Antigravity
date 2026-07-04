@@ -1,15 +1,15 @@
-# Project: UE-Antigravity Dual-MCP Architecture
+# Project: UE-AgentFramework Dual-MCP Architecture
 
 ## Architecture
 The system consists of two primary servers:
-1. **Internal C++ MCP Server**: Runs inside the Unreal Engine Editor process. It listens on HTTP port 18777 (already partially defined via `FAntigravityHttpServer`) and accepts requests representing MCP-like actions. The stdio bridge `bridge.exe` translates standard input/output (stdio) MCP JSON-RPC protocol messages to loopback HTTP requests to the editor.
+1. **Internal C++ MCP Server**: Runs inside the Unreal Engine Editor process. It listens on HTTP port 18777 (already partially defined via `FAgentFrameworkHttpServer`) and accepts requests representing MCP-like actions. The stdio bridge `bridge.exe` translates standard input/output (stdio) MCP JSON-RPC protocol messages to loopback HTTP requests to the editor.
 2. **External Indexing & RAG MCP Server (Python)**: Runs as a standalone Python process. It exposes tools to analyze C++ source files using `libclang`, generate `compile_commands.json` using UBT, watch files for modification to incrementally update an SQLite AST cache, and perform vector database semantic searches.
 3. **Mock Agent Client / Test Runner**: A testing component that acts as the client connecting to both MCP servers to verify end-to-end integration.
 
 ## Code Layout
-- `Antigravity/` - Unreal Engine editor plugin containing C++ source and resources.
-  - `Source/AntigravityActions/` - Main plugin implementation containing actions/tools.
-  - `Source/AntigravityActions/Private/Diagnostics/` - Automated unit/integration tests for C++ side.
+- `AgentFramework/` - Unreal Engine editor plugin containing C++ source and resources.
+  - `Source/AgentFrameworkActions/` - Main plugin implementation containing actions/tools.
+  - `Source/AgentFrameworkActions/Private/Diagnostics/` - Automated unit/integration tests for C++ side.
 - `UnrealEngine/` - The C++ bridge source and client profile configuration.
   - `ExternalServer/` - The External Python Indexing & RAG server.
     - `src/` - Python server implementation (`mcp` library stdio server).

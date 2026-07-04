@@ -62,7 +62,7 @@ async def is_port_open_async(port):
     except Exception:
         return False
 
-async def fetch_antigravity_tools():
+async def fetch_agentframework_tools():
     if not await is_port_open_async(18777):
         return []
     async with httpx.AsyncClient() as client:
@@ -132,7 +132,7 @@ async def discover_tools(ue_port, profile):
                     await ue_stack.aclose()
                     ue_stack = None
                     
-        ag_tools = await fetch_antigravity_tools()
+        ag_tools = await fetch_agentframework_tools()
         
         if not native_tools and not ag_tools:
             cache = load_tools_cache()
@@ -175,7 +175,7 @@ async def discover_tools(ue_port, profile):
             raw_owners[t["name"]] = "native"
         for t in filtered_ag_tools:
             raw_tools.append(t)
-            raw_owners[t["name"]] = "antigravity"
+            raw_owners[t["name"]] = "agentframework"
             
         if raw_tools:
             save_tools_cache(raw_tools, raw_owners)
@@ -195,7 +195,7 @@ async def discover_tools(ue_port, profile):
             
         for t in filtered_ag_tools:
             if t["name"] in disabled_tools: continue
-            tool_owners[t["name"]] = "antigravity"
+            tool_owners[t["name"]] = "agentframework"
             if t["name"] in tool_overrides:
                 t.update(tool_overrides[t["name"]])
             final_tools.append(t)
@@ -205,7 +205,7 @@ async def discover_tools(ue_port, profile):
         last_tools_hash = hashlib.md5(json.dumps(sorted_tools, sort_keys=True).encode()).hexdigest()
         return final_tools
 
-async def call_antigravity_tool(name, arguments, profile):
+async def call_agentframework_tool(name, arguments, profile):
     payload = {"name": name, "arguments": arguments}
     async with httpx.AsyncClient(timeout=None) as client:
         try:
@@ -357,8 +357,8 @@ async def main_loop():
                             "content": [{"type": "text", "text": "Native UE 5.8 server is not connected."}],
                             "isError": True
                         }
-                elif owner == "antigravity":
-                    result_obj = await call_antigravity_tool(name, args, profile)
+                elif owner == "agentframework":
+                    result_obj = await call_agentframework_tool(name, args, profile)
                 else:
                     result_obj = {
                         "content": [{"type": "text", "text": f"Tool '{name}' not found."}],

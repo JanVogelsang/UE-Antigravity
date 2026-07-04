@@ -1,6 +1,6 @@
-# Antigravity E2E Integration Tests
+# AgentFramework E2E Integration Tests
 
-This directory contains the end-to-end integration tests for the Antigravity Dual-MCP architecture.
+This directory contains the end-to-end integration tests for the AgentFramework Dual-MCP architecture.
 
 ## Overview
 

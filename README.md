@@ -1,58 +1,51 @@
-# Antigravity Unreal Engine Plugin
+# UE-AgentFramework (formerly UE-Antigravity)
 
-This is the Unreal Engine plugin component of the **UE-Antigravity** integration. It exposes an in-process HTTP loopback server (listening on port `18777`) to execute commands safely on the Game Thread, allowing the Antigravity AI coding assistant to natively interact with your Unreal Editor.
+UE-AgentFramework is a high-performance integration plugin that connects AI coding assistants directly to a running Unreal Engine Editor. It operates using a **Dual-MCP Server** architecture, allowing agents to read Blueprint schemas, inject node networks, parse C++ AST symbols, query world states, and perform verification tests.
 
-*(Note: The MCP servers that communicate with the AI assistant, including the C++ Bridge and the External Python AST Server, are located in the `UnrealEngine` directory of this repository.)*
-
-## Installation
-
-1. Create a `Plugins` directory at the root of your Unreal Engine project if it doesn't already exist.
-2. Copy this `Antigravity` folder inside your project's `Plugins` directory:
-   ```
-   YourProject/
-   ├── Plugins/
-   │   └── Antigravity/
-   ```
-3. Open your project in Unreal Editor. If prompted to rebuild missing modules, click **Yes**.
-4. Make sure the plugin is enabled in **Edit > Plugins**.
+The integration supports three main AI assistant platforms out-of-the-box:
+1. **Antigravity 2.0** (Google's agentic AI coding environment)
+2. **Claude Code** (Anthropic's terminal-based coding agent)
+3. **Kilo Code** (JetBrains IDE integration)
 
 ---
 
-## Building and Distribution
+## Repository Structure
 
-To distribute the plugin or upload it to Epic's **Fab** marketplace, it needs to be rebuilt and packaged cleanly. A helper PowerShell script `build_plugin.ps1` is provided at the root of this repository.
+*   [**`AgentFramework/`**](file:///c:/Users/janv1/Documents/Unreal%20Projects/UE-Antigravity/AgentFramework): In-editor C++ plugin that exposes the loopback HTTP server on port `18777` for executing Game Thread actions.
+*   [**`UnrealEngine/`**](file:///c:/Users/janv1/Documents/Unreal%20Projects/UE-Antigravity/UnrealEngine): External agent plugin containing the Python AST server, C++ bridge executable, static skills, and profiles.
+*   [**`Tests/`**](file:///c:/Users/janv1/Documents/Unreal%20Projects/UE-Antigravity/Tests): Automated integration and unit test suite (`pytest` based) for verifying the MCP server communications.
 
-### Using the Packaging Script
+---
 
-1. Open PowerShell at the repository root.
-2. Run the build script:
+## Installation & Setup
+
+We provide an automated PowerShell installer that configures the plugin, creates dedicated python virtual environments, installs dependencies, links rules, and generates configuration files for your selected assistant.
+
+1.  Close your Unreal Editor.
+2.  Open PowerShell in the repository root and run the installer:
+    ```powershell
+    powershell -ExecutionPolicy Bypass -File .\UnrealEngine\install.ps1
+    ```
+3.  Follow the prompts to specify your target project root and choose your assistant:
+    *   **Antigravity 2.0**: Generates `mcp_config.json` inside the plugin folder.
+    *   **Kilo Code**: Generates `kilo.jsonc` and links rules to `.kilocode/rules/`.
+    *   **Claude Code**: Generates `.mcp.json` at the project root, links skills to `.claude/skills/`, and copies rules to `CLAUDE.md`.
+4.  Open your project in the Unreal Editor (compile/enable the `AgentFramework` plugin if prompted).
+5.  Start your assistant session in the target project workspace and prompt:
+    > `"Run project setup and index the project"`
+    *(This scans your codebase, configures your local environment, and builds a token-efficient project indexing map).*
+
+---
+
+## Packaging the C++ Plugin
+
+To package or distribute the `AgentFramework` C++ editor plugin (e.g., for Epic's **Fab** marketplace):
+
+1. Run the build script from the repository root:
    ```powershell
-   .\build_plugin.ps1 -UEVersion "5.4"
+   .\build_plugin.ps1 -UEVersion "5.8"
    ```
-   *Replace `"5.4"` with your installed Unreal Engine version (e.g., `"5.3"`, `"5.5"`).*
+   *(Specify your installed version or use `-EnginePath` for custom locations).*
+2. The script compiles the plugin headlessly using the Unreal Automation Tool (UAT) and places a packaged zip in `Packaged/AgentFramework.zip` ready for Fab upload.
 
-This script will:
-- Clean any previous `Binaries/`, `Intermediate/`, and `Saved/` folders.
-- Use the **Unreal Automation Tool (UAT)** with the `-Rocket` parameter to compile and build the plugin for all target platforms.
-- Create a packaged folder in the `Packaged/Antigravity` directory.
-- Zip the folder into `Packaged/Antigravity.zip` for marketplace upload.
-
-### Customizing Paths
-
-If your Unreal Engine is installed in a custom location, use the `-EnginePath` parameter:
-```powershell
-.\build_plugin.ps1 -EnginePath "D:\CustomPath\UE_5.4"
-```
-
----
-
-## Distribution on Fab Marketplace
-
-Once the build finishes successfully, you can upload `Packaged/Antigravity.zip` to the Fab portal:
-
-1. **Log in**: Sign in to the [Fab Publisher Portal](https://publisher.fab.com/).
-2. **Add Product**: Create or edit your product listing. Set the type to **Unreal Engine Plugin**.
-3. **Add Version**: In the *Versions* tab, create a new version (e.g., `1.1.0` matching `VersionName` in `Antigravity.uplugin`).
-4. **Upload Package**: Upload `Packaged/Antigravity.zip` (it contains the required root `Antigravity/` folder with `.uplugin` and source files).
-5. **Metadata**: Specify supported engine versions (e.g. `5.3-5.5`) and platforms, then click **Submit for Review**.
-
+For developer environment setups, test suite operations, and detailed API documentation, refer to the files in the [**`Documentation/`**](file:///c:/Users/janv1/Documents/Unreal%20Projects/UE-Antigravity/Documentation) directory.

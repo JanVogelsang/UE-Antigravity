@@ -1,6 +1,6 @@
-# Antigravity 2.0 Development Guide & Onboarding
+# AgentFramework 2.0 Development Guide & Onboarding
 
-Welcome to the UE-Antigravity Dual-MCP developer guide. This document contains exact instructions for compiling, testing, and debugging the codebase to ensure consistency across different agent invocations.
+Welcome to the UE-AgentFramework Dual-MCP developer guide. This document contains exact instructions for compiling, testing, and debugging the codebase to ensure consistency across different agent invocations.
 
 ---
 
@@ -33,7 +33,7 @@ Run the build script from the repository root using the UAT mutex bypass environ
 $env:uebp_UATMutexNoWait = '1'
 powershell -ExecutionPolicy Bypass -File .\build_plugin.ps1 -NoZip
 ```
-This command compiles the C++ plugin, packages it, and copies the latest binaries back to the game project (`tau-game/Plugins/Antigravity`).
+This command compiles the C++ plugin, packages it, and copies the latest binaries back to the game project (`tau-game/Plugins/AgentFramework`).
 
 ---
 

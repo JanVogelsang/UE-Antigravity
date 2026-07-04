@@ -111,7 +111,7 @@ def unreal_process():
 
     if not opened:
         pytest.exit(f"\n[ERROR] Unreal Editor did not start or register on port {PORT} within {timeout} seconds.\n"
-                    f"Please open the editor manually and verify the Antigravity plugin is loaded.")
+                    f"Please open the editor manually and verify the AgentFramework plugin is loaded.")
 
     yield proc
 

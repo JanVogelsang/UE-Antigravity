@@ -18,24 +18,24 @@ $TargetProjectDir = $TargetProjectDir.TrimEnd('\')
 
 Write-Host "Installing to: $TargetProjectDir"
 
-$AntigravityPluginDir = "$TargetProjectDir\.agents\plugins\UnrealEngine"
+$AgentFrameworkPluginDir = "$TargetProjectDir\.agents\plugins\UnrealEngine"
 
-# 1. Setup Antigravity plugin directory
-Write-Host "Setting up Antigravity..."
-if (-not (Test-Path $AntigravityPluginDir)) {
-    New-Item -ItemType Directory -Force -Path $AntigravityPluginDir | Out-Null
+# 1. Setup AgentFramework plugin directory
+Write-Host "Setting up AgentFramework..."
+if (-not (Test-Path $AgentFrameworkPluginDir)) {
+    New-Item -ItemType Directory -Force -Path $AgentFrameworkPluginDir | Out-Null
 }
 $ResolvedPluginDir = (Resolve-Path $PluginDir).Path
-$ResolvedDestDir = (Resolve-Path $AntigravityPluginDir).Path
+$ResolvedDestDir = (Resolve-Path $AgentFrameworkPluginDir).Path
 if ($ResolvedPluginDir -ne $ResolvedDestDir) {
-    Copy-Item -Path "$PluginDir\*" -Destination $AntigravityPluginDir -Recurse -Force
+    Copy-Item -Path "$PluginDir\*" -Destination $AgentFrameworkPluginDir -Recurse -Force
 }
 # 2.5 Setup Workspace AGENTS.md
 Write-Host "Setting up AGENTS.md at workspace root..."
 $TargetAgentsPath = "$TargetProjectDir\AGENTS.md"
 $SourceAgentsPath = "$PluginDir\AGENTS.md"
 if (-not (Test-Path $SourceAgentsPath)) {
-    $SourceAgentsPath = "$AntigravityPluginDir\AGENTS.md"
+    $SourceAgentsPath = "$AgentFrameworkPluginDir\AGENTS.md"
 }
 
 if (Test-Path $SourceAgentsPath) {
@@ -56,10 +56,12 @@ if (Test-Path $SourceAgentsPath) {
 # 3. Select AI coding assistant
 Write-Host ""
 Write-Host "Which AI coding assistant do you want to configure?"
-Write-Host "  [0] Antigravity 2.0 (default)"
+Write-Host "  [0] AgentFramework 2.0 (default)"
 Write-Host "  [1] Kilo Code"
-$clientChoice = Read-Host "Select (press Enter for Antigravity 2.0)"
+Write-Host "  [2] Claude Code"
+$clientChoice = Read-Host "Select (press Enter for AgentFramework 2.0)"
 $useKiloCode = ($clientChoice -eq "1")
+$useClaudeCode = ($clientChoice -eq "2")
 
 # Resolve dynamic python path
 $UserDir = $env:USERPROFILE
@@ -73,7 +75,7 @@ if (Test-Path $StorePython) {
 
 # Setup dedicated virtual environment for External Server in destination
 Write-Host "Setting up Python virtual environment..."
-$VenvDir = "$AntigravityPluginDir\ExternalServer\.venv"
+$VenvDir = "$AgentFrameworkPluginDir\ExternalServer\.venv"
 if (-not (Test-Path $VenvDir)) {
     & $PythonExe -m venv $VenvDir
     if ($LASTEXITCODE -ne 0) {
@@ -86,14 +88,14 @@ $PythonExeEscaped = $VenvPython -replace '\\', '\\'
 
 # Install External Server runtime dependencies via pip
 Write-Host "Installing External Server dependencies via pip..."
-& $VenvPython -m pip install -r "$AntigravityPluginDir\ExternalServer\requirements.txt"
+& $VenvPython -m pip install -r "$AgentFrameworkPluginDir\ExternalServer\requirements.txt"
 if ($LASTEXITCODE -ne 0) {
     Write-Error "Failed to install Python dependencies via pip. Setup process failed."
     exit 1
 }
 
 Write-Host "Installing Bridge dependencies via pip..."
-& $VenvPython -m pip install -r "$AntigravityPluginDir\bridge\requirements.txt"
+& $VenvPython -m pip install -r "$AgentFrameworkPluginDir\bridge\requirements.txt"
 if ($LASTEXITCODE -ne 0) {
     Write-Error "Failed to install Python dependencies via pip for bridge. Setup process failed."
     exit 1
@@ -101,7 +103,7 @@ if ($LASTEXITCODE -ne 0) {
 
 # Resolve repository root dynamically (parent of the UnrealEngine folder)
 $RepoRoot = (Get-Item $PluginDir).Parent.FullName -replace '\\', '\\'
-$PluginDirEscaped = $AntigravityPluginDir -replace '\\', '\\'
+$PluginDirEscaped = $AgentFrameworkPluginDir -replace '\\', '\\'
 
 if ($useKiloCode) {
     # ── Kilo Code ────────────────────────────────────────────────────────────
@@ -130,7 +132,7 @@ if ($useKiloCode) {
         New-Item -ItemType Directory -Force -Path $KiloCodeRulesDir | Out-Null
     }
 
-    $SkillsSourceDir = "$AntigravityPluginDir\skills"
+    $SkillsSourceDir = "$AgentFrameworkPluginDir\skills"
     if (-not (Test-Path $SkillsSourceDir)) { $SkillsSourceDir = "$PluginDir\skills" }
 
     $LastTargetRule = ""
@@ -183,12 +185,95 @@ if ($useKiloCode) {
 
     Write-Host ""
     Write-Host "Installation Complete (Kilo Code)."
-    Write-Host "  Antigravity plugin : $AntigravityPluginDir"
+    Write-Host "  AgentFramework plugin : $AgentFrameworkPluginDir"
     Write-Host "  Kilo Code rules    : $KiloCodeRulesDir"
     Write-Host "  LLM Profile        : $selectedProfile"
 
+} elseif ($useClaudeCode) {
+    # ── Claude Code ──────────────────────────────────────────────────────────
+
+    # Setup Claude Code skills (skill hard-links)
+    $ClaudeSkillsDir = "$TargetProjectDir\.claude\skills"
+    Write-Host "Setting up Claude Code skills..."
+    if (-not (Test-Path $ClaudeSkillsDir)) {
+        New-Item -ItemType Directory -Force -Path $ClaudeSkillsDir | Out-Null
+    }
+
+    $SkillsSourceDir = "$AgentFrameworkPluginDir\skills"
+    if (-not (Test-Path $SkillsSourceDir)) { $SkillsSourceDir = "$PluginDir\skills" }
+
+    Get-ChildItem -Path $SkillsSourceDir -Directory | ForEach-Object {
+        $SkillName = $_.Name
+        $SourceSkill = Join-Path $_.FullName "SKILL.md"
+        $TargetSkillDir = Join-Path $ClaudeSkillsDir $SkillName
+        if (-not (Test-Path $TargetSkillDir)) {
+            New-Item -ItemType Directory -Force -Path $TargetSkillDir | Out-Null
+        }
+        $LastTargetRule = Join-Path $TargetSkillDir "SKILL.md"
+        if (Test-Path $LastTargetRule) { Remove-Item $LastTargetRule }
+        if (Test-Path $SourceSkill) {
+            New-Item -ItemType HardLink -Path $LastTargetRule -Value $SourceSkill | Out-Null
+            Write-Host "  Linked skill '$SkillName'."
+        }
+    }
+
+    # Setup Workspace CLAUDE.md by copying AGENTS.md
+    Write-Host "Setting up CLAUDE.md at workspace root..."
+    $TargetClaudePath = "$TargetProjectDir\CLAUDE.md"
+    if (Test-Path $SourceAgentsPath) {
+        if (-not (Test-Path $TargetClaudePath)) {
+            Copy-Item -Path $SourceAgentsPath -Destination $TargetClaudePath -Force
+            Write-Host "Created CLAUDE.md at workspace root."
+        } else {
+            $existingContent = Get-Content -Path $TargetClaudePath -Raw
+            if ($existingContent -notmatch "Agent Efficiency & Robustness Guidelines") {
+                Add-Content -Path $TargetClaudePath -Value "`n`n$(Get-Content -Path $SourceAgentsPath -Raw)"
+                Write-Host "Appended Agent Efficiency & Robustness Guidelines to existing CLAUDE.md."
+            } else {
+                Write-Host "CLAUDE.md at workspace root already contains the efficiency guidelines."
+            }
+        }
+    }
+
+    # Write .mcp.json
+    $McpConfigPath = "$TargetProjectDir\.mcp.json"
+    $McpConfigContent = @"
+{
+  "mcpServers": {
+    "unrealengine": {
+      "command": "$PythonExeEscaped",
+      "args": ["-X", "utf8", "-u", "-m", "bridge.main"],
+      "env": {
+        "PYTHONPATH": "$PluginDirEscaped"
+      }
+    },
+    "cpp-ast-rag": {
+      "command": "$PythonExeEscaped",
+      "args": ["-u", "-m", "ExternalServer.src.main"],
+      "env": {
+        "PYTHONPATH": "$PluginDirEscaped"
+      }
+    }
+  }
+}
+"@
+
+    if (-not (Test-Path $McpConfigPath)) {
+        Set-Content -Path $McpConfigPath -Value $McpConfigContent
+        Write-Host "Created .mcp.json."
+    } else {
+        Write-Host ".mcp.json already exists. Please manually merge the MCP server definition:"
+        Write-Host $McpConfigContent
+    }
+
+    Write-Host ""
+    Write-Host "Installation Complete (Claude Code)."
+    Write-Host "  AgentFramework plugin : $AgentFrameworkPluginDir"
+    Write-Host "  Claude config      : $McpConfigPath"
+    Write-Host "  Claude rules       : $TargetClaudePath"
+
 } else {
-    # ── Antigravity 2.0 (default) ────────────────────────────────────────────
+    # ── AgentFramework 2.0 (default) ────────────────────────────────────────────
 
     $McpConfigContent = @"
 {
@@ -215,13 +300,13 @@ if ($useKiloCode) {
 }
 "@
 
-    $PluginConfigPath = Join-Path $AntigravityPluginDir "mcp_config.json"
+    $PluginConfigPath = Join-Path $AgentFrameworkPluginDir "mcp_config.json"
     Set-Content -Path $PluginConfigPath -Value $McpConfigContent
     Write-Host "Created/Updated mcp_config.json."
 
     Write-Host ""
-    Write-Host "Installation Complete (Antigravity 2.0)."
-    Write-Host "  Antigravity plugin : $AntigravityPluginDir"
+    Write-Host "Installation Complete (AgentFramework 2.0)."
+    Write-Host "  AgentFramework plugin : $AgentFrameworkPluginDir"
     Write-Host "  MCP config         : $PluginConfigPath"
 }
 
@@ -230,7 +315,7 @@ Write-Host "Setting up Git Worktree Hooks..."
 $TargetGithooksDir = "$TargetProjectDir\.githooks"
 $SourceGithooksDir = "$PluginDir\.githooks"
 if (-not (Test-Path $SourceGithooksDir)) {
-    $SourceGithooksDir = "$AntigravityPluginDir\.githooks"
+    $SourceGithooksDir = "$AgentFrameworkPluginDir\.githooks"
 }
 
 if (Test-Path $SourceGithooksDir) {
@@ -258,9 +343,9 @@ if (Test-Path $SourceGithooksDir) {
         $ExistingContent = Get-Content -Path $TargetBashHook -Raw
         if ($ExistingContent -notmatch "post-checkout.ps1") {
             Add-Content -Path $TargetBashHook -Value $HookInvocation
-            Write-Host "Appended Antigravity worktree hook to existing post-checkout hook."
+            Write-Host "Appended AgentFramework worktree hook to existing post-checkout hook."
         } else {
-            Write-Host "Existing post-checkout hook already contains Antigravity configuration."
+            Write-Host "Existing post-checkout hook already contains AgentFramework configuration."
         }
     }
 
@@ -275,7 +360,7 @@ if (Test-Path $SourceGithooksDir) {
             Write-Host "Configured target Git repository to use .githooks folder."
         } else {
             Write-Host "Warning: Target project already has a custom core.hooksPath configured ($CurrentHooksPath)."
-            Write-Host "To enable Antigravity worktrees, please manually add the post-checkout hook to: $CurrentHooksPath"
+            Write-Host "To enable AgentFramework worktrees, please manually add the post-checkout hook to: $CurrentHooksPath"
         }
         Pop-Location
     } else {
@@ -289,6 +374,8 @@ Write-Host "Next Step (Highly Recommended):"
 Write-Host "  Ensure Unreal Editor is running, open a new conversation with your"
 if ($useKiloCode) {
     Write-Host "  AI assistant (which will follow the linked Kilo rules), and ask to:"
+} elseif ($useClaudeCode) {
+    Write-Host "  AI assistant (which will follow the linked Claude rules), and ask to:"
 } else {
     Write-Host "  AI assistant, and prompt it to run the setup:"
 }

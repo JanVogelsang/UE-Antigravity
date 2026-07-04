@@ -109,7 +109,7 @@ def resolve_project_paths():
                 logger.info(f"Dynamically discovered game project directory: {base_dir}")
                 break
         
-        # If not found, check if we are inside the UE-Antigravity repo and tau-game is next to it
+        # If not found, check if we are inside the UE-AgentFramework repo and tau-game is next to it
         if not base_dir:
             sibling_dir = REPO_ROOT.parent / "tau-game"
             if sibling_dir.exists():
@@ -176,7 +176,7 @@ from watchdog.observers import Observer
 from watchdog.events import FileSystemEventHandler
 
 # Initialize FastMCP Server
-mcp = FastMCP("UE-Antigravity C++ AST & RAG Server")
+mcp = FastMCP("UE-AgentFramework C++ AST & RAG Server")
 
 # 2. Dynamic libclang.dll loader
 def resolve_and_load_libclang():
@@ -1584,7 +1584,7 @@ def sync_blueprints_on_startup_sync() -> str:
 async def index_all_blueprints() -> str:
     """
     Extracts Blueprint Summary Format (BSF) from all Blueprints in the Unreal Engine project and indexes them into the vector database.
-    Requires the Unreal Engine editor to be running with the Antigravity plugin.
+    Requires the Unreal Engine editor to be running with the AgentFramework plugin.
     """
     check_and_reload_vector_db()
     return await asyncio.to_thread(sync_blueprints_on_startup_sync)

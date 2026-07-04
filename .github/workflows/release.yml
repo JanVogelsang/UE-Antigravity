@@ -18,19 +18,19 @@ jobs:
     - name: Package Unreal Engine Plugin (Fab)
       run: |
         # Ensure no generated artifacts are present just in case
-        rm -rf Antigravity/Binaries Antigravity/Intermediate Antigravity/Saved
-        zip -r UE-Antigravity-Plugin.zip Antigravity/
+        rm -rf AgentFramework/Binaries AgentFramework/Intermediate AgentFramework/Saved
+        zip -r UE-AgentFramework-Plugin.zip AgentFramework/
 
-    - name: Package Antigravity Agent Plugin
+    - name: Package AgentFramework Agent Plugin
       run: |
         # Remove any pre-built bridge if it was accidentally committed
         rm -f UnrealEngine/bridge.exe
-        zip -r Antigravity-Agent-Plugin.zip UnrealEngine/
+        zip -r AgentFramework-Agent-Plugin.zip UnrealEngine/
 
     - name: Create GitHub Release
       uses: softprops/action-gh-release@v2
       with:
         files: |
-          UE-Antigravity-Plugin.zip
-          Antigravity-Agent-Plugin.zip
+          UE-AgentFramework-Plugin.zip
+          AgentFramework-Agent-Plugin.zip
         generate_release_notes: true

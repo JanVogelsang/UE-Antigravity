@@ -1,0 +1,328 @@
+// Copyright 2026 AgentFramework. All Rights Reserved.
+
+#include "AgentFrameworkHttpServer.h"
+#include "HttpServerModule.h"
+#include "HttpPath.h"
+#include "IHttpRouter.h"
+#include "HttpServerResponse.h"
+#include "Serialization/JsonSerializer.h"
+#include "Serialization/JsonReader.h"
+#include "Serialization/JsonWriter.h"
+#include "Misc/FileHelper.h"
+#include "Misc/Paths.h"
+#include "Interfaces/IPluginManager.h"
+#include "Async/Async.h"
+#include "HAL/PlatformFileManager.h"
+#include "AgentFrameworkSettings.h"
+#include "AgentFrameworkCoreModule.h"
+#include "Modules/ModuleManager.h"
+#include "Editor.h"
+#include "Containers/Ticker.h"
+
+#include "Animation/AgentFrameworkAnimationActions.h"
+#include "BehaviorTree/AgentFrameworkBehaviorTreeActions.h"
+#include "Blueprint/AgentFrameworkBlueprintActions.h"
+#include "Context/AgentFrameworkContextActions.h"
+#include "Context/AgentFrameworkDiscoveryActions.h"
+#include "Cpp/AgentFrameworkCppActions.h"
+#include "DataTable/AgentFrameworkDataTableActions.h"
+#include "Diagnostics/AgentFrameworkDiagnosticsActions.h"
+#include "GAS/AgentFrameworkGASActions.h"
+#include "Input/AgentFrameworkInputActions.h"
+#include "Level/AgentFrameworkLevelActions.h"
+#include "Material/AgentFrameworkMaterialActions.h"
+#include "Media/AgentFrameworkMediaActions.h"
+#include "Mesh/AgentFrameworkMeshActions.h"
+#include "PCG/AgentFrameworkPCGActions.h"
+#include "PIE/AgentFrameworkPIEActions.h"
+#include "Performance/AgentFrameworkPerformanceActions.h"
+#include "Python/AgentFrameworkPythonActions.h"
+#include "Niagara/AgentFrameworkNiagaraActions.h"
+#include "Sequencer/AgentFrameworkSequencerActions.h"
+#include "Settings/AgentFrameworkSettingsActions.h"
+#include "SourceControl/AgentFrameworkSourceControlActions.h"
+#include "Validation/AgentFrameworkValidationActions.h"
+#include "Viewport/AgentFrameworkViewportActions.h"
+#include "Widget/AgentFrameworkWidgetActions.h"
+#include "DataAsset/AgentFrameworkDataAssetActions.h"
+
+TSharedPtr<FAgentFrameworkActionRouter> FAgentFrameworkHttpServer::ActionRouter = nullptr;
+uint32 FAgentFrameworkHttpServer::Port = 18777;
+
+void FAgentFrameworkHttpServer::Start()
+{
+	ActionRouter = MakeShared<FAgentFrameworkActionRouter>();
+	RegisterAllExecutors(ActionRouter.ToSharedRef());
+
+	TSharedPtr<IHttpRouter> Router = FHttpServerModule::Get().GetHttpRouter(Port);
+	if (Router.IsValid())
+	{
+		Router->BindRoute(FHttpPath(TEXT("/api/tools")), EHttpServerRequestVerbs::VERB_GET, FHttpRequestHandler::CreateStatic(&FAgentFrameworkHttpServer::HandleListToolsRequest));
+		Router->BindRoute(FHttpPath(TEXT("/api/execute_tool")), EHttpServerRequestVerbs::VERB_POST, FHttpRequestHandler::CreateStatic(&FAgentFrameworkHttpServer::HandleExecuteToolRequest));
+		FHttpServerModule::Get().StartAllListeners();
+	}
+}
+
+void FAgentFrameworkHttpServer::Stop()
+{
+	if (ActionRouter.IsValid())
+	{
+		if (FModuleManager::Get().IsModuleLoaded("HTTPServer"))
+		{
+			FHttpServerModule::Get().StopAllListeners();
+		}
+		ActionRouter.Reset();
+	}
+}
+
+void FAgentFrameworkHttpServer::RegisterAllExecutors(TSharedRef<FAgentFrameworkActionRouter> InRouter)
+{
+	InRouter->RegisterExecutor(MakeShared<FAgentFrameworkAnimationActions>());
+	InRouter->RegisterExecutor(MakeShared<FAgentFrameworkBehaviorTreeActions>());
+	InRouter->RegisterExecutor(MakeShared<FAgentFrameworkBlueprintActions>());
+	InRouter->RegisterExecutor(MakeShared<FAgentFrameworkContextActions>());
+	InRouter->RegisterExecutor(MakeShared<FAgentFrameworkDiscoveryActions>());
+	InRouter->RegisterExecutor(MakeShared<FAgentFrameworkCppActions>());
+	InRouter->RegisterExecutor(MakeShared<FAgentFrameworkDataTableActions>());
+	InRouter->RegisterExecutor(MakeShared<FAgentFrameworkDiagnosticsActions>());
+	InRouter->RegisterExecutor(MakeShared<FAgentFrameworkGASActions>());
+	InRouter->RegisterExecutor(MakeShared<FAgentFrameworkInputActions>());
+	InRouter->RegisterExecutor(MakeShared<FAgentFrameworkLevelActions>());
+	InRouter->RegisterExecutor(MakeShared<FAgentFrameworkMaterialActions>());
+	InRouter->RegisterExecutor(MakeShared<FAgentFrameworkMediaActions>());
+	InRouter->RegisterExecutor(MakeShared<FAgentFrameworkMeshActions>());
+	InRouter->RegisterExecutor(MakeShared<FAgentFrameworkNiagaraActions>());
+	InRouter->RegisterExecutor(MakeShared<FAgentFrameworkPCGActions>());
+	InRouter->RegisterExecutor(MakeShared<FAgentFrameworkPIEActions>());
+	InRouter->RegisterExecutor(MakeShared<FAgentFrameworkPerformanceActions>());
+	InRouter->RegisterExecutor(MakeShared<FAgentFrameworkPythonActions>());
+	InRouter->RegisterExecutor(MakeShared<FAgentFrameworkSequencerActions>());
+	InRouter->RegisterExecutor(MakeShared<FAgentFrameworkSettingsActions>());
+	InRouter->RegisterExecutor(MakeShared<FAgentFrameworkSourceControlActions>());
+	InRouter->RegisterExecutor(MakeShared<FAgentFrameworkValidationActions>());
+	InRouter->RegisterExecutor(MakeShared<FAgentFrameworkViewportActions>());
+	InRouter->RegisterExecutor(MakeShared<FAgentFrameworkWidgetActions>());
+	InRouter->RegisterExecutor(MakeShared<FAgentFrameworkDataAssetActions>());
+}
+
+bool FAgentFrameworkHttpServer::HandleListToolsRequest(const FHttpServerRequest& Request, const FHttpResultCallback& OnComplete)
+{
+	TSharedPtr<IPlugin> Plugin = IPluginManager::Get().FindPlugin("AgentFramework");
+	if (!Plugin.IsValid())
+	{
+		OnComplete(FHttpServerResponse::Error(EHttpServerResponseCodes::ServerError));
+		return true;
+	}
+
+	FString SchemaDir = FPaths::Combine(Plugin->GetBaseDir(), TEXT("Resources"), TEXT("ToolSchemas"));
+
+	TArray<FString> Files;
+	IFileManager::Get().FindFiles(Files, *FPaths::Combine(SchemaDir, TEXT("*.json")), true, false);
+
+	TArray<TSharedPtr<FJsonValue>> ToolList;
+	for (const FString& File : Files)
+	{
+		FString FilePath = FPaths::Combine(SchemaDir, File);
+		FString JsonContent;
+		if (FFileHelper::LoadFileToString(JsonContent, *FilePath))
+		{
+			TSharedPtr<FJsonObject> JsonObj;
+			TSharedRef<TJsonReader<>> Reader = TJsonReaderFactory<>::Create(JsonContent);
+			if (FJsonSerializer::Deserialize(Reader, JsonObj) && JsonObj.IsValid())
+			{
+				const TArray<TSharedPtr<FJsonValue>>* InnerToolsArray = nullptr;
+				if (JsonObj->TryGetArrayField(TEXT("tools"), InnerToolsArray) && InnerToolsArray)
+				{
+					for (const TSharedPtr<FJsonValue>& ToolVal : *InnerToolsArray)
+					{
+						TSharedPtr<FJsonObject> ToolObj = ToolVal->AsObject();
+						if (ToolObj.IsValid())
+						{
+							const TSharedPtr<FJsonObject>* InputSchemaObj = nullptr;
+							if (ToolObj->TryGetObjectField(TEXT("input_schema"), InputSchemaObj) && InputSchemaObj)
+							{
+								TSharedPtr<FJsonObject> InputSchema = *InputSchemaObj;
+								ToolObj->RemoveField(TEXT("input_schema"));
+								ToolObj->SetObjectField(TEXT("inputSchema"), InputSchema);
+							}
+						}
+					}
+				}
+				ToolList.Add(MakeShared<FJsonValueObject>(JsonObj));
+			}
+		}
+	}
+
+	TSharedPtr<FJsonObject> ResponseObj = MakeShared<FJsonObject>();
+	ResponseObj->SetArrayField(TEXT("tools"), ToolList);
+
+	FString ResponseString;
+	TSharedRef<TJsonWriter<>> Writer = TJsonWriterFactory<>::Create(&ResponseString);
+	FJsonSerializer::Serialize(ResponseObj.ToSharedRef(), Writer);
+
+	TUniquePtr<FHttpServerResponse> Response = FHttpServerResponse::Create(ResponseString, TEXT("application/json"));
+	OnComplete(MoveTemp(Response));
+	return true;
+}
+
+namespace
+{
+	struct FStartPIEWaiter : public TSharedFromThis<FStartPIEWaiter>
+	{
+		FHttpResultCallback OnComplete;
+		FAgentFrameworkActionResult Result;
+		FDelegateHandle PostPIEStartedHandle;
+		FTSTicker::FDelegateHandle TimeoutTickerHandle;
+
+		FStartPIEWaiter(const FHttpResultCallback& InOnComplete, const FAgentFrameworkActionResult& InResult)
+			: OnComplete(InOnComplete)
+			, Result(InResult)
+		{
+		}
+
+		~FStartPIEWaiter()
+		{
+			Cleanup();
+		}
+
+		void Cleanup()
+		{
+			if (PostPIEStartedHandle.IsValid())
+			{
+				FEditorDelegates::PostPIEStarted.Remove(PostPIEStartedHandle);
+				PostPIEStartedHandle.Reset();
+			}
+			if (TimeoutTickerHandle.IsValid())
+			{
+				FTSTicker::GetCoreTicker().RemoveTicker(TimeoutTickerHandle);
+				TimeoutTickerHandle.Reset();
+			}
+		}
+
+		void SendResponse()
+		{
+			Cleanup();
+
+			TSharedPtr<FJsonObject> ResultObj = MakeShared<FJsonObject>();
+			ResultObj->SetBoolField(TEXT("bSuccess"), Result.bSuccess);
+			ResultObj->SetStringField(TEXT("ResultMessage"), Result.ResultMessage);
+
+			TArray<TSharedPtr<FJsonValue>> ErrorsArr;
+			for (const FString& Error : Result.Errors) ErrorsArr.Add(MakeShared<FJsonValueString>(Error));
+			ResultObj->SetArrayField(TEXT("Errors"), ErrorsArr);
+
+			TArray<TSharedPtr<FJsonValue>> WarningsArr;
+			for (const FString& Warning : Result.Warnings) WarningsArr.Add(MakeShared<FJsonValueString>(Warning));
+			ResultObj->SetArrayField(TEXT("Warnings"), WarningsArr);
+
+			FString ResponseString;
+			TSharedRef<TJsonWriter<>> Writer = TJsonWriterFactory<>::Create(&ResponseString);
+			FJsonSerializer::Serialize(ResultObj.ToSharedRef(), Writer);
+
+			TUniquePtr<FHttpServerResponse> Response = FHttpServerResponse::Create(ResponseString, TEXT("application/json"));
+			OnComplete(MoveTemp(Response));
+		}
+	};
+}
+
+bool FAgentFrameworkHttpServer::HandleExecuteToolRequest(const FHttpServerRequest& Request, const FHttpResultCallback& OnComplete)
+{
+	FString BodyString;
+	if (Request.Body.Num() > 0)
+	{
+		FUTF8ToTCHAR TCharData(reinterpret_cast<const ANSICHAR*>(Request.Body.GetData()), Request.Body.Num());
+		BodyString = FString(TCharData.Length(), TCharData.Get());
+	}
+
+	TSharedPtr<FJsonObject> RequestObj;
+	TSharedRef<TJsonReader<>> Reader = TJsonReaderFactory<>::Create(BodyString);
+	if (!FJsonSerializer::Deserialize(Reader, RequestObj) || !RequestObj.IsValid())
+	{
+		OnComplete(FHttpServerResponse::Error(EHttpServerResponseCodes::BadRequest));
+		return true;
+	}
+
+	FAgentFrameworkToolCall ToolCall;
+	ToolCall.ToolCallId = FGuid::NewGuid().ToString();
+	if (!RequestObj->TryGetStringField(TEXT("name"), ToolCall.ToolName) || ToolCall.ToolName.IsEmpty())
+	{
+		OnComplete(FHttpServerResponse::Error(EHttpServerResponseCodes::BadRequest));
+		return true;
+	}
+
+	const TSharedPtr<FJsonObject>* ArgumentsObj = nullptr;
+	if (RequestObj->TryGetObjectField(TEXT("arguments"), ArgumentsObj) && ArgumentsObj)
+	{
+		ToolCall.InputParams = *ArgumentsObj;
+	}
+	else
+	{
+		ToolCall.InputParams = MakeShared<FJsonObject>();
+	}
+
+	AsyncTask(ENamedThreads::GameThread, [ToolCall, OnComplete]() {
+		FAgentFrameworkActionResult Result;
+		if (ActionRouter.IsValid())
+		{
+			Result = ActionRouter->RouteToolCall(ToolCall);
+		}
+		else
+		{
+			Result.bSuccess = false;
+			Result.ResultMessage = TEXT("Action Router not available");
+		}
+
+		// Intercept start_pie_session to wait for it to actually start
+		if (ToolCall.ToolName == TEXT("start_pie_session") && Result.bSuccess)
+		{
+			if (GEditor && !GEditor->IsPlaySessionInProgress())
+			{
+				TSharedRef<FStartPIEWaiter> Waiter = MakeShared<FStartPIEWaiter>(OnComplete, Result);
+
+				Waiter->PostPIEStartedHandle = FEditorDelegates::PostPIEStarted.AddLambda([Waiter](bool bIsSimulating)
+				{
+					Waiter->Result.bSuccess = true;
+					Waiter->Result.ResultMessage = TEXT("PIE session started successfully.");
+					Waiter->SendResponse();
+				});
+
+				double StartTime = FPlatformTime::Seconds();
+				Waiter->TimeoutTickerHandle = FTSTicker::GetCoreTicker().AddTicker(FTickerDelegate::CreateLambda([Waiter, StartTime](float DeltaTime) -> bool
+				{
+					if (FPlatformTime::Seconds() - StartTime > 10.0)
+					{
+						Waiter->Result.bSuccess = false;
+						Waiter->Result.Errors.Add(TEXT("Timed out waiting for PIE session to start (10s)."));
+						Waiter->SendResponse();
+						return false;
+					}
+					return true;
+				}));
+
+				return; // Defer response
+			}
+		}
+
+		TSharedPtr<FJsonObject> ResultObj = MakeShared<FJsonObject>();
+		ResultObj->SetBoolField(TEXT("bSuccess"), Result.bSuccess);
+		ResultObj->SetStringField(TEXT("ResultMessage"), Result.ResultMessage);
+		
+		TArray<TSharedPtr<FJsonValue>> ErrorsArr;
+		for (const FString& Error : Result.Errors) ErrorsArr.Add(MakeShared<FJsonValueString>(Error));
+		ResultObj->SetArrayField(TEXT("Errors"), ErrorsArr);
+
+		TArray<TSharedPtr<FJsonValue>> WarningsArr;
+		for (const FString& Warning : Result.Warnings) WarningsArr.Add(MakeShared<FJsonValueString>(Warning));
+		ResultObj->SetArrayField(TEXT("Warnings"), WarningsArr);
+
+		FString ResponseString;
+		TSharedRef<TJsonWriter<>> Writer = TJsonWriterFactory<>::Create(&ResponseString);
+		FJsonSerializer::Serialize(ResultObj.ToSharedRef(), Writer);
+
+		TUniquePtr<FHttpServerResponse> Response = FHttpServerResponse::Create(ResponseString, TEXT("application/json"));
+		OnComplete(MoveTemp(Response));
+	});
+
+	return true;
+}
+
