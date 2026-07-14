@@ -93,7 +93,7 @@
 
 namespace
 {
-	FString ExpandAssetPath(const FString& InPath)
+	FString ExpandWidgetAssetPath(const FString& InPath)
 	{
 		if (InPath.IsEmpty()) return InPath;
 		if (InPath.StartsWith(TEXT("/Game/")) || InPath.StartsWith(TEXT("/Engine/")) || InPath.StartsWith(TEXT("/Script/")) || InPath.StartsWith(TEXT("/Temp/")))
@@ -107,7 +107,7 @@ namespace
 		return TEXT("/Game/") + InPath;
 	}
 
-	FString CompressAssetPath(const FString& InPath)
+	FString CompressWidgetAssetPath(const FString& InPath)
 	{
 		if (InPath.StartsWith(TEXT("/Game/")))
 		{
@@ -146,7 +146,7 @@ bool FAgentFrameworkWidgetActions::ValidateParams(const TSharedRef<FJsonObject>&
 	FString RawAssetPath;
 	if (Params->TryGetStringField(TEXT("asset_path"), RawAssetPath))
 	{
-		Params->SetStringField(TEXT("asset_path"), ExpandAssetPath(RawAssetPath));
+		Params->SetStringField(TEXT("asset_path"), ExpandWidgetAssetPath(RawAssetPath));
 	}
 
 	if (!Params->HasField(TEXT("asset_path")))

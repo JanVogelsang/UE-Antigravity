@@ -69,7 +69,7 @@ TMap<FString, int32> FAgentFrameworkBlueprintActions::AssetModificationCounts;
 
 namespace
 {
-	FString ExpandAssetPath(const FString& InPath)
+	FString ExpandBlueprintAssetPath(const FString& InPath)
 	{
 		if (InPath.IsEmpty()) return InPath;
 		if (InPath.StartsWith(TEXT("/Game/")) || InPath.StartsWith(TEXT("/Engine/")) || InPath.StartsWith(TEXT("/Script/")) || InPath.StartsWith(TEXT("/Temp/")))
@@ -83,7 +83,7 @@ namespace
 		return TEXT("/Game/") + InPath;
 	}
 
-	FString CompressAssetPath(const FString& InPath)
+	FString CompressBlueprintAssetPath(const FString& InPath)
 	{
 		if (InPath.StartsWith(TEXT("/Game/")))
 		{
@@ -220,13 +220,13 @@ bool FAgentFrameworkBlueprintActions::ValidateParams(const TSharedRef<FJsonObjec
 	FString AssetPath;
 	if (Params->TryGetStringField(TEXT("asset_path"), AssetPath))
 	{
-		Params->SetStringField(TEXT("asset_path"), ExpandAssetPath(AssetPath));
+		Params->SetStringField(TEXT("asset_path"), ExpandBlueprintAssetPath(AssetPath));
 	}
 
 	FString InputActionPath;
 	if (Params->TryGetStringField(TEXT("input_action"), InputActionPath))
 	{
-		Params->SetStringField(TEXT("input_action"), ExpandAssetPath(InputActionPath));
+		Params->SetStringField(TEXT("input_action"), ExpandBlueprintAssetPath(InputActionPath));
 	}
 
 	if (!Params->HasField(TEXT("asset_path")))
@@ -369,7 +369,7 @@ FAgentFrameworkActionResult FAgentFrameworkBlueprintActions::ExecuteAction(const
 		FString AssetPath;
 		if (Params->TryGetStringField(TEXT("asset_path"), AssetPath))
 		{
-			AssetPath = ExpandAssetPath(AssetPath);
+			AssetPath = ExpandBlueprintAssetPath(AssetPath);
 
 			// 1. In-memory Dirty Check (Smart Sentinel)
 			UPackage* Package = FindPackage(nullptr, *AssetPath);
@@ -700,7 +700,7 @@ FString FAgentFrameworkBlueprintActions::BuildBlueprintInfoJson(UBlueprint* Blue
 	TSharedPtr<FJsonObject> Root = MakeShared<FJsonObject>();
 
 	// Basic info
-	Root->SetStringField(TEXT("asset_path"), CompressAssetPath(Blueprint->GetPathName()));
+	Root->SetStringField(TEXT("asset_path"), CompressBlueprintAssetPath(Blueprint->GetPathName()));
 	Root->SetStringField(TEXT("parent_class"), Blueprint->ParentClass ? Blueprint->ParentClass->GetName() : TEXT("unknown"));
 
 	FString StatusStr = TEXT("unknown");
@@ -2324,7 +2324,7 @@ FAgentFrameworkActionResult FAgentFrameworkBlueprintActions::ExecuteGetBlueprint
 		Blueprint->GetOutermost()->IsDirty() ? 1 : 0);
 
 	TSharedPtr<FJsonObject> ResponseObj = MakeShared<FJsonObject>();
-	ResponseObj->SetStringField(TEXT("asset_path"), CompressAssetPath(Blueprint->GetPathName()));
+	ResponseObj->SetStringField(TEXT("asset_path"), CompressBlueprintAssetPath(Blueprint->GetPathName()));
 	ResponseObj->SetStringField(TEXT("client_hash"), CurrentHash);
 
 	if (!ClientHash.IsEmpty() && ClientHash.Equals(CurrentHash, ESearchCase::CaseSensitive))
@@ -4652,7 +4652,7 @@ FAgentFrameworkActionResult FAgentFrameworkBlueprintActions::ExecuteGetBlueprint
 FAgentFrameworkActionResult FAgentFrameworkBlueprintActions::ExecuteCheckAssetState(const TSharedRef<FJsonObject>& Params, FAgentFrameworkActionResult& Result)
 {
 	FString AssetPath = Params->GetStringField(TEXT("asset_path"));
-	AssetPath = ExpandAssetPath(AssetPath);
+	AssetPath = ExpandBlueprintAssetPath(AssetPath);
 
 	UPackage* Package = FindPackage(nullptr, *AssetPath);
 	bool bIsDirty = Package ? Package->IsDirty() : false;

@@ -1,3 +1,5 @@
 chromadb>=0.4.0
 onnxruntime>=1.14.0
 pypdf>=3.0.0
+libclang
+watchdog

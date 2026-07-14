@@ -56,10 +56,10 @@ if (Test-Path $SourceAgentsPath) {
 # 3. Select AI coding assistant
 Write-Host ""
 Write-Host "Which AI coding assistant do you want to configure?"
-Write-Host "  [0] AgentFramework 2.0 (default)"
+Write-Host "  [0] Antigravity 2.0 (default)"
 Write-Host "  [1] Kilo Code"
 Write-Host "  [2] Claude Code"
-$clientChoice = Read-Host "Select (press Enter for AgentFramework 2.0)"
+$clientChoice = Read-Host "Select (press Enter for Antigravity 2.0)"
 $useKiloCode = ($clientChoice -eq "1")
 $useClaudeCode = ($clientChoice -eq "2")
 
@@ -273,7 +273,7 @@ if ($useKiloCode) {
     Write-Host "  Claude rules       : $TargetClaudePath"
 
 } else {
-    # ── AgentFramework 2.0 (default) ────────────────────────────────────────────
+    # ── Antigravity 2.0 (default) ────────────────────────────────────────────
 
     $McpConfigContent = @"
 {
@@ -305,7 +305,7 @@ if ($useKiloCode) {
     Write-Host "Created/Updated mcp_config.json."
 
     Write-Host ""
-    Write-Host "Installation Complete (AgentFramework 2.0)."
+    Write-Host "Installation Complete (Antigravity 2.0)."
     Write-Host "  AgentFramework plugin : $AgentFrameworkPluginDir"
     Write-Host "  MCP config         : $PluginConfigPath"
 }

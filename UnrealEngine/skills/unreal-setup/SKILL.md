@@ -18,7 +18,7 @@ Before executing or implementing any setup steps, you must perform a diagnostic 
    Evaluate the current project state to identify what is already completed and what remains to be done:
    - **Check for LLVM/Clang**: Check if `libclang.dll` can be resolved in registry or standard paths (e.g., `C:\Program Files\LLVM\bin\libclang.dll`).
    - **Check for Git and Git LFS**: Verify that `.git` exists, and that `.gitattributes` tracks `*.uasset` and `*.umap` via Git LFS.
-   - **Check for AgentFramework plugin installation**: Check if the folder `.agents/plugins/UnrealEngine` exists.
+   - **Check for Antigravity plugin installation**: Check if the folder `.agents/plugins/UnrealEngine` exists.
    - **Check for compilation database**: Check if `compile_commands.json` exists in the game project directory.
    - **Check for environment skill**: Check if `.agents/plugins/UnrealEngine/skills/unreal-env/SKILL.md` exists.
    - **Check for C++ AST database cache**: Check if `ast_cache.db` exists in the external server directory and contains indexed symbol tables.
@@ -32,7 +32,7 @@ Before executing or implementing any setup steps, you must perform a diagnostic 
      - `[ ] Step 1: Verify LLVM/Clang installation`
      - `[ ] Step 1.5: Verify Git & Git LFS configuration`
      - `[ ] Step 2: Install Python dependencies (ChromaDB, ONNX runtime, PyPDF)`
-     - `[ ] Step 3: Install AgentFramework plugin dependencies (Run install.ps1)`
+     - `[ ] Step 3: Install Antigravity plugin dependencies (Run install.ps1)`
      - `[ ] Step 4: Generate compilation database (compile_commands.json)`
      - `[ ] Step 5: Generate/Refresh local environment skill (unreal-env)`
      - `[ ] Step 6: Verify C++ AST caching & Vector DB indexing`
@@ -93,7 +93,7 @@ Before executing or implementing any setup steps, you must perform a diagnostic 
    ```
 3. If the command fails, query the system registry or common installation directories to resolve the explicit path to `python.exe` and retry.
 
-### Step 3: Install AgentFramework Plugin Dependencies (Run install.ps1)
+### Step 3: Install Antigravity Plugin Dependencies (Run install.ps1)
 1. If `.agents/plugins/UnrealEngine` does not exist:
    - Run the installation script using default options by piping input:
      ```powershell
@@ -103,7 +103,7 @@ Before executing or implementing any setup steps, you must perform a diagnostic 
 
 ### Step 3.5: Verify Git Hooks Configuration
 1. Run `git config core.hooksPath` to check the current hooks path.
-2. If it is empty or not set to `.githooks`, configure it so the AgentFramework worktree hooks activate automatically:
+2. If it is empty or not set to `.githooks`, configure it so the Antigravity worktree hooks activate automatically:
    ```powershell
    git config core.hooksPath .githooks
    ```

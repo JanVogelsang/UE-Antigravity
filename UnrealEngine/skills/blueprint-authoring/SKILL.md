@@ -34,7 +34,7 @@ if widget_obj:
 ```
 Always follow this pattern instead of attempting complex reflection hacks.
 
-## Sub-Agent Workflow for Blueprint Authoring (AgentFramework 4-Layer Context)
+## Sub-Agent Workflow for Blueprint Authoring (Antigravity 4-Layer Context)
 
 When complex authoring is required, the Main Agent coordinates three specialized sub-agents:
 

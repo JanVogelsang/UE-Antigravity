@@ -109,7 +109,7 @@ def resolve_project_paths():
                 logger.info(f"Dynamically discovered game project directory: {base_dir}")
                 break
         
-        # If not found, check if we are inside the UE-AgentFramework repo and tau-game is next to it
+        # If not found, check if we are inside the UE-Antigravity/UE-AgentFramework repo and tau-game is next to it
         if not base_dir:
             sibling_dir = REPO_ROOT.parent / "tau-game"
             if sibling_dir.exists():
@@ -157,8 +157,14 @@ def check_and_install_dependencies():
         import subprocess
         logger.info(f"Missing python dependencies detected: {missing}. Installing...")
         try:
+            is_venv = sys.prefix != sys.base_prefix or hasattr(sys, 'real_prefix')
+            cmd = [sys.executable, "-m", "pip", "install"]
+            if not is_venv:
+                cmd.append("--user")
+            cmd.extend(missing)
+            
             subprocess.run(
-                [sys.executable, "-m", "pip", "install", "--user"] + missing,
+                cmd,
                 stdout=subprocess.DEVNULL,
                 stderr=subprocess.DEVNULL,
                 check=True

@@ -14,7 +14,7 @@ The bridge supports a **profile-based configuration** that automatically adapts 
 
 **Resolution order:**
 1. `BRIDGE_PROFILE` environment variable (highest priority)
-2. Auto-detection from MCP `clientInfo.name` (e.g., AgentFramework is detected automatically)
+2. Auto-detection from MCP `clientInfo.name` (e.g., Antigravity is detected automatically)
 3. `profiles/default.json` (fallback)
 
 #### Available Profiles
@@ -22,7 +22,7 @@ The bridge supports a **profile-based configuration** that automatically adapts 
 | Profile | Image Support | Tool Overrides | Use Case |
 |---|---|---|---|
 | `default` | No | None | Safe fallback for unknown clients |
-| `agentframework` | Yes | None | Auto-detected when using AgentFramework |
+| `antigravity` | Yes | None | Auto-detected when using Antigravity |
 | `deepseek-v4` | No | CoT triggers, strict schemas | DeepSeek V4 via Kilo Code |
 | `kimi-k2` | No | Bilingual CoT (EN/ZH) | Kimi K2.6 via Kilo Code |
 | `claude` | Yes | None | Claude via Kilo Code or Claude Desktop |
@@ -54,9 +54,9 @@ To add support for a new LLM, create a new JSON file in the `profiles/` director
 
 ## Supported Clients
 
-### AgentFramework (Auto-detected)
+### Antigravity (Auto-detected)
 
-No additional configuration is needed. The bridge automatically detects AgentFramework via the MCP `clientInfo` handshake and loads the `agentframework` profile.
+No additional configuration is needed. The bridge automatically detects Antigravity via the MCP `clientInfo` handshake and loads the `antigravity` profile.
 
 ### Kilo Code (JetBrains IDEs)
 
@@ -123,7 +123,7 @@ Run the installation script from the plugin directory:
 The script will:
 1. Ask for your target project root directory.
 2. Compile the bridge if needed.
-3. Copy the plugin files to `.agents/plugins/UnrealEngine/` for AgentFramework.
+3. Copy the plugin files to `.agents/plugins/UnrealEngine/` for Antigravity.
 4. Create a hardlink for the skill file in `.kilocode/rules/` for Kilo Code.
 5. Let you select an LLM profile and generate `kilo.jsonc`.
 

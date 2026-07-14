@@ -7,7 +7,7 @@ description: Standard Operating Procedures (SOPs) for testing game functionality
 This skill contains Standard Operating Procedures (SOPs) for testing game functionality in Unreal Engine. Following these SOPs ensures reliable testing with minimal token usage.
 
 ## SOP Design Principles for Minimal Token Usage
-To minimize AgentFramework quota and token consumption:
+To minimize Antigravity quota and token consumption:
 1. **Avoid Viewport Captures (`capture_viewport` / `capture_widget`)**: Analyzing images with multimodal prompts is extremely expensive. Do not capture images unless verifying UI visuals.
 2. **Prefer Keystroke Sequences (`simulate_input`)**: Navigate menus using keyboard/gamepad focus keys (e.g., `Tab`, `Arrow Keys`, `Enter`, `SpaceBar`, or Gamepad face buttons).
 3. **Use Direct Bindings or Actions**: If a screen binds an action to a key (like `IA_StartRound` bound to `Enter` or a gamepad button), trigger that key directly rather than navigating to and clicking the button.
@@ -127,7 +127,7 @@ Verify the performance of the game under high-entity counts by running a simulat
 - In-game graphics quality settings are at their target profile.
 
 ### Execution Workflow (Console Commands / Automation)
-This is the workflow for the AgentFramework agent to test performance, analyze results, and report bottlenecks:
+This is the workflow for the Antigravity agent to test performance, analyze results, and report bottlenecks:
 
 1. **(Optional) Configure Custom Benchmark Settings**:
    - By default, the benchmark spawns 800 entities and runs for 10 seconds. To configure custom settings, set the following console variables (CVars):
@@ -139,7 +139,7 @@ This is the workflow for the AgentFramework agent to test performance, analyze r
 3. **Run the Automation Test**:
    - Tool: `run_automation_tests` -> `test_filter`: `"Tau.Performance.Benchmark"`
 4. **Verify Test Success**:
-   - Ensure the test returns success. (Background throttling is automatically disabled by the AgentFramework core plugin on startup and during the trace).
+   - Ensure the test returns success. (Background throttling is automatically disabled by the Antigravity core plugin on startup and during the trace).
 5. **Agent Analysis & Optimization Recommendations**:
    - Run the custom Python analysis script to filter the data, calculate frame time spikes, analyze parallel CPU execution/concurrency, and produce a query index:
      - Tool: `run_command` -> `CommandLine`: `"python .agents/scripts/parse_benchmark.py"`
