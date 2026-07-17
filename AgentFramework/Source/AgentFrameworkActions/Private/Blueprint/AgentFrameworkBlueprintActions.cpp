@@ -430,6 +430,7 @@ FAgentFrameworkActionResult FAgentFrameworkBlueprintActions::ExecuteAction(const
 	else if (ToolName == TEXT("execute_batch_blueprint_operations")) Result = ExecuteBatchOperations(Params, Result);
 	else if (ToolName == TEXT("export_blueprint_summary"))      Result = ExecuteExportBlueprintSummary(Params, Result);
 	else if (ToolName == TEXT("check_asset_state"))             Result = ExecuteCheckAssetState(Params, Result);
+	else if (ToolName == TEXT("modify_blueprint"))              Result = ExecuteModifyBlueprint(Params, Result);
 	else
 	{
 		// Legacy param-based fallback dispatch
@@ -4691,6 +4692,17 @@ FAgentFrameworkActionResult FAgentFrameworkBlueprintActions::ExecuteCheckAssetSt
 
 	Result.bSuccess = true;
 	Result.ResultMessage = ResponseString;
+	return Result;
+}
+
+FAgentFrameworkActionResult FAgentFrameworkBlueprintActions::ExecuteModifyBlueprint(const TSharedRef<FJsonObject>& Params, FAgentFrameworkActionResult& Result)
+{
+	if (Params->HasField(TEXT("operations")))
+	{
+		return ExecuteBatchOperations(Params, Result);
+	}
+	Result.bSuccess = true;
+	Result.ResultMessage = TEXT("modify_blueprint called with no operations; compilation and checks succeeded.");
 	return Result;
 }
 

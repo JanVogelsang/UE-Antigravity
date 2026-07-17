@@ -135,7 +135,7 @@ Write-Host "Command: & '$RunUAT' BuildPlugin -plugin='$UpluginPath' -package='$P
 # We use Start-Process to run RunUAT in order to correctly stream the output and handle exit codes
 $ProcessParams = @{
     FilePath     = $RunUAT
-    ArgumentList = "BuildPlugin -plugin=`"$UpluginPath`" -package=`"$PackagedPluginDir`" -Rocket -NoMutex"
+    ArgumentList = "BuildPlugin -plugin=`"$UpluginPath`" -package=`"$PackagedPluginDir`" -Rocket -NoMutex -UBTArgs=`"-maxactions=4`""
     NoNewWindow  = $true
     Wait         = $true
     PassThru     = $true

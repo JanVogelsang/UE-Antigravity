@@ -88,6 +88,8 @@ private:
 	 */
 	FAgentFrameworkActionResult ExecuteGetPCGInfo(const TSharedRef<FJsonObject>& Params, FAgentFrameworkActionResult& Result);
 
+	FAgentFrameworkActionResult ExecuteWirePCGNodes(const TSharedRef<FJsonObject>& Params, FAgentFrameworkActionResult& Result);
+
 	/** Find an actor in the current editor world by name. */
 	static AActor* FindActorByName(const FString& ActorName);
 

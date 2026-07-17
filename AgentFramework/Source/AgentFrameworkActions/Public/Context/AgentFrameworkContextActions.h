@@ -27,4 +27,7 @@ public:
 
 private:
     FAgentFrameworkActionResult ExecuteSearchAssets(const TSharedRef<FJsonObject>& Params, FAgentFrameworkActionResult& Result);
+    FAgentFrameworkActionResult ExecuteListDirectory(const TSharedRef<FJsonObject>& Params, FAgentFrameworkActionResult& Result);
+    FAgentFrameworkActionResult ExecuteReadFileSnippet(const TSharedRef<FJsonObject>& Params, FAgentFrameworkActionResult& Result);
+    FAgentFrameworkActionResult ExecuteActivateSkill(const TSharedRef<FJsonObject>& Params, FAgentFrameworkActionResult& Result);
 };

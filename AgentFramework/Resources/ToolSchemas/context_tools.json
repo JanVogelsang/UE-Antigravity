@@ -70,6 +70,26 @@
           "file_path"
         ]
       }
+    },
+    {
+      "name": "activate_skill",
+      "description": "Activate one or more lazy-loaded skill categories by adding them to the project's active_skills.json configuration.",
+      "input_schema": {
+        "type": "object",
+        "properties": {
+          "skill_name": {
+            "type": "string",
+            "description": "Name of the skill category to activate (e.g. 'animation', 'gas', 'pcg')"
+          },
+          "skills": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "Alternative array of skill names to activate"
+          }
+        }
+      }
     }
   ]
 }

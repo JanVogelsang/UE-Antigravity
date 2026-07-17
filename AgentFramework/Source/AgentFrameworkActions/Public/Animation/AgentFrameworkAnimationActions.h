@@ -88,4 +88,13 @@ private:
 	 *   - asset_path (string, required): Content path of a USkeleton or an AnimBlueprint
 	 */
 	FAgentFrameworkActionResult ExecuteGetAnimInfo(const TSharedRef<FJsonObject>& Params, FAgentFrameworkActionResult& Result);
+
+	FAgentFrameworkActionResult ExecuteConfigureMotionMatching(const TSharedRef<FJsonObject>& Params, FAgentFrameworkActionResult& Result);
+	FAgentFrameworkActionResult ExecuteCreateIKRig(const TSharedRef<FJsonObject>& Params, FAgentFrameworkActionResult& Result);
+	FAgentFrameworkActionResult ExecuteCreateIKRetargeter(const TSharedRef<FJsonObject>& Params, FAgentFrameworkActionResult& Result);
+	FAgentFrameworkActionResult ExecuteCreateControlRig(const TSharedRef<FJsonObject>& Params, FAgentFrameworkActionResult& Result);
+	FAgentFrameworkActionResult ExecuteSetupMotionWarping(const TSharedRef<FJsonObject>& Params, FAgentFrameworkActionResult& Result);
+	FAgentFrameworkActionResult ExecuteCreateBlendSpace(const TSharedRef<FJsonObject>& Params, FAgentFrameworkActionResult& Result);
+	FAgentFrameworkActionResult ExecuteConfigureAnimMontage(const TSharedRef<FJsonObject>& Params, FAgentFrameworkActionResult& Result);
+	FAgentFrameworkActionResult ExecuteMapLiveLinkSource(const TSharedRef<FJsonObject>& Params, FAgentFrameworkActionResult& Result);
 };

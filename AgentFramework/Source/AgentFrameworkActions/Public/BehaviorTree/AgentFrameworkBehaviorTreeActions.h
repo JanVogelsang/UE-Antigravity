@@ -41,4 +41,11 @@ private:
 
 	/** Spawn a NavMeshBoundsVolume, scale to level, and trigger NavMesh rebuild. */
 	FAgentFrameworkActionResult ExecuteConfigureNavMesh(const TSharedRef<FJsonObject>& Params, FAgentFrameworkActionResult& Result);
+
+	FAgentFrameworkActionResult ExecuteCreateStateTree(const TSharedRef<FJsonObject>& Params, FAgentFrameworkActionResult& Result);
+	FAgentFrameworkActionResult ExecuteSetupMassSpawner(const TSharedRef<FJsonObject>& Params, FAgentFrameworkActionResult& Result);
+	FAgentFrameworkActionResult ExecuteConfigureMassTrait(const TSharedRef<FJsonObject>& Params, FAgentFrameworkActionResult& Result);
+	FAgentFrameworkActionResult ExecuteSetupMassCrowd(const TSharedRef<FJsonObject>& Params, FAgentFrameworkActionResult& Result);
+	FAgentFrameworkActionResult ExecuteQuerySmartObjects(const TSharedRef<FJsonObject>& Params, FAgentFrameworkActionResult& Result);
+	FAgentFrameworkActionResult ExecuteRunEQS(const TSharedRef<FJsonObject>& Params, FAgentFrameworkActionResult& Result);
 };

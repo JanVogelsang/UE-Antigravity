@@ -12,6 +12,8 @@
 #include "EngineUtils.h"
 #include "GameFramework/Actor.h"
 #include "Components/ActorComponent.h"
+#include "PCGGraph.h"
+#include "PCGNode.h"
 #endif
 
 // Asset management
@@ -46,7 +48,8 @@ TArray<FString> FAgentFrameworkPCGActions::GetSupportedToolNames() const
 		TEXT("attach_pcg_component"),
 		TEXT("set_pcg_parameter"),
 		TEXT("generate_pcg_local"),
-		TEXT("get_pcg_info")
+		TEXT("get_pcg_info"),
+		TEXT("wire_pcg_nodes")
 	};
 }
 
@@ -92,6 +95,14 @@ bool FAgentFrameworkPCGActions::ValidateParams(const TSharedRef<FJsonObject>& Pa
 		if (!Params->HasField(TEXT("actor_name")))
 		{
 			OutErrors.Add(TEXT("Missing required field for get_pcg_info: actor_name"));
+			return false;
+		}
+	}
+	else if (ToolName == TEXT("wire_pcg_nodes"))
+	{
+		if (!Params->HasField(TEXT("graph_path")) || !Params->HasField(TEXT("source_node")) || !Params->HasField(TEXT("source_pin")) || !Params->HasField(TEXT("target_node")) || !Params->HasField(TEXT("target_pin")))
+		{
+			OutErrors.Add(TEXT("Missing required fields for wire_pcg_nodes."));
 			return false;
 		}
 	}
@@ -175,9 +186,10 @@ FAgentFrameworkActionResult FAgentFrameworkPCGActions::ExecuteAction(const TShar
 	else if (ToolName == TEXT("set_pcg_parameter"))     Result = ExecuteSetPCGParameter(Params, Result);
 	else if (ToolName == TEXT("generate_pcg_local"))    Result = ExecuteGeneratePCGLocal(Params, Result);
 	else if (ToolName == TEXT("get_pcg_info"))          Result = ExecuteGetPCGInfo(Params, Result);
+	else if (ToolName == TEXT("wire_pcg_nodes"))        Result = ExecuteWirePCGNodes(Params, Result);
 	else
 	{
-		Result.Errors.Add(FString::Printf(TEXT("Unknown PCG tool: '%s'. Supported: create_pcg_graph, attach_pcg_component, set_pcg_parameter, generate_pcg_local, get_pcg_info"), *ToolName));
+		Result.Errors.Add(FString::Printf(TEXT("Unknown PCG tool: '%s'"), *ToolName));
 	}
 
 	if (Transaction.IsSet() && !Result.bSuccess)
@@ -526,5 +538,66 @@ FAgentFrameworkActionResult FAgentFrameworkPCGActions::ExecuteGetPCGInfo(const T
 
 	Result.bSuccess = true;
 	Result.ResultMessage = OutputStr;
+	return Result;
+}
+
+FAgentFrameworkActionResult FAgentFrameworkPCGActions::ExecuteWirePCGNodes(const TSharedRef<FJsonObject>& Params, FAgentFrameworkActionResult& Result)
+{
+	if (!CheckPCGAvailable(Result)) return Result;
+
+	FString GraphPath = Params->GetStringField(TEXT("graph_path"));
+	FString SourceNodeName = Params->GetStringField(TEXT("source_node"));
+	FString SourcePin = Params->GetStringField(TEXT("source_pin"));
+	FString TargetNodeName = Params->GetStringField(TEXT("target_node"));
+	FString TargetPin = Params->GetStringField(TEXT("target_pin"));
+
+	UPCGGraph* Graph = LoadObject<UPCGGraph>(nullptr, *GraphPath);
+	if (!Graph)
+	{
+		Result.Errors.Add(FString::Printf(TEXT("PCG Graph not found at '%s'."), *GraphPath));
+		return Result;
+	}
+
+	UPCGNode* SourceNode = nullptr;
+	UPCGNode* TargetNode = nullptr;
+
+	for (UPCGNode* Node : Graph->GetNodes())
+	{
+		if (Node)
+		{
+			if (Node->GetName() == SourceNodeName)
+			{
+				SourceNode = Node;
+			}
+			if (Node->GetName() == TargetNodeName)
+			{
+				TargetNode = Node;
+			}
+		}
+	}
+
+	if (!SourceNode || !TargetNode)
+	{
+		Result.Errors.Add(FString::Printf(TEXT("Source node '%s' or Target node '%s' not found in PCG Graph. Nodes must exist before wiring."), *SourceNodeName, *TargetNodeName));
+		return Result;
+	}
+
+	Graph->Modify();
+	Graph->AddEdge(SourceNode, FName(*SourcePin), TargetNode, FName(*TargetPin));
+
+	UPackage* Package = Graph->GetOutermost();
+	Package->MarkPackageDirty();
+	FString PackageFilename;
+	if (FPackageName::TryConvertLongPackageNameToFilename(Package->GetName(), PackageFilename, FPackageName::GetAssetPackageExtension()))
+	{
+		FSavePackageArgs SaveArgs;
+		SaveArgs.TopLevelFlags = RF_Standalone;
+		UPackage::SavePackage(Package, Graph, *PackageFilename, SaveArgs);
+	}
+
+	Result.bSuccess = true;
+	Result.ResultMessage = FString::Printf(TEXT("Successfully wired PCG node '%s' pin '%s' to node '%s' pin '%s' in graph '%s'."),
+		*SourceNodeName, *SourcePin, *TargetNodeName, *TargetPin, *GraphPath);
+	Result.ModifiedAssets.Add(GraphPath);
 	return Result;
 }

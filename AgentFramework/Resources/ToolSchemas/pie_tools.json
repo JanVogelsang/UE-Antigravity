@@ -49,6 +49,52 @@
         "properties": {},
         "required": []
       }
+    },
+    {
+      "name": "extract_ui_state",
+      "description": "Extract the hierarchy and properties of active Slate and UMG widgets in the editor viewport during PIE.",
+      "input_schema": {
+        "type": "object",
+        "properties": {
+          "widget_class_filter": {
+            "type": "string",
+            "description": "Optional class name filter, e.g. UUserWidget, SButton"
+          }
+        },
+        "required": []
+      }
+    },
+    {
+      "name": "trigger_ui_element",
+      "description": "Trigger an interaction (e.g. click, hover) on a Slate or UMG widget identified by its path or label.",
+      "input_schema": {
+        "type": "object",
+        "properties": {
+          "widget_name": {
+            "type": "string",
+            "description": "Label or path of the widget to trigger."
+          }
+        },
+        "required": ["widget_name"]
+      }
+    },
+    {
+      "name": "query_world_state",
+      "description": "Query the state and positions of all active actors in the PIE world.",
+      "input_schema": {
+        "type": "object",
+        "properties": {
+          "class_filter": {
+            "type": "string",
+            "description": "Optional class filter, e.g. ATauCharacter"
+          },
+          "max_results": {
+            "type": "integer",
+            "description": "Capped results (default: 50)"
+          }
+        },
+        "required": []
+      }
     }
   ]
 }

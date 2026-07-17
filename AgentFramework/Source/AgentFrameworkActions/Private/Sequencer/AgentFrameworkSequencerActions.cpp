@@ -45,7 +45,8 @@ TArray<FString> FAgentFrameworkSequencerActions::GetSupportedToolNames() const
 	return {
 		TEXT("create_level_sequence"),
 		TEXT("add_sequencer_track"),
-		TEXT("add_sequencer_keyframe")
+		TEXT("add_sequencer_keyframe"),
+		TEXT("configure_movie_render_job")
 	};
 }
 
@@ -69,8 +70,10 @@ FAgentFrameworkActionResult FAgentFrameworkSequencerActions::ExecuteAction(const
 		return ExecuteAddSequencerTrack(Params, Result);
 	else if (Action == TEXT("add_sequencer_keyframe"))
 		return ExecuteAddSequencerKeyframe(Params, Result);
+	else if (Action == TEXT("configure_movie_render_job"))
+		return ExecuteConfigureMovieRenderJob(Params, Result);
 
-	Result.Errors.Add(TEXT("Unknown Sequencer action. Use create_level_sequence, add_sequencer_track, or add_sequencer_keyframe."));
+	Result.Errors.Add(TEXT("Unknown Sequencer action."));
 	return Result;
 }
 
@@ -419,6 +422,72 @@ FAgentFrameworkActionResult FAgentFrameworkSequencerActions::ExecuteAddSequencer
 	Result.bSuccess = true;
 	Result.ModifiedAssets.Add(AssetPath);
 	Result.ResultMessage = Report;
+	return Result;
+}
+
+#include "MoviePipelineQueue.h"
+#include "MoviePipelinePrimaryConfig.h"
+#include "MoviePipelineOutputSetting.h"
+#include "UObject/SavePackage.h"
+#include "AssetRegistry/AssetRegistryModule.h"
+
+FAgentFrameworkActionResult FAgentFrameworkSequencerActions::ExecuteConfigureMovieRenderJob(const TSharedRef<FJsonObject>& Params, FAgentFrameworkActionResult& Result)
+{
+	FString QueuePath = Params->GetStringField(TEXT("queue_path"));
+	FString MapPath = Params->GetStringField(TEXT("map_path"));
+	FString SequencePath = Params->GetStringField(TEXT("sequence_path"));
+	FString OutputDir = Params->GetStringField(TEXT("output_dir"));
+
+	UMoviePipelineQueue* Queue = LoadObject<UMoviePipelineQueue>(nullptr, *QueuePath);
+	if (!Queue)
+	{
+		FString PackagePath = FPackageName::GetLongPackagePath(QueuePath);
+		FString AssetName = FPackageName::GetShortName(QueuePath);
+		IAssetTools& AssetTools = FModuleManager::LoadModuleChecked<FAssetToolsModule>("AssetTools").Get();
+		Queue = Cast<UMoviePipelineQueue>(AssetTools.CreateAsset(AssetName, PackagePath, UMoviePipelineQueue::StaticClass(), nullptr));
+	}
+
+	if (!Queue)
+	{
+		Result.Errors.Add(FString::Printf(TEXT("Failed to load or create MoviePipelineQueue at '%s'."), *QueuePath));
+		return Result;
+	}
+
+	Queue->Modify();
+	UMoviePipelineExecutorJob* NewJob = Queue->AllocateNewJob(UMoviePipelineExecutorJob::StaticClass());
+	if (NewJob)
+	{
+		NewJob->Map = FSoftObjectPath(MapPath);
+		NewJob->Sequence = FSoftObjectPath(SequencePath);
+		NewJob->JobName = TEXT("AgentFrameworkRenderJob");
+
+		UMoviePipelinePrimaryConfig* MasterConfig = NewJob->GetConfiguration();
+		if (MasterConfig)
+		{
+			UMoviePipelineOutputSetting* OutputSetting = Cast<UMoviePipelineOutputSetting>(
+				MasterConfig->FindOrAddSettingByClass(UMoviePipelineOutputSetting::StaticClass()));
+			if (OutputSetting)
+			{
+				OutputSetting->OutputDirectory.Path = OutputDir;
+				OutputSetting->FileNameFormat = TEXT("{sequence_name}_{frame_number}");
+			}
+		}
+	}
+
+	UPackage* Package = Queue->GetOutermost();
+	Package->MarkPackageDirty();
+	FString PackageFilename;
+	if (FPackageName::TryConvertLongPackageNameToFilename(Package->GetName(), PackageFilename, FPackageName::GetAssetPackageExtension()))
+	{
+		FSavePackageArgs SaveArgs;
+		SaveArgs.TopLevelFlags = RF_Standalone;
+		UPackage::SavePackage(Package, Queue, *PackageFilename, SaveArgs);
+	}
+	FAssetRegistryModule::AssetCreated(Queue);
+
+	Result.bSuccess = true;
+	Result.ResultMessage = FString::Printf(TEXT("Configured Movie Render Job in queue '%s'."), *QueuePath);
+	Result.ModifiedAssets.Add(QueuePath);
 	return Result;
 }
 

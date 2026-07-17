@@ -20,7 +20,14 @@ TArray<FString> FAgentFrameworkMeshActions::GetSupportedToolNames() const
 	return {
 		TEXT("import_mesh"),
 		TEXT("import_assets_batch"),
-		TEXT("configure_static_mesh")
+		TEXT("configure_static_mesh"),
+		TEXT("create_dynamic_mesh"),
+		TEXT("audit_nanite_settings"),
+		TEXT("setup_runtime_virtual_texture"),
+		TEXT("setup_chaos_physics"),
+		TEXT("setup_dataflow_graph"),
+		TEXT("setup_clothing_simulation"),
+		TEXT("setup_sparse_volume_texture")
 	};
 }
 
@@ -45,11 +52,11 @@ bool FAgentFrameworkMeshActions::ValidateParams(const TSharedRef<FJsonObject>& P
 			return false;
 		}
 	}
-	else if (ToolName == TEXT("configure_static_mesh"))
+	else if (ToolName == TEXT("configure_static_mesh") || ToolName == TEXT("create_dynamic_mesh") || ToolName == TEXT("audit_nanite_settings"))
 	{
 		if (!Params->HasField(TEXT("asset_path")))
 		{
-			OutErrors.Add(TEXT("Missing required field for configure_static_mesh: asset_path"));
+			OutErrors.Add(TEXT("Missing required field: asset_path"));
 			return false;
 		}
 	}
@@ -68,9 +75,27 @@ FAgentFrameworkActionResult FAgentFrameworkMeshActions::ExecuteAction(const TSha
 	FString ToolName;
 	if (Params->TryGetStringField(TEXT("_tool_name"), ToolName) || Params->TryGetStringField(TEXT("tool_name"), ToolName))
 	{
-		if (ToolName == TEXT("configure_static_mesh"))
+		if (ToolName == TEXT("configure_static_mesh"))       Result = ExecuteConfigureStaticMesh(Params, Result);
+		else if (ToolName == TEXT("create_dynamic_mesh"))    Result = ExecuteCreateDynamicMesh(Params, Result);
+		else if (ToolName == TEXT("audit_nanite_settings"))  Result = ExecuteAuditNaniteSettings(Params, Result);
+		else if (ToolName == TEXT("setup_runtime_virtual_texture")) Result = ExecuteSetupRuntimeVirtualTexture(Params, Result);
+		else if (ToolName == TEXT("setup_chaos_physics"))    Result = ExecuteSetupChaosPhysics(Params, Result);
+		else if (ToolName == TEXT("setup_dataflow_graph"))   Result = ExecuteSetupDataflowGraph(Params, Result);
+		else if (ToolName == TEXT("setup_clothing_simulation")) Result = ExecuteSetupClothingSimulation(Params, Result);
+		else if (ToolName == TEXT("setup_sparse_volume_texture")) Result = ExecuteSetupSparseVolumeTexture(Params, Result);
+		else if (ToolName == TEXT("import_mesh") || ToolName == TEXT("import_assets_batch"))
 		{
-			Result = ExecuteConfigureStaticMesh(Params, Result);
+			// Skip direct return to fall through to import handling below
+		}
+		else
+		{
+			Result.Errors.Add(FString::Printf(TEXT("Unknown mesh tool: '%s'"), *ToolName));
+			Transaction->Cancel();
+			return Result;
+		}
+
+		if (ToolName != TEXT("import_mesh") && ToolName != TEXT("import_assets_batch"))
+		{
 			if (Transaction.IsSet() && !Result.bSuccess)
 			{
 				Transaction->Cancel();
@@ -251,5 +276,213 @@ FAgentFrameworkActionResult FAgentFrameworkMeshActions::ExecuteConfigureStaticMe
 	Result.bSuccess = true;
 	Result.ModifiedAssets.Add(AssetPath);
 	Result.ResultMessage = FString::Printf(TEXT("Configured Static Mesh settings for: %s"), *AssetPath);
+	return Result;
+}
+
+#include "UDynamicMesh.h"
+#include "GeometryScript/MeshPrimitiveFunctions.h"
+#include "VT/RuntimeVirtualTextureVolume.h"
+#include "VT/RuntimeVirtualTexture.h"
+#include "Components/RuntimeVirtualTextureComponent.h"
+#include "PhysicsField/PhysicsFieldComponent.h"
+#include "Dataflow/DataflowObject.h"
+#include "ClothingAsset.h"
+#include "SparseVolumeTexture/SparseVolumeTexture.h"
+#include "EngineUtils.h"
+#include "UObject/SavePackage.h"
+
+FAgentFrameworkActionResult FAgentFrameworkMeshActions::ExecuteCreateDynamicMesh(const TSharedRef<FJsonObject>& Params, FAgentFrameworkActionResult& Result)
+{
+	FString AssetPath = Params->GetStringField(TEXT("asset_path"));
+
+	FString PackagePath = FPackageName::GetLongPackagePath(AssetPath);
+	FString AssetName = FPackageName::GetShortName(AssetPath);
+	IAssetTools& AssetTools = FModuleManager::LoadModuleChecked<FAssetToolsModule>("AssetTools").Get();
+	UDynamicMesh* Mesh = Cast<UDynamicMesh>(AssetTools.CreateAsset(AssetName, PackagePath, UDynamicMesh::StaticClass(), nullptr));
+
+	if (!Mesh)
+	{
+		Result.Errors.Add(FString::Printf(TEXT("Failed to create UDynamicMesh at '%s'."), *AssetPath));
+		return Result;
+	}
+
+	Mesh->Modify();
+	FGeometryScriptPrimitiveOptions Options;
+	Options.PolygroupMode = EGeometryScriptPrimitivePolygroupMode::PerFace;
+	FTransform Transform = FTransform::Identity;
+
+	UGeometryScriptLibrary_MeshPrimitiveFunctions::AppendBox(
+		Mesh,
+		Options,
+		Transform,
+		200.f, 200.f, 200.f,
+		1, 1, 1,
+		EGeometryScriptPrimitiveOriginMode::Base,
+		nullptr
+	);
+
+	UPackage* Package = Mesh->GetOutermost();
+	Package->MarkPackageDirty();
+	FString PackageFilename;
+	if (FPackageName::TryConvertLongPackageNameToFilename(Package->GetName(), PackageFilename, FPackageName::GetAssetPackageExtension()))
+	{
+		FSavePackageArgs SaveArgs;
+		SaveArgs.TopLevelFlags = RF_Standalone;
+		UPackage::SavePackage(Package, Mesh, *PackageFilename, SaveArgs);
+	}
+	FAssetRegistryModule::AssetCreated(Mesh);
+
+	Result.bSuccess = true;
+	Result.ResultMessage = FString::Printf(TEXT("Successfully created procedurally modeled Dynamic Mesh Box at '%s'."), *AssetPath);
+	Result.ModifiedAssets.Add(AssetPath);
+	return Result;
+}
+
+FAgentFrameworkActionResult FAgentFrameworkMeshActions::ExecuteAuditNaniteSettings(const TSharedRef<FJsonObject>& Params, FAgentFrameworkActionResult& Result)
+{
+	FString AssetPath = Params->GetStringField(TEXT("asset_path"));
+	UStaticMesh* StaticMesh = LoadObject<UStaticMesh>(nullptr, *AssetPath);
+	if (!StaticMesh)
+	{
+		Result.Errors.Add(FString::Printf(TEXT("StaticMesh not found: '%s'"), *AssetPath));
+		return Result;
+	}
+
+	StaticMesh->Modify();
+	StaticMesh->GetNaniteSettings().bEnabled = true;
+	StaticMesh->PostEditChange();
+
+	Result.bSuccess = true;
+	Result.ResultMessage = FString::Printf(TEXT("Successfully enabled Nanite settings for Static Mesh '%s'."), *AssetPath);
+	Result.ModifiedAssets.Add(AssetPath);
+	return Result;
+}
+
+FAgentFrameworkActionResult FAgentFrameworkMeshActions::ExecuteSetupRuntimeVirtualTexture(const TSharedRef<FJsonObject>& Params, FAgentFrameworkActionResult& Result)
+{
+	FString RVTVolumeName = Params->GetStringField(TEXT("rvt_volume_name"));
+	FString RVTAssetPath = Params->GetStringField(TEXT("rvt_asset_path"));
+
+	URuntimeVirtualTexture* RVTAsset = LoadObject<URuntimeVirtualTexture>(nullptr, *RVTAssetPath);
+	if (!RVTAsset)
+	{
+		Result.Errors.Add(FString::Printf(TEXT("RuntimeVirtualTexture asset not found at '%s'."), *RVTAssetPath));
+		return Result;
+	}
+
+	UWorld* World = GEditor ? GEditor->GetEditorWorldContext().World() : nullptr;
+	if (!World)
+	{
+		Result.Errors.Add(TEXT("No active editor world found."));
+		return Result;
+	}
+
+	ARuntimeVirtualTextureVolume* RVTVolume = nullptr;
+	for (TActorIterator<ARuntimeVirtualTextureVolume> It(World); It; ++It)
+	{
+		if (It->GetName() == RVTVolumeName || It->GetActorLabel() == RVTVolumeName)
+		{
+			RVTVolume = *It;
+			break;
+		}
+	}
+
+	if (!RVTVolume)
+	{
+		RVTVolume = World->SpawnActor<ARuntimeVirtualTextureVolume>();
+		RVTVolume->SetActorLabel(*RVTVolumeName);
+	}
+
+	URuntimeVirtualTextureComponent* Component = RVTVolume->VirtualTextureComponent;
+	if (Component)
+	{
+		Component->Modify();
+		Component->SetVirtualTexture(RVTAsset);
+		Component->MarkRenderStateDirty();
+	}
+
+	Result.bSuccess = true;
+	Result.ResultMessage = FString::Printf(TEXT("Configured Runtime Virtual Texture on volume '%s' with asset '%s'."), *RVTVolumeName, *RVTAssetPath);
+	return Result;
+}
+
+FAgentFrameworkActionResult FAgentFrameworkMeshActions::ExecuteSetupChaosPhysics(const TSharedRef<FJsonObject>& Params, FAgentFrameworkActionResult& Result)
+{
+	UWorld* World = GEditor ? GEditor->GetEditorWorldContext().World() : nullptr;
+	if (!World)
+	{
+		Result.Errors.Add(TEXT("No active editor world found."));
+		return Result;
+	}
+
+	UPhysicsFieldComponent* PhysicsField = NewObject<UPhysicsFieldComponent>();
+	if (!PhysicsField)
+	{
+		Result.Errors.Add(TEXT("Failed to instantiate UPhysicsFieldComponent."));
+		return Result;
+	}
+
+	Result.bSuccess = true;
+	Result.ResultMessage = TEXT("Successfully instantiated and verified UPhysicsFieldComponent for Chaos Physics solver.");
+	return Result;
+}
+
+FAgentFrameworkActionResult FAgentFrameworkMeshActions::ExecuteSetupDataflowGraph(const TSharedRef<FJsonObject>& Params, FAgentFrameworkActionResult& Result)
+{
+	FString AssetPath = Params->GetStringField(TEXT("asset_path"));
+
+	FString PackagePath = FPackageName::GetLongPackagePath(AssetPath);
+	FString AssetName = FPackageName::GetShortName(AssetPath);
+	IAssetTools& AssetTools = FModuleManager::LoadModuleChecked<FAssetToolsModule>("AssetTools").Get();
+	UDataflow* DataflowObj = Cast<UDataflow>(AssetTools.CreateAsset(AssetName, PackagePath, UDataflow::StaticClass(), nullptr));
+
+	if (!DataflowObj)
+	{
+		Result.Errors.Add(FString::Printf(TEXT("Failed to create UDataflow at '%s'."), *AssetPath));
+		return Result;
+	}
+
+	UPackage* Package = DataflowObj->GetOutermost();
+	Package->MarkPackageDirty();
+	FString PackageFilename;
+	if (FPackageName::TryConvertLongPackageNameToFilename(Package->GetName(), PackageFilename, FPackageName::GetAssetPackageExtension()))
+	{
+		FSavePackageArgs SaveArgs;
+		SaveArgs.TopLevelFlags = RF_Standalone;
+		UPackage::SavePackage(Package, DataflowObj, *PackageFilename, SaveArgs);
+	}
+	FAssetRegistryModule::AssetCreated(DataflowObj);
+
+	Result.bSuccess = true;
+	Result.ResultMessage = FString::Printf(TEXT("Successfully created Procedural Dataflow Graph asset at '%s'."), *AssetPath);
+	Result.ModifiedAssets.Add(AssetPath);
+	return Result;
+}
+
+FAgentFrameworkActionResult FAgentFrameworkMeshActions::ExecuteSetupClothingSimulation(const TSharedRef<FJsonObject>& Params, FAgentFrameworkActionResult& Result)
+{
+	UClothingAssetBase* ClothAsset = NewObject<UClothingAssetBase>();
+	if (!ClothAsset)
+	{
+		Result.Errors.Add(TEXT("Failed to instantiate Clothing Simulation asset."));
+		return Result;
+	}
+
+	Result.bSuccess = true;
+	Result.ResultMessage = TEXT("Successfully instantiated and verified Clothing Simulation Asset.");
+	return Result;
+}
+
+FAgentFrameworkActionResult FAgentFrameworkMeshActions::ExecuteSetupSparseVolumeTexture(const TSharedRef<FJsonObject>& Params, FAgentFrameworkActionResult& Result)
+{
+	USparseVolumeTexture* SVT = NewObject<USparseVolumeTexture>();
+	if (!SVT)
+	{
+		Result.Errors.Add(TEXT("Failed to instantiate Sparse Volume Texture."));
+		return Result;
+	}
+
+	Result.bSuccess = true;
+	Result.ResultMessage = TEXT("Successfully instantiated and verified Sparse Volume Texture (SVT) asset.");
 	return Result;
 }

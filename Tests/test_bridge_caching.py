@@ -34,13 +34,15 @@ def setup_cache_backup():
 def test_bridge_caching_and_fallback():
     # 1. Start the bridge process
     cmd = [sys.executable, "-u", str(PROJECT_ROOT / "UnrealEngine" / "bridge" / "main.py")]
+    env = {**os.environ, "BRIDGE_HTTP_PORT": "18778"}
     proc = subprocess.Popen(
         cmd,
         stdin=subprocess.PIPE,
         stdout=subprocess.PIPE,
         stderr=subprocess.PIPE,
         text=True,
-        bufsize=1
+        bufsize=1,
+        env=env
     )
     
     try:
@@ -84,7 +86,14 @@ def test_bridge_caching_and_fallback():
         proc.stdin.flush()
         
         line = proc.stdout.readline()
-        assert line, "No response to tools/list"
+        if not line:
+            # Terminate and read stderr to see what went wrong
+            proc.terminate()
+            try:
+                stderr_output = proc.stderr.read()
+            except Exception as e:
+                stderr_output = f"Could not read stderr: {e}"
+            assert line, f"No response to tools/list. Stderr: {stderr_output}"
         list_resp = json.loads(line)
         assert list_resp.get("id") == 2
         tools = list_resp.get("result", {}).get("tools", [])

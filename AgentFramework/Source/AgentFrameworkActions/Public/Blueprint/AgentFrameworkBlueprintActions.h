@@ -72,6 +72,8 @@ private:
 
 	FAgentFrameworkActionResult ExecuteCheckAssetState(const TSharedRef<FJsonObject>& Params, FAgentFrameworkActionResult& Result);
 
+	FAgentFrameworkActionResult ExecuteModifyBlueprint(const TSharedRef<FJsonObject>& Params, FAgentFrameworkActionResult& Result);
+
 	// =========================================================================
 	// Helpers / Utilities
 	// =========================================================================

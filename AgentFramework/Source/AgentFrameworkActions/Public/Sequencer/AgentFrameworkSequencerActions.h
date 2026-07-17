@@ -36,4 +36,6 @@ private:
 
 	/** Add a keyframe to a track property at a specific time. */
 	FAgentFrameworkActionResult ExecuteAddSequencerKeyframe(const TSharedRef<FJsonObject>& Params, FAgentFrameworkActionResult& Result);
+
+	FAgentFrameworkActionResult ExecuteConfigureMovieRenderJob(const TSharedRef<FJsonObject>& Params, FAgentFrameworkActionResult& Result);
 };

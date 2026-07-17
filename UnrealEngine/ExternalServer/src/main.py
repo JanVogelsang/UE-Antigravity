@@ -56,7 +56,12 @@ def find_unreal_engine_dir() -> Optional[Path]:
     Attempts to discover the Unreal Engine installation directory dynamically using the Windows Registry.
     """
     for hive in (winreg.HKEY_LOCAL_MACHINE, winreg.HKEY_CURRENT_USER):
-        for subkey in (r"SOFTWARE\EpicGames\Unreal Engine", r"SOFTWARE\Epic Games\Unreal Engine\Builds"):
+        for subkey in (
+            r"SOFTWARE\EpicGames\Unreal Engine",
+            r"SOFTWARE\Epic Games\Unreal Engine",
+            r"SOFTWARE\EpicGames\Unreal Engine\Builds",
+            r"SOFTWARE\Epic Games\Unreal Engine\Builds"
+        ):
             try:
                 with winreg.OpenKey(hive, subkey) as key:
                     if "Builds" in subkey:
@@ -72,16 +77,28 @@ def find_unreal_engine_dir() -> Optional[Path]:
                     else:
                         i = 0
                         while True:
-                            ver_name = winreg.EnumKey(key, i)
-                            with winreg.OpenKey(key, ver_name) as ver_key:
-                                ue_dir, _ = winreg.QueryValueEx(ver_key, "InstalledDirectory")
-                                if ue_dir and os.path.exists(ue_dir):
-                                    return Path(ue_dir)
+                            try:
+                                ver_name = winreg.EnumKey(key, i)
+                            except WindowsError:
+                                break
+                            try:
+                                with winreg.OpenKey(key, ver_name) as ver_key:
+                                    ue_dir, _ = winreg.QueryValueEx(ver_key, "InstalledDirectory")
+                                    if ue_dir and os.path.exists(ue_dir):
+                                        return Path(ue_dir)
+                            except WindowsError:
+                                pass
                             i += 1
             except WindowsError:
                 pass
     # Hardcoded fallbacks
-    for p in [Path(r"D:\UE_5.7"), Path(r"C:\Program Files\Epic Games\UE_5.7"), Path(r"C:\Program Files\Epic Games\UE_5.6")]:
+    for p in [
+        Path(r"C:\Program Files\Epic Games\UE_5.8"),
+        Path(r"D:\UE_5.8"),
+        Path(r"D:\UE_5.7"),
+        Path(r"C:\Program Files\Epic Games\UE_5.7"),
+        Path(r"C:\Program Files\Epic Games\UE_5.6")
+    ]:
         if p.exists():
             return p
     return None

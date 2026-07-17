@@ -3,7 +3,7 @@
 	"Version": 1,
 	"VersionName": "1.1.0",
 	"FriendlyName": "AgentFramework",
-	"Description": "Production-grade AI-driven editor plugin that uses Antigravity 2.0, Claude Code, and Kilo Code to autonomously create, modify, and manage entire Unreal Engine game projects.",
+	"Description": "Production-grade AI-driven editor plugin that uses Antigravity 2.0, Claude Code, Kilo Code, and OpenAI Codex to autonomously create, modify, and manage entire Unreal Engine game projects.",
 	"Category": "Editor",
 	"CreatedBy": "AgentFramework",
 	"CreatedByURL": "",
@@ -41,6 +41,114 @@
 		},
 		{
 			"Name": "Niagara",
+			"Enabled": true,
+			"Optional": true
+		},
+		{
+			"Name": "PoseSearch",
+			"Enabled": true,
+			"Optional": true
+		},
+		{
+			"Name": "IKRig",
+			"Enabled": true,
+			"Optional": true
+		},
+		{
+			"Name": "ControlRig",
+			"Enabled": true,
+			"Optional": true
+		},
+		{
+			"Name": "MotionWarping",
+			"Enabled": true,
+			"Optional": true
+		},
+		{
+			"Name": "StateTree",
+			"Enabled": true,
+			"Optional": true
+		},
+
+		{
+			"Name": "StructUtils",
+			"Enabled": true
+		},
+		{
+			"Name": "MassGameplay",
+			"Enabled": true
+		},
+		{
+			"Name": "MassCrowd",
+			"Enabled": true
+		},
+		{
+			"Name": "SmartObjects",
+			"Enabled": true,
+			"Optional": true
+		},
+		{
+			"Name": "PCG",
+			"Enabled": true,
+			"Optional": true
+		},
+		{
+			"Name": "GeometryScripting",
+			"Enabled": true,
+			"Optional": true
+		},
+		{
+			"Name": "MovieRenderPipeline",
+			"Enabled": true,
+			"Optional": true
+		},
+		{
+			"Name": "Metasound",
+			"Enabled": true,
+			"Optional": true
+		},
+		{
+			"Name": "AudioModulation",
+			"Enabled": true,
+			"Optional": true
+		},
+		{
+			"Name": "nDisplay",
+			"Enabled": true,
+			"Optional": true
+		},
+		{
+			"Name": "LiveLink",
+			"Enabled": true,
+			"Optional": true
+		},
+		{
+			"Name": "DMXEngine",
+			"Enabled": true,
+			"Optional": true
+		},
+		{
+			"Name": "VirtualCameraCore",
+			"Enabled": true,
+			"Optional": true
+		},
+		{
+			"Name": "CineCameraRigs",
+			"Enabled": true,
+			"Optional": true
+		},
+		{
+			"Name": "StageMonitoring",
+			"Enabled": true,
+			"Optional": true
+		},
+		{
+			"Name": "ChaosVehiclesPlugin",
+			"Enabled": true,
+			"Optional": true
+		},
+		{
+			"Name": "PixelStreaming",
 			"Enabled": true,
 			"Optional": true
 		}

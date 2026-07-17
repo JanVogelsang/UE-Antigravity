@@ -83,6 +83,56 @@
           "parent_material"
         ]
       }
+    },
+    {
+      "name": "add_material_expression",
+      "description": "Add an expression to a material. (Deprecated: use create_material instead).",
+      "input_schema": {
+        "type": "object",
+        "properties": {
+          "asset_path": {
+            "type": "string",
+            "description": "Content path to the Material."
+          }
+        },
+        "required": ["asset_path"]
+      }
+    },
+    {
+      "name": "connect_material_property",
+      "description": "Connect an expression output to a material property. (Deprecated: use create_material instead).",
+      "input_schema": {
+        "type": "object",
+        "properties": {
+          "asset_path": {
+            "type": "string",
+            "description": "Content path to the Material."
+          }
+        },
+        "required": ["asset_path"]
+      }
+    },
+    {
+      "name": "capture_material",
+      "description": "Render the material to a texture and capture a snapshot image to disk.",
+      "input_schema": {
+        "type": "object",
+        "properties": {
+          "asset_path": {
+            "type": "string",
+            "description": "Content path of the Material to capture."
+          },
+          "max_dimension": {
+            "type": "integer",
+            "description": "Max width/height of the captured image."
+          },
+          "quality": {
+            "type": "integer",
+            "description": "JPEG quality (default: 75)."
+          }
+        },
+        "required": ["asset_path"]
+      }
     }
   ]
 }

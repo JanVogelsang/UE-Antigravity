@@ -85,6 +85,7 @@ FAgentFrameworkActionResult FAgentFrameworkMaterialActions::ExecuteAction(const 
 	if (ToolName == TEXT("create_material")) Result = ExecuteCreateMaterial(Params, Result);
 	else if (ToolName == TEXT("create_material_instance")) Result = ExecuteCreateMaterialInstance(Params, Result);
 	else if (ToolName == TEXT("add_material_expression")) Result = ExecuteAddMaterialExpression(Params, Result);
+	else if (ToolName == TEXT("connect_material_property")) Result = ExecuteConnectMaterialProperty(Params, Result);
 	else if (ToolName == TEXT("capture_material")) Result = ExecuteCaptureMaterial(Params, Result);
 	else if (Params->HasField(TEXT("parent_material")))
 	{
@@ -324,6 +325,12 @@ FAgentFrameworkActionResult FAgentFrameworkMaterialActions::ExecuteCreateMateria
 FAgentFrameworkActionResult FAgentFrameworkMaterialActions::ExecuteAddMaterialExpression(const TSharedRef<FJsonObject>& Params, FAgentFrameworkActionResult& Result)
 {
 	Result.Errors.Add(TEXT("Use create_material with expressions array instead."));
+	return Result;
+}
+
+FAgentFrameworkActionResult FAgentFrameworkMaterialActions::ExecuteConnectMaterialProperty(const TSharedRef<FJsonObject>& Params, FAgentFrameworkActionResult& Result)
+{
+	Result.Errors.Add(TEXT("Use create_material with expressions array and connections instead."));
 	return Result;
 }
 

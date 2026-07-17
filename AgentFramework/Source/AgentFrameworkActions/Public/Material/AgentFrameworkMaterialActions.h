@@ -20,5 +20,6 @@ private:
     FAgentFrameworkActionResult ExecuteCreateMaterial(const TSharedRef<FJsonObject>& Params, FAgentFrameworkActionResult& Result);
     FAgentFrameworkActionResult ExecuteCreateMaterialInstance(const TSharedRef<FJsonObject>& Params, FAgentFrameworkActionResult& Result);
     FAgentFrameworkActionResult ExecuteAddMaterialExpression(const TSharedRef<FJsonObject>& Params, FAgentFrameworkActionResult& Result);
+    FAgentFrameworkActionResult ExecuteConnectMaterialProperty(const TSharedRef<FJsonObject>& Params, FAgentFrameworkActionResult& Result);
     FAgentFrameworkActionResult ExecuteCaptureMaterial(const TSharedRef<FJsonObject>& Params, FAgentFrameworkActionResult& Result);
 };

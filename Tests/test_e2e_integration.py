@@ -263,3 +263,18 @@ def test_cpp_mcp_execute_python_script_validation(mock_agent_client):
     assert "too long" not in errors_str
     assert "too vague" not in errors_str
     assert "placeholder" not in errors_str
+
+def test_cpp_mcp_query_epic_assistant(mock_agent_client):
+    """
+    Test C++ HTTP tool: query_epic_assistant
+    """
+    response = mock_agent_client.call_cpp_tool(
+        "query_epic_assistant",
+        {"prompt": "Hello AI Assistant"}
+    )
+    assert response is not None
+    if response.get("bSuccess") is True:
+        assert len(response.get("ResultMessage", "")) > 0
+    else:
+        errors = "".join(response.get("Errors", []))
+        assert "not enabled or loaded" in errors or "Failed to locate" in errors

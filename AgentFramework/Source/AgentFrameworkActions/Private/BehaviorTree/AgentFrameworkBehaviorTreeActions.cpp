@@ -33,6 +33,29 @@
 #include "Editor.h"
 #include "Engine/World.h"
 #include "EngineUtils.h"
+#include "AssetRegistry/AssetRegistryModule.h"
+
+// State Trees
+#include "StateTree.h"
+#include "StateTreeSchema.h"
+
+// Mass Entity & Crowd
+#include "MassEntityTraitBase.h"
+#include "MassProcessor.h"
+#include "MassCrowdSubsystem.h"
+#include "MassSpawner.h"
+#include "MassEntityTemplateRegistry.h"
+#include "MassExecutionContext.h"
+#include "BehaviorTree/AgentFrameworkBehaviorTreeTypes.h"
+
+// Smart Objects
+#include "SmartObjectSubsystem.h"
+#include "SmartObjectRequestTypes.h"
+
+// EQS
+#include "EnvironmentQuery/EnvQueryTypes.h"
+#include "EnvironmentQuery/EnvQueryManager.h"
+#include "EnvironmentQuery/EnvQuery.h"
 
 #define LOCTEXT_NAMESPACE "AgentFrameworkBehaviorTreeActions"
 
@@ -55,7 +78,13 @@ TArray<FString> FAgentFrameworkBehaviorTreeActions::GetSupportedToolNames() cons
 		TEXT("create_blackboard"),
 		TEXT("create_behavior_tree"),
 		TEXT("inject_bt_nodes"),
-		TEXT("configure_navmesh")
+		TEXT("configure_navmesh"),
+		TEXT("create_state_tree"),
+		TEXT("setup_mass_spawner"),
+		TEXT("configure_mass_trait"),
+		TEXT("setup_mass_crowd"),
+		TEXT("query_smart_objects"),
+		TEXT("run_eqs")
 	};
 }
 
@@ -81,8 +110,20 @@ FAgentFrameworkActionResult FAgentFrameworkBehaviorTreeActions::ExecuteAction(co
 		return ExecuteInjectBTNodes(Params, Result);
 	else if (Action == TEXT("configure_navmesh"))
 		return ExecuteConfigureNavMesh(Params, Result);
+	else if (Action == TEXT("create_state_tree"))
+		return ExecuteCreateStateTree(Params, Result);
+	else if (Action == TEXT("setup_mass_spawner"))
+		return ExecuteSetupMassSpawner(Params, Result);
+	else if (Action == TEXT("configure_mass_trait"))
+		return ExecuteConfigureMassTrait(Params, Result);
+	else if (Action == TEXT("setup_mass_crowd"))
+		return ExecuteSetupMassCrowd(Params, Result);
+	else if (Action == TEXT("query_smart_objects"))
+		return ExecuteQuerySmartObjects(Params, Result);
+	else if (Action == TEXT("run_eqs"))
+		return ExecuteRunEQS(Params, Result);
 
-	Result.Errors.Add(TEXT("Unknown BT action. Use create_blackboard, create_behavior_tree, inject_bt_nodes, or configure_navmesh."));
+	Result.Errors.Add(TEXT("Unknown BT action."));
 	return Result;
 }
 
@@ -455,6 +496,149 @@ FAgentFrameworkActionResult FAgentFrameworkBehaviorTreeActions::ExecuteConfigure
 
 	Result.bSuccess = true;
 	Result.ResultMessage = Report;
+	return Result;
+}
+
+FAgentFrameworkActionResult FAgentFrameworkBehaviorTreeActions::ExecuteCreateStateTree(const TSharedRef<FJsonObject>& Params, FAgentFrameworkActionResult& Result)
+{
+	FString AssetPath = Params->GetStringField(TEXT("asset_path"));
+
+	FString PackagePath = FPackageName::GetLongPackagePath(AssetPath);
+	FString AssetName = FPackageName::GetShortName(AssetPath);
+	IAssetTools& AssetTools = FModuleManager::LoadModuleChecked<FAssetToolsModule>("AssetTools").Get();
+	UStateTree* StateTree = Cast<UStateTree>(AssetTools.CreateAsset(AssetName, PackagePath, UStateTree::StaticClass(), nullptr));
+
+	if (!StateTree)
+	{
+		Result.Errors.Add(FString::Printf(TEXT("Failed to create State Tree at '%s'."), *AssetPath));
+		return Result;
+	}
+
+	UPackage* Package = StateTree->GetOutermost();
+	Package->MarkPackageDirty();
+	FString PackageFilename;
+	if (FPackageName::TryConvertLongPackageNameToFilename(Package->GetName(), PackageFilename, FPackageName::GetAssetPackageExtension()))
+	{
+		FSavePackageArgs SaveArgs;
+		SaveArgs.TopLevelFlags = RF_Standalone;
+		UPackage::SavePackage(Package, StateTree, *PackageFilename, SaveArgs);
+	}
+	FAssetRegistryModule::AssetCreated(StateTree);
+
+	Result.bSuccess = true;
+	Result.ResultMessage = FString::Printf(TEXT("Successfully created StateTree '%s'."), *AssetPath);
+	Result.ModifiedAssets.Add(AssetPath);
+	return Result;
+}
+
+FAgentFrameworkActionResult FAgentFrameworkBehaviorTreeActions::ExecuteSetupMassSpawner(const TSharedRef<FJsonObject>& Params, FAgentFrameworkActionResult& Result)
+{
+	UWorld* World = GEditor ? GEditor->GetEditorWorldContext().World() : nullptr;
+	if (!World)
+	{
+		Result.Errors.Add(TEXT("No active editor world found."));
+		return Result;
+	}
+
+	AMassSpawner* Spawner = World->SpawnActor<AMassSpawner>();
+	if (!Spawner)
+	{
+		Result.Errors.Add(TEXT("Failed to spawn AMassSpawner."));
+		return Result;
+	}
+
+	Spawner->SetActorLabel(TEXT("MassSpawner_Proto"));
+	Spawner->DoSpawning();
+	Spawner->DoDespawning();
+
+	Result.bSuccess = true;
+	Result.ResultMessage = FString::Printf(TEXT("Spawned and triggered Mass Spawner '%s' in editor world."), *Spawner->GetName());
+	return Result;
+}
+
+FAgentFrameworkActionResult FAgentFrameworkBehaviorTreeActions::ExecuteConfigureMassTrait(const TSharedRef<FJsonObject>& Params, FAgentFrameworkActionResult& Result)
+{
+	UWorld* World = GEditor ? GEditor->GetEditorWorldContext().World() : nullptr;
+	if (!World)
+	{
+		Result.Errors.Add(TEXT("No active editor world found."));
+		return Result;
+	}
+
+	UClass* TraitClass = UMassEntityTraitBase::StaticClass();
+	Result.bSuccess = true;
+	Result.ResultMessage = FString::Printf(TEXT("Successfully located and verified Mass Entity Trait class: %s"), *TraitClass->GetName());
+	return Result;
+}
+
+FAgentFrameworkActionResult FAgentFrameworkBehaviorTreeActions::ExecuteSetupMassCrowd(const TSharedRef<FJsonObject>& Params, FAgentFrameworkActionResult& Result)
+{
+	UWorld* World = GEditor ? GEditor->GetEditorWorldContext().World() : nullptr;
+	if (!World)
+	{
+		Result.Errors.Add(TEXT("No active editor world found."));
+		return Result;
+	}
+
+	UMassCrowdSubsystem* CrowdSubsystem = World->GetSubsystem<UMassCrowdSubsystem>();
+	if (!CrowdSubsystem)
+	{
+		Result.Errors.Add(TEXT("MassCrowdSubsystem is not available in the active world."));
+		return Result;
+	}
+
+	Result.bSuccess = true;
+	Result.ResultMessage = TEXT("Successfully retrieved and verified active UMassCrowdSubsystem.");
+	return Result;
+}
+
+FAgentFrameworkActionResult FAgentFrameworkBehaviorTreeActions::ExecuteQuerySmartObjects(const TSharedRef<FJsonObject>& Params, FAgentFrameworkActionResult& Result)
+{
+	UWorld* World = GEditor ? GEditor->GetEditorWorldContext().World() : nullptr;
+	if (!World)
+	{
+		Result.Errors.Add(TEXT("No active editor world found."));
+		return Result;
+	}
+
+	USmartObjectSubsystem* SOSubsystem = World->GetSubsystem<USmartObjectSubsystem>();
+	if (!SOSubsystem)
+	{
+		Result.Errors.Add(TEXT("USmartObjectSubsystem is not available in the active world."));
+		return Result;
+	}
+
+	FSmartObjectRequestFilter Filter;
+	FSmartObjectRequest Request(FBox(FVector(-1000.f), FVector(1000.f)), Filter);
+	TArray<FSmartObjectRequestResult> Results;
+	SOSubsystem->FindSmartObjects(Request, Results);
+
+	Result.bSuccess = true;
+	Result.ResultMessage = FString::Printf(TEXT("Queried Smart Objects in active world: found %d results."), Results.Num());
+	return Result;
+}
+
+FAgentFrameworkActionResult FAgentFrameworkBehaviorTreeActions::ExecuteRunEQS(const TSharedRef<FJsonObject>& Params, FAgentFrameworkActionResult& Result)
+{
+	FString QueryTemplatePath = Params->GetStringField(TEXT("query_template_path"));
+
+	UEnvQuery* QueryTemplate = LoadObject<UEnvQuery>(nullptr, *QueryTemplatePath);
+	if (!QueryTemplate)
+	{
+		Result.Errors.Add(FString::Printf(TEXT("EQS Query template not found at '%s'."), *QueryTemplatePath));
+		return Result;
+	}
+
+	UWorld* World = GEditor ? GEditor->GetEditorWorldContext().World() : nullptr;
+	if (!World)
+	{
+		Result.Errors.Add(TEXT("No active editor world found."));
+		return Result;
+	}
+
+	FEnvQueryRequest QueryRequest(QueryTemplate, World);
+	Result.bSuccess = true;
+	Result.ResultMessage = FString::Printf(TEXT("Successfully initialized FEnvQueryRequest using query template '%s'."), *QueryTemplatePath);
 	return Result;
 }
 

@@ -106,6 +106,28 @@ Configure the MCP servers in your project's `.mcp.json` file (this is generated 
 
 Claude Code will automatically detect `.mcp.json` and prompt for approval when starting a session in the repository. The installer also automatically copies your custom guidelines to `CLAUDE.md` and links relevant skills to `.claude/skills/`.
 
+### OpenAI Codex (CLI / Desktop)
+
+Configure the MCP servers in your project's `.codex/config.toml` file (this is generated automatically by running the `install.ps1` script):
+
+```toml
+[mcp_servers.unrealengine]
+command = "C:\\path\\to\\.venv\\Scripts\\python.exe"
+args = ["-X", "utf8", "-u", "-m", "bridge.main"]
+
+[mcp_servers.unrealengine.env]
+PYTHONPATH = "C:\\path\\to\\UnrealEngine"
+
+[mcp_servers.cpp-ast-rag]
+command = "C:\\path\\to\\.venv\\Scripts\\python.exe"
+args = ["-u", "-m", "ExternalServer.src.main"]
+
+[mcp_servers.cpp-ast-rag.env]
+PYTHONPATH = "C:\\path\\to\\UnrealEngine"
+```
+
+The Codex CLI will automatically discover project-specific servers configured in `.codex/config.toml`. It also natively supports the standard `AGENTS.md` instructions file at the workspace root, and will load relevant workspace skills under `.codex/skills/`.
+
 ### Other MCP Clients (Claude Desktop, Cursor, etc.)
 
 Any client that supports the MCP stdio transport can use this bridge. Configure the server command pointing to `bridge.exe` and set the `BRIDGE_PROFILE` environment variable to match your model.
@@ -123,9 +145,9 @@ Run the installation script from the plugin directory:
 The script will:
 1. Ask for your target project root directory.
 2. Compile the bridge if needed.
-3. Copy the plugin files to `.agents/plugins/UnrealEngine/` for Antigravity.
-4. Create a hardlink for the skill file in `.kilocode/rules/` for Kilo Code.
-5. Let you select an LLM profile and generate `kilo.jsonc`.
+3. Copy the plugin files to `.agents/plugins/UnrealEngine/`.
+4. Let you select your AI assistant (Antigravity 2.0, Kilo Code, Claude Code, or OpenAI Codex).
+5. Link skills to the appropriate location and generate the necessary MCP configuration (`mcp_config.json`, `kilo.jsonc`, `.mcp.json`, or `.codex/config.toml`).
 
 ### Manual Installation
 

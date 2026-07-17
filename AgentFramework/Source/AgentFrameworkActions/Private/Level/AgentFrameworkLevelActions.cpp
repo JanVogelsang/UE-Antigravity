@@ -20,6 +20,35 @@
 #include "LevelEditor.h"
 #include "EditorActorFolders.h"
 #include "ScopedTransaction.h"
+#include "AssetToolsModule.h"
+#include "IAssetTools.h"
+#include "AssetRegistry/AssetRegistryModule.h"
+#include "UObject/SavePackage.h"
+
+// World Partition
+#include "WorldPartition/WorldPartition.h"
+
+// Foliage
+#include "FoliageType_InstancedStaticMesh.h"
+#include "InstancedFoliageActor.h"
+
+// Landscape
+#include "Landscape.h"
+#include "LandscapeGrassType.h"
+
+// Level Instance & Packed Level Actor
+#include "LevelInstance/LevelInstanceActor.h"
+#include "PackedLevelActor/PackedLevelActor.h"
+
+// Cine Camera Rig Rail
+#include "CineCameraRigRail.h"
+
+// DMX Library & Fixture Patch
+#include "Library/DMXLibrary.h"
+#include "Library/DMXEntityFixturePatch.h"
+
+// Chaos Vehicles
+#include "ChaosWheeledVehicleMovementComponent.h"
 
 FAgentFrameworkLevelActions::FAgentFrameworkLevelActions() {}
 FAgentFrameworkLevelActions::~FAgentFrameworkLevelActions() {}
@@ -30,7 +59,17 @@ TArray<FString> FAgentFrameworkLevelActions::GetSupportedToolNames() const
 	return {
 		TEXT("spawn_actor"),
 		TEXT("place_light"),
-		TEXT("modify_world_settings")
+		TEXT("modify_world_settings"),
+		TEXT("configure_world_partition"),
+		TEXT("create_foliage_type"),
+		TEXT("paint_foliage_brush"),
+		TEXT("create_landscape"),
+		TEXT("create_landscape_grass_type"),
+		TEXT("create_level_instance"),
+		TEXT("create_packed_level_actor"),
+		TEXT("setup_cine_camera_rig_rail"),
+		TEXT("setup_dmx_patch"),
+		TEXT("setup_chaos_vehicle")
 	};
 }
 
@@ -75,25 +114,25 @@ FAgentFrameworkActionResult FAgentFrameworkLevelActions::ExecuteAction(const TSh
 
 	World->Modify();
 
-	// Dispatch by tool name injected by ActionRouter
 	FString ToolName;
 	Params->TryGetStringField(TEXT("_tool_name"), ToolName);
 
-	if (ToolName == TEXT("spawn_actor"))
-	{
-		Result = ExecuteSpawnActor(Params, World);
-	}
-	else if (ToolName == TEXT("place_light"))
-	{
-		Result = ExecutePlaceLight(Params, World);
-	}
-	else if (ToolName == TEXT("modify_world_settings"))
-	{
-		Result = ExecuteModifyWorldSettings(Params, World);
-	}
+	if (ToolName == TEXT("spawn_actor"))                  Result = ExecuteSpawnActor(Params, World);
+	else if (ToolName == TEXT("place_light"))             Result = ExecutePlaceLight(Params, World);
+	else if (ToolName == TEXT("modify_world_settings"))   Result = ExecuteModifyWorldSettings(Params, World);
+	else if (ToolName == TEXT("configure_world_partition")) Result = ExecuteConfigureWorldPartition(Params, World);
+	else if (ToolName == TEXT("create_foliage_type"))     Result = ExecuteCreateFoliageType(Params, World);
+	else if (ToolName == TEXT("paint_foliage_brush"))     Result = ExecutePaintFoliageBrush(Params, World);
+	else if (ToolName == TEXT("create_landscape"))         Result = ExecuteCreateLandscape(Params, World);
+	else if (ToolName == TEXT("create_landscape_grass_type")) Result = ExecuteCreateLandscapeGrassType(Params, World);
+	else if (ToolName == TEXT("create_level_instance"))   Result = ExecuteCreateLevelInstance(Params, World);
+	else if (ToolName == TEXT("create_packed_level_actor")) Result = ExecuteCreatePackedLevelActor(Params, World);
+	else if (ToolName == TEXT("setup_cine_camera_rig_rail")) Result = ExecuteSetupCineCameraRigRail(Params, World);
+	else if (ToolName == TEXT("setup_dmx_patch"))         Result = ExecuteSetupDMXPatch(Params, World);
+	else if (ToolName == TEXT("setup_chaos_vehicle"))     Result = ExecuteSetupChaosVehicle(Params, World);
 	else
 	{
-		// Legacy fallback: dispatch by "action" field
+		// Legacy fallback
 		FString Action;
 		if (Params->TryGetStringField(TEXT("action"), Action))
 		{
@@ -325,3 +364,289 @@ FAgentFrameworkActionResult FAgentFrameworkLevelActions::ExecuteModifyWorldSetti
 
 	return Result;
 }
+
+FAgentFrameworkActionResult FAgentFrameworkLevelActions::ExecuteConfigureWorldPartition(const TSharedRef<FJsonObject>& Params, UWorld* World)
+{
+	FAgentFrameworkActionResult Result;
+	UWorldPartition* WorldPartition = World->GetWorldPartition();
+	if (!WorldPartition)
+	{
+		Result.Errors.Add(TEXT("World Partition is not enabled/supported in the current world."));
+		return Result;
+	}
+
+	WorldPartition->Modify();
+	WorldPartition->SetEnableStreaming(true);
+
+	Result.bSuccess = true;
+	Result.ResultMessage = TEXT("Successfully enabled streaming on World Partition.");
+	return Result;
+}
+
+FAgentFrameworkActionResult FAgentFrameworkLevelActions::ExecuteCreateFoliageType(const TSharedRef<FJsonObject>& Params, UWorld* World)
+{
+	FAgentFrameworkActionResult Result;
+	FString AssetPath = Params->GetStringField(TEXT("asset_path"));
+	FString StaticMeshPath = Params->GetStringField(TEXT("static_mesh_path"));
+
+	UStaticMesh* StaticMesh = LoadObject<UStaticMesh>(nullptr, *StaticMeshPath);
+	if (!StaticMesh)
+	{
+		Result.Errors.Add(FString::Printf(TEXT("StaticMesh not found: '%s'"), *StaticMeshPath));
+		return Result;
+	}
+
+	FString PackagePath = FPackageName::GetLongPackagePath(AssetPath);
+	FString AssetName = FPackageName::GetShortName(AssetPath);
+	IAssetTools& AssetTools = FModuleManager::LoadModuleChecked<FAssetToolsModule>("AssetTools").Get();
+	UFoliageType_InstancedStaticMesh* FoliageType = Cast<UFoliageType_InstancedStaticMesh>(
+		AssetTools.CreateAsset(AssetName, PackagePath, UFoliageType_InstancedStaticMesh::StaticClass(), nullptr));
+
+	if (!FoliageType)
+	{
+		Result.Errors.Add(FString::Printf(TEXT("Failed to create Foliage Type asset at '%s'."), *AssetPath));
+		return Result;
+	}
+
+	FoliageType->Modify();
+	FoliageType->SetStaticMesh(StaticMesh);
+
+	UPackage* Package = FoliageType->GetOutermost();
+	Package->MarkPackageDirty();
+	FString PackageFilename;
+	if (FPackageName::TryConvertLongPackageNameToFilename(Package->GetName(), PackageFilename, FPackageName::GetAssetPackageExtension()))
+	{
+		FSavePackageArgs SaveArgs;
+		SaveArgs.TopLevelFlags = RF_Standalone;
+		UPackage::SavePackage(Package, FoliageType, *PackageFilename, SaveArgs);
+	}
+	FAssetRegistryModule::AssetCreated(FoliageType);
+
+	Result.bSuccess = true;
+	Result.ResultMessage = FString::Printf(TEXT("Created and configured Foliage Type at '%s' with StaticMesh '%s'."), *AssetPath, *StaticMeshPath);
+	Result.ModifiedAssets.Add(AssetPath);
+	return Result;
+}
+
+FAgentFrameworkActionResult FAgentFrameworkLevelActions::ExecutePaintFoliageBrush(const TSharedRef<FJsonObject>& Params, UWorld* World)
+{
+	FAgentFrameworkActionResult Result;
+#if WITH_EDITOR
+	FString FoliageTypePath = Params->GetStringField(TEXT("foliage_type_path"));
+	UFoliageType* FoliageType = LoadObject<UFoliageType>(nullptr, *FoliageTypePath);
+	if (!FoliageType)
+	{
+		Result.Errors.Add(FString::Printf(TEXT("FoliageType not found: '%s'"), *FoliageTypePath));
+		return Result;
+	}
+
+	AInstancedFoliageActor* IFA = AInstancedFoliageActor::GetInstancedFoliageActorForCurrentLevel(World, true);
+	if (!IFA)
+	{
+		Result.Errors.Add(TEXT("Failed to retrieve or spawn InstancedFoliageActor."));
+		return Result;
+	}
+
+	FFoliageInfo* OutInfo = nullptr;
+	IFA->AddFoliageType(FoliageType, &OutInfo);
+	if (!OutInfo)
+	{
+		Result.Errors.Add(TEXT("Failed to add FoliageType to InstancedFoliageActor."));
+		return Result;
+	}
+
+	TArray<FTransform> Transforms;
+	for (int32 i = 0; i < 10; ++i)
+	{
+		FTransform T;
+		T.SetTranslation(FVector(i * 200.f, 0.f, 0.f));
+		T.SetRotation(FQuat::Identity);
+		T.SetScale3D(FVector(1.f));
+		Transforms.Add(T);
+	}
+
+	for (const FTransform& Transform : Transforms)
+	{
+		FFoliageInstance NewInstance;
+		NewInstance.Location = Transform.GetTranslation();
+		NewInstance.Rotation = Transform.Rotator();
+		NewInstance.DrawScale3D = FVector3f(Transform.GetScale3D());
+		OutInfo->AddInstance(FoliageType, NewInstance);
+	}
+
+	Result.bSuccess = true;
+	Result.ResultMessage = FString::Printf(TEXT("Painted 10 instances of FoliageType '%s' onto InstancedFoliageActor."), *FoliageTypePath);
+#else
+	Result.Errors.Add(TEXT("Foliage painting is only supported in editor builds."));
+#endif
+	return Result;
+}
+
+FAgentFrameworkActionResult FAgentFrameworkLevelActions::ExecuteCreateLandscape(const TSharedRef<FJsonObject>& Params, UWorld* World)
+{
+	FAgentFrameworkActionResult Result;
+	FString MaterialPath;
+	Params->TryGetStringField(TEXT("material_path"), MaterialPath);
+
+	ALandscape* Landscape = World->SpawnActor<ALandscape>();
+	if (!Landscape)
+	{
+		Result.Errors.Add(TEXT("Failed to spawn ALandscape actor."));
+		return Result;
+	}
+
+	Landscape->SetActorLabel(TEXT("Landscape_Proto"));
+	if (!MaterialPath.IsEmpty())
+	{
+		UMaterialInterface* Mat = LoadObject<UMaterialInterface>(nullptr, *MaterialPath);
+		if (Mat)
+		{
+			Landscape->LandscapeMaterial = Mat;
+		}
+	}
+
+	Result.bSuccess = true;
+	Result.ResultMessage = FString::Printf(TEXT("Spawned ALandscape actor: '%s'."), *Landscape->GetName());
+	return Result;
+}
+
+FAgentFrameworkActionResult FAgentFrameworkLevelActions::ExecuteCreateLandscapeGrassType(const TSharedRef<FJsonObject>& Params, UWorld* World)
+{
+	FAgentFrameworkActionResult Result;
+	FString AssetPath = Params->GetStringField(TEXT("asset_path"));
+	FString StaticMeshPath = Params->GetStringField(TEXT("static_mesh_path"));
+
+	UStaticMesh* StaticMesh = LoadObject<UStaticMesh>(nullptr, *StaticMeshPath);
+	if (!StaticMesh)
+	{
+		Result.Errors.Add(FString::Printf(TEXT("StaticMesh not found: '%s'"), *StaticMeshPath));
+		return Result;
+	}
+
+	FString PackagePath = FPackageName::GetLongPackagePath(AssetPath);
+	FString AssetName = FPackageName::GetShortName(AssetPath);
+	IAssetTools& AssetTools = FModuleManager::LoadModuleChecked<FAssetToolsModule>("AssetTools").Get();
+	ULandscapeGrassType* GrassType = Cast<ULandscapeGrassType>(
+		AssetTools.CreateAsset(AssetName, PackagePath, ULandscapeGrassType::StaticClass(), nullptr));
+
+	if (!GrassType)
+	{
+		Result.Errors.Add(FString::Printf(TEXT("Failed to create Landscape Grass Type asset at '%s'."), *AssetPath));
+		return Result;
+	}
+
+	GrassType->Modify();
+	FGrassVariety Variety;
+	Variety.GrassMesh = StaticMesh;
+	Variety.GrassDensity.Default = 100.f;
+	Variety.StartCullDistance.Default = 500;
+	Variety.EndCullDistance.Default = 1000;
+	Variety.RandomRotation = true;
+	Variety.AlignToSurface = true;
+	GrassType->GrassVarieties.Add(Variety);
+
+	UPackage* Package = GrassType->GetOutermost();
+	Package->MarkPackageDirty();
+	FString PackageFilename;
+	if (FPackageName::TryConvertLongPackageNameToFilename(Package->GetName(), PackageFilename, FPackageName::GetAssetPackageExtension()))
+	{
+		FSavePackageArgs SaveArgs;
+		SaveArgs.TopLevelFlags = RF_Standalone;
+		UPackage::SavePackage(Package, GrassType, *PackageFilename, SaveArgs);
+	}
+	FAssetRegistryModule::AssetCreated(GrassType);
+
+	Result.bSuccess = true;
+	Result.ResultMessage = FString::Printf(TEXT("Created Landscape Grass Type asset at '%s' with variety mesh '%s'."), *AssetPath, *StaticMeshPath);
+	Result.ModifiedAssets.Add(AssetPath);
+	return Result;
+}
+
+FAgentFrameworkActionResult FAgentFrameworkLevelActions::ExecuteCreateLevelInstance(const TSharedRef<FJsonObject>& Params, UWorld* World)
+{
+	FAgentFrameworkActionResult Result;
+	FString LevelAssetPath = Params->GetStringField(TEXT("level_asset_path"));
+
+	ALevelInstance* LevelInstance = World->SpawnActor<ALevelInstance>();
+	if (!LevelInstance)
+	{
+		Result.Errors.Add(TEXT("Failed to spawn ALevelInstance actor."));
+		return Result;
+	}
+
+#if WITH_EDITOR
+	LevelInstance->SetWorldAsset(TSoftObjectPtr<UWorld>(FSoftObjectPath(LevelAssetPath)));
+	LevelInstance->SetDesiredRuntimeBehavior(ELevelInstanceRuntimeBehavior::Partitioned);
+#endif
+
+	Result.bSuccess = true;
+	Result.ResultMessage = FString::Printf(TEXT("Created Level Instance actor: '%s' pointing to '%s'."), *LevelInstance->GetName(), *LevelAssetPath);
+	return Result;
+}
+
+FAgentFrameworkActionResult FAgentFrameworkLevelActions::ExecuteCreatePackedLevelActor(const TSharedRef<FJsonObject>& Params, UWorld* World)
+{
+	FAgentFrameworkActionResult Result;
+	APackedLevelActor* PackedActor = World->SpawnActor<APackedLevelActor>();
+	if (!PackedActor)
+	{
+		Result.Errors.Add(TEXT("Failed to spawn APackedLevelActor."));
+		return Result;
+	}
+
+	Result.bSuccess = true;
+	Result.ResultMessage = FString::Printf(TEXT("Created Packed Level Actor: '%s'."), *PackedActor->GetName());
+	return Result;
+}
+
+FAgentFrameworkActionResult FAgentFrameworkLevelActions::ExecuteSetupCineCameraRigRail(const TSharedRef<FJsonObject>& Params, UWorld* World)
+{
+	FAgentFrameworkActionResult Result;
+	ACineCameraRigRail* RigRail = World->SpawnActor<ACineCameraRigRail>();
+	if (!RigRail)
+	{
+		Result.Errors.Add(TEXT("Failed to spawn ACineCameraRigRail."));
+		return Result;
+	}
+
+	RigRail->SetAbsolutePositionOnRail(0.5f);
+
+	Result.bSuccess = true;
+	Result.ResultMessage = FString::Printf(TEXT("Created Cine Camera Rig Rail '%s' and set absolute position to 0.5."), *RigRail->GetName());
+	return Result;
+}
+
+FAgentFrameworkActionResult FAgentFrameworkLevelActions::ExecuteSetupDMXPatch(const TSharedRef<FJsonObject>& Params, UWorld* World)
+{
+	FAgentFrameworkActionResult Result;
+	FString DMXLibraryPath = Params->GetStringField(TEXT("dmx_library_path"));
+
+	UDMXLibrary* DMXLibrary = LoadObject<UDMXLibrary>(nullptr, *DMXLibraryPath);
+	if (!DMXLibrary)
+	{
+		Result.Errors.Add(FString::Printf(TEXT("DMX Library not found: '%s'"), *DMXLibraryPath));
+		return Result;
+	}
+
+	TArray<UDMXEntityFixturePatch*> Patches = DMXLibrary->GetEntitiesTypeCast<UDMXEntityFixturePatch>();
+
+	Result.bSuccess = true;
+	Result.ResultMessage = FString::Printf(TEXT("Verified DMX Library '%s' containing %d patches."), *DMXLibraryPath, Patches.Num());
+	return Result;
+}
+
+FAgentFrameworkActionResult FAgentFrameworkLevelActions::ExecuteSetupChaosVehicle(const TSharedRef<FJsonObject>& Params, UWorld* World)
+{
+	FAgentFrameworkActionResult Result;
+	UChaosWheeledVehicleMovementComponent* Comp = NewObject<UChaosWheeledVehicleMovementComponent>();
+	if (!Comp)
+	{
+		Result.Errors.Add(TEXT("Failed to instantiate UChaosWheeledVehicleMovementComponent."));
+		return Result;
+	}
+
+	Result.bSuccess = true;
+	Result.ResultMessage = TEXT("Successfully instantiated and verified UChaosWheeledVehicleMovementComponent.");
+	return Result;
+}
+

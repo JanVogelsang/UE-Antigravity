@@ -569,6 +569,52 @@
         },
         "required": ["asset_path"]
       }
+    },
+    {
+      "name": "modify_blueprint",
+      "description": "Modify structural properties of a Blueprint using operations.",
+      "input_schema": {
+        "type": "object",
+        "properties": {
+          "asset_path": {
+            "type": "string",
+            "description": "Path to the Blueprint asset, e.g. /Game/BP_MyActor"
+          },
+          "operations": {
+            "type": "array",
+            "description": "Array of operations to apply."
+          }
+        },
+        "required": ["asset_path"]
+      }
+    },
+    {
+      "name": "export_blueprint_summary",
+      "description": "Export structural summary of a Blueprint.",
+      "input_schema": {
+        "type": "object",
+        "properties": {
+          "asset_path": {
+            "type": "string",
+            "description": "Path to the Blueprint asset."
+          }
+        },
+        "required": ["asset_path"]
+      }
+    },
+    {
+      "name": "check_asset_state",
+      "description": "Check details and compile state of a Blueprint asset.",
+      "input_schema": {
+        "type": "object",
+        "properties": {
+          "asset_path": {
+            "type": "string",
+            "description": "Path to the Blueprint asset."
+          }
+        },
+        "required": ["asset_path"]
+      }
     }
   ]
 }

@@ -16,7 +16,11 @@ public class AgentFrameworkActions : ModuleRules
 			"Json",
 			"JsonUtilities",
 			"AgentFrameworkCore",
-			"AgentFrameworkEngine"
+			"AgentFrameworkEngine",
+			"MassEntity",
+			"StructUtils",
+			"MassSpawner",
+			"MassCommon"
 		});
 
 		PrivateDependencyModuleNames.AddRange(new string[]
@@ -61,6 +65,7 @@ public class AgentFrameworkActions : ModuleRules
 			"ImageWrapper",
 			"Slate",
 			"SlateCore",
+			"WebBrowser",
 			// Behavior Tree / AI
 			"GameplayTasks",
 			// Sequencer / Cinematics
@@ -80,7 +85,46 @@ public class AgentFrameworkActions : ModuleRules
 			// Niagara Support
 			"Niagara",
 			"NiagaraCore",
-			"NiagaraEditor"
+			"NiagaraEditor",
+			// New features and subsystems dependencies
+			"PoseSearch",
+			"IKRig",
+			"IKRigEditor",
+			"ControlRig",
+			"ControlRigDeveloper",
+			"MotionWarping",
+			"StateTreeModule",
+			"MassCrowd",
+			"SmartObjectsModule",
+			"PCG",
+			"GeometryScriptingCore",
+			"MovieRenderPipelineCore",
+			"MetasoundEngine",
+			"MetasoundFrontend",
+			"AudioModulation",
+			"Blutility",
+			"DisplayCluster",
+			"LiveLink",
+			"LiveLinkComponents",
+			"DMXRuntime",
+			"VCamCore",
+			"CineCameraRigs",
+			"StageMonitor",
+			"Chaos",
+			"ChaosVehicles",
+			"PixelStreaming",
+			"DataflowCore",
+			"DataflowEngine",
+			"AugmentedReality",
+			"ClothingSystemEditor",
+			"ClothingSystemRuntimeCommon",
+			"ClothingSystemRuntimeInterface",
+			"SparseVolumeTexture",
+			"NNE",
+			"ChaosVehiclesEngine",
+			"GeometryCollectionEngine",
+			"Foliage",
+			"GeometryFramework"
 		});
 
 		// Conditionally add Python support

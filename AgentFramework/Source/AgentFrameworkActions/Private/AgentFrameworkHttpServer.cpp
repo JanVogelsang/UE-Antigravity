@@ -22,6 +22,7 @@
 #include "Animation/AgentFrameworkAnimationActions.h"
 #include "BehaviorTree/AgentFrameworkBehaviorTreeActions.h"
 #include "Blueprint/AgentFrameworkBlueprintActions.h"
+#include "Build/AgentFrameworkBuildActions.h"
 #include "Context/AgentFrameworkContextActions.h"
 #include "Context/AgentFrameworkDiscoveryActions.h"
 #include "Cpp/AgentFrameworkCppActions.h"
@@ -45,6 +46,8 @@
 #include "Viewport/AgentFrameworkViewportActions.h"
 #include "Widget/AgentFrameworkWidgetActions.h"
 #include "DataAsset/AgentFrameworkDataAssetActions.h"
+#include "AIAssistant/AgentFrameworkAIAssistantActions.h"
+#include "AIAssistant/AIAssistantBridge.h"
 
 TSharedPtr<FAgentFrameworkActionRouter> FAgentFrameworkHttpServer::ActionRouter = nullptr;
 uint32 FAgentFrameworkHttpServer::Port = 18777;
@@ -80,6 +83,7 @@ void FAgentFrameworkHttpServer::RegisterAllExecutors(TSharedRef<FAgentFrameworkA
 	InRouter->RegisterExecutor(MakeShared<FAgentFrameworkAnimationActions>());
 	InRouter->RegisterExecutor(MakeShared<FAgentFrameworkBehaviorTreeActions>());
 	InRouter->RegisterExecutor(MakeShared<FAgentFrameworkBlueprintActions>());
+	InRouter->RegisterExecutor(MakeShared<FAgentFrameworkBuildActions>());
 	InRouter->RegisterExecutor(MakeShared<FAgentFrameworkContextActions>());
 	InRouter->RegisterExecutor(MakeShared<FAgentFrameworkDiscoveryActions>());
 	InRouter->RegisterExecutor(MakeShared<FAgentFrameworkCppActions>());
@@ -103,6 +107,7 @@ void FAgentFrameworkHttpServer::RegisterAllExecutors(TSharedRef<FAgentFrameworkA
 	InRouter->RegisterExecutor(MakeShared<FAgentFrameworkViewportActions>());
 	InRouter->RegisterExecutor(MakeShared<FAgentFrameworkWidgetActions>());
 	InRouter->RegisterExecutor(MakeShared<FAgentFrameworkDataAssetActions>());
+	InRouter->RegisterExecutor(MakeShared<FAgentFrameworkAIAssistantActions>());
 }
 
 bool FAgentFrameworkHttpServer::HandleListToolsRequest(const FHttpServerRequest& Request, const FHttpResultCallback& OnComplete)
@@ -116,12 +121,76 @@ bool FAgentFrameworkHttpServer::HandleListToolsRequest(const FHttpServerRequest&
 
 	FString SchemaDir = FPaths::Combine(Plugin->GetBaseDir(), TEXT("Resources"), TEXT("ToolSchemas"));
 
+	// Determine active skills
+	FString ActiveSkillsPath = FPaths::Combine(FPaths::ProjectDir(), TEXT(".agents"), TEXT("active_skills.json"));
+	if (!FPaths::FileExists(ActiveSkillsPath))
+	{
+		ActiveSkillsPath = FPaths::Combine(FPaths::ProjectDir(), TEXT("active_skills.json"));
+	}
+
+	TArray<FString> ActiveSkills;
+	if (FPaths::FileExists(ActiveSkillsPath))
+	{
+		FString SkillsContent;
+		if (FFileHelper::LoadFileToString(SkillsContent, *ActiveSkillsPath))
+		{
+			TSharedRef<TJsonReader<>> Reader = TJsonReaderFactory<>::Create(SkillsContent);
+			TArray<TSharedPtr<FJsonValue>> ArrayVal;
+			if (FJsonSerializer::Deserialize(Reader, ArrayVal))
+			{
+				for (const auto& Val : ArrayVal)
+				{
+					if (Val.IsValid() && Val->Type == EJson::String)
+					{
+						ActiveSkills.Add(Val->AsString());
+					}
+				}
+			}
+		}
+	}
+
+	// Set of core tool schemas that are always loaded
+	TSet<FString> CoreSchemas = {
+		TEXT("context_tools.json"),
+		TEXT("validation_tools.json"),
+		TEXT("task_tools.json"),
+		TEXT("meta_tools.json"),
+		TEXT("build_tools.json")
+	};
+
 	TArray<FString> Files;
 	IFileManager::Get().FindFiles(Files, *FPaths::Combine(SchemaDir, TEXT("*.json")), true, false);
 
 	TArray<TSharedPtr<FJsonValue>> ToolList;
 	for (const FString& File : Files)
 	{
+		// Filtering logic
+		bool bShouldLoad = false;
+		if (CoreSchemas.Contains(File))
+		{
+			bShouldLoad = true;
+		}
+		else
+		{
+			// Extract category name (e.g. "animation" from "animation_tools.json")
+			FString Category = File;
+			if (Category.EndsWith(TEXT("_tools.json"), ESearchCase::IgnoreCase))
+			{
+				Category = Category.LeftChop(11);
+			}
+			else if (Category.EndsWith(TEXT(".json"), ESearchCase::IgnoreCase))
+			{
+				Category = Category.LeftChop(5);
+			}
+
+			bShouldLoad = ActiveSkills.Contains(Category);
+		}
+
+		if (!bShouldLoad)
+		{
+			continue;
+		}
+
 		FString FilePath = FPaths::Combine(SchemaDir, File);
 		FString JsonContent;
 		if (FFileHelper::LoadFileToString(JsonContent, *FilePath))
@@ -192,6 +261,57 @@ namespace
 				FEditorDelegates::PostPIEStarted.Remove(PostPIEStartedHandle);
 				PostPIEStartedHandle.Reset();
 			}
+			if (TimeoutTickerHandle.IsValid())
+			{
+				FTSTicker::GetCoreTicker().RemoveTicker(TimeoutTickerHandle);
+				TimeoutTickerHandle.Reset();
+			}
+		}
+
+		void SendResponse()
+		{
+			Cleanup();
+
+			TSharedPtr<FJsonObject> ResultObj = MakeShared<FJsonObject>();
+			ResultObj->SetBoolField(TEXT("bSuccess"), Result.bSuccess);
+			ResultObj->SetStringField(TEXT("ResultMessage"), Result.ResultMessage);
+
+			TArray<TSharedPtr<FJsonValue>> ErrorsArr;
+			for (const FString& Error : Result.Errors) ErrorsArr.Add(MakeShared<FJsonValueString>(Error));
+			ResultObj->SetArrayField(TEXT("Errors"), ErrorsArr);
+
+			TArray<TSharedPtr<FJsonValue>> WarningsArr;
+			for (const FString& Warning : Result.Warnings) WarningsArr.Add(MakeShared<FJsonValueString>(Warning));
+			ResultObj->SetArrayField(TEXT("Warnings"), WarningsArr);
+
+			FString ResponseString;
+			TSharedRef<TJsonWriter<>> Writer = TJsonWriterFactory<>::Create(&ResponseString);
+			FJsonSerializer::Serialize(ResultObj.ToSharedRef(), Writer);
+
+			TUniquePtr<FHttpServerResponse> Response = FHttpServerResponse::Create(ResponseString, TEXT("application/json"));
+			OnComplete(MoveTemp(Response));
+		}
+	};
+
+	struct FQueryAIAssistantWaiter : public TSharedFromThis<FQueryAIAssistantWaiter>
+	{
+		FHttpResultCallback OnComplete;
+		FAgentFrameworkActionResult Result;
+		FTSTicker::FDelegateHandle TimeoutTickerHandle;
+
+		FQueryAIAssistantWaiter(const FHttpResultCallback& InOnComplete, const FAgentFrameworkActionResult& InResult)
+			: OnComplete(InOnComplete)
+			, Result(InResult)
+		{
+		}
+
+		~FQueryAIAssistantWaiter()
+		{
+			Cleanup();
+		}
+
+		void Cleanup()
+		{
 			if (TimeoutTickerHandle.IsValid())
 			{
 				FTSTicker::GetCoreTicker().RemoveTicker(TimeoutTickerHandle);
@@ -300,6 +420,53 @@ bool FAgentFrameworkHttpServer::HandleExecuteToolRequest(const FHttpServerReques
 				}));
 
 				return; // Defer response
+			}
+		}
+
+		// Intercept query_epic_assistant to wait for AIAssistant response
+		if (ToolCall.ToolName == TEXT("query_epic_assistant") && Result.bSuccess)
+		{
+			UAIAssistantBridge* Bridge = FAgentFrameworkAIAssistantActions::GetBridgeInstance();
+			if (Bridge)
+			{
+				TSharedRef<FQueryAIAssistantWaiter> Waiter = MakeShared<FQueryAIAssistantWaiter>(OnComplete, Result);
+				
+				bool bQueryStarted = Bridge->SendQuery(Bridge->GetActiveQueryPrompt(), FAIAssistantResponseDelegate::CreateLambda([Waiter](const FString& ResponseText, bool bQuerySuccess)
+				{
+					Waiter->Result.bSuccess = bQuerySuccess;
+					if (bQuerySuccess)
+					{
+						Waiter->Result.ResultMessage = ResponseText;
+					}
+					else
+					{
+						Waiter->Result.Errors.Add(ResponseText);
+					}
+					Waiter->SendResponse();
+				}));
+
+				if (bQueryStarted)
+				{
+					double StartTime = FPlatformTime::Seconds();
+					Waiter->TimeoutTickerHandle = FTSTicker::GetCoreTicker().AddTicker(FTickerDelegate::CreateLambda([Waiter, StartTime](float DeltaTime) -> bool
+					{
+						if (FPlatformTime::Seconds() - StartTime > 30.0)
+						{
+							Waiter->Result.bSuccess = false;
+							Waiter->Result.Errors.Add(TEXT("Timed out waiting for Epic AI Assistant response (30s)."));
+							Waiter->SendResponse();
+							return false;
+						}
+						return true;
+					}));
+
+					return; // Defer response
+				}
+				else
+				{
+					Result.bSuccess = false;
+					Result.Errors.Add(TEXT("Failed to send query via AIAssistantBridge. Make sure the AI Assistant tab is open."));
+				}
 			}
 		}
 

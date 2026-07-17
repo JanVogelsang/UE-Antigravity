@@ -15,6 +15,9 @@
 #include "AssetRegistry/AssetRegistryModule.h"
 #include "AssetRegistry/AssetData.h"
 #include "UObject/UnrealType.h"
+#include "Engine/PostProcessVolume.h"
+#include "GameFramework/WorldSettings.h"
+#include "EngineUtils.h"
 
 FAgentFrameworkPerformanceActions::FAgentFrameworkPerformanceActions() {}
 FAgentFrameworkPerformanceActions::~FAgentFrameworkPerformanceActions() {}
@@ -42,7 +45,10 @@ TArray<FString> FAgentFrameworkPerformanceActions::GetSupportedToolNames() const
 		TEXT("set_scalability_settings"),
 		// Renderer settings tools
 		TEXT("get_renderer_settings"),
-		TEXT("set_renderer_setting")
+		TEXT("set_renderer_setting"),
+		// Lumen & HLOD
+		TEXT("adjust_lumen_settings"),
+		TEXT("configure_hlod_setup")
 	};
 }
 
@@ -649,8 +655,86 @@ FAgentFrameworkActionResult FAgentFrameworkPerformanceActions::ExecuteAction(con
 	}
 
 	// -----------------------------------------------------------------------
+	// 16. adjust_lumen_settings
+	// -----------------------------------------------------------------------
+	if (ToolName == TEXT("adjust_lumen_settings"))
+	{
+		double GIQuality = 1.0;
+		double ReflectionQuality = 1.0;
+		Params->TryGetNumberField(TEXT("gi_quality"), GIQuality);
+		Params->TryGetNumberField(TEXT("reflection_quality"), ReflectionQuality);
+
+		UWorld* World = GetEditorWorld();
+		if (!World)
+		{
+			Result.Errors.Add(TEXT("No active editor world found."));
+			return Result;
+		}
+
+		APostProcessVolume* PPVolume = nullptr;
+		for (TActorIterator<APostProcessVolume> It(World); It; ++It)
+		{
+			PPVolume = *It;
+			break;
+		}
+
+		if (!PPVolume)
+		{
+			PPVolume = World->SpawnActor<APostProcessVolume>();
+			PPVolume->SetActorLabel(TEXT("LumenPPVolume"));
+			PPVolume->bUnbound = true;
+		}
+
+		PPVolume->Modify();
+		FPostProcessSettings& Settings = PPVolume->Settings;
+		Settings.bOverride_DynamicGlobalIlluminationMethod = true;
+		Settings.DynamicGlobalIlluminationMethod = EDynamicGlobalIlluminationMethod::Lumen;
+		Settings.bOverride_ReflectionMethod = true;
+		Settings.ReflectionMethod = EReflectionMethod::Lumen;
+		Settings.bOverride_LumenSceneLightingQuality = true;
+		Settings.LumenSceneLightingQuality = GIQuality;
+		Settings.bOverride_LumenSceneDetail = true;
+		Settings.LumenSceneDetail = ReflectionQuality;
+
+		Result.bSuccess = true;
+		Result.ResultMessage = FString::Printf(TEXT("Adjusted Lumen settings on PostProcessVolume '%s'."), *PPVolume->GetName());
+		return Result;
+	}
+
+	// -----------------------------------------------------------------------
+	// 17. configure_hlod_setup
+	// -----------------------------------------------------------------------
+	if (ToolName == TEXT("configure_hlod_setup"))
+	{
+		int32 NumHLODLevels = 3;
+		Params->TryGetNumberField(TEXT("num_hlod_levels"), NumHLODLevels);
+
+		UWorld* World = GetEditorWorld();
+		if (!World)
+		{
+			Result.Errors.Add(TEXT("No active editor world found."));
+			return Result;
+		}
+
+		AWorldSettings* WorldSettings = World->GetWorldSettings();
+		if (!WorldSettings)
+		{
+			Result.Errors.Add(TEXT("Failed to retrieve WorldSettings."));
+			return Result;
+		}
+
+		WorldSettings->Modify();
+		WorldSettings->bGenerateSingleClusterForLevel = true;
+		WorldSettings->NumHLODLevels = NumHLODLevels;
+
+		Result.bSuccess = true;
+		Result.ResultMessage = FString::Printf(TEXT("Configured HLOD setup: bGenerateSingleClusterForLevel=true, NumHLODLevels=%d."), NumHLODLevels);
+		return Result;
+	}
+
+	// -----------------------------------------------------------------------
 	// Unknown tool
 	// -----------------------------------------------------------------------
-	Result.Errors.Add(FString::Printf(TEXT("Unknown performance tool: '%s'. Supported tools: get_performance_stats, get_memory_stats, run_stat_command, analyze_asset_sizes, get_cvar, set_cvar, discover_cvars, execute_console_command, start_csv_profiler, stop_csv_profiler, read_profiling_file, get_scalability_settings, set_scalability_settings, get_renderer_settings, set_renderer_setting"), *ToolName));
+	Result.Errors.Add(FString::Printf(TEXT("Unknown performance tool: '%s'"), *ToolName));
 	return Result;
 }

@@ -3,3 +3,4 @@ onnxruntime>=1.14.0
 pypdf>=3.0.0
 libclang
 watchdog
+requests>=2.28.0

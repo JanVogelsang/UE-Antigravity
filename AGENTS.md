@@ -80,7 +80,7 @@ The C++ Editor plugin handles game-thread operations and must be present in the 
    # Example UBT headless build command:
    # Locate UnrealEngine path (e.g., from registry HKLM:\SOFTWARE\EpicGames\Unreal Engine)
    # Or invoke the project's build batch file if available:
-   & "C:\Program Files\Epic Games\UE_5.5\Engine\Build\BatchFiles\Build.bat" tau-gameEditor Win64 Development "$env:USERPROFILE\Documents\Unreal Projects\tau-game\tau-game.uproject" -waitmutex
+   & "C:\Program Files\Epic Games\UE_5.8\Engine\Build\BatchFiles\Build.bat" tau-gameEditor Win64 Development "$env:USERPROFILE\Documents\Unreal Projects\tau-game\tau-game.uproject" -waitmutex
    ```
 
 ### 5.2 Install the Agent Plugin (`UnrealEngine`)
@@ -99,7 +99,7 @@ The Agent plugin sets up the Python AST server, the MCP JSON-RPC bridge, and age
    - Create a Python virtual environment inside the target project.
    - Install dependencies for the `bridge` proxy and `ExternalServer`.
    - Copy the MCP tools to `tau-game\.agents\plugins\UnrealEngine`.
-   - Write the `mcp_config.json` inside the target workspace.
+   - Write the appropriate configuration file (e.g. `mcp_config.json` for Antigravity, `.mcp.json` for Claude, `kilo.jsonc` for Kilo, or `.codex/config.toml` for Codex).
 
 #### Autonomous Agent Installation
 1. **Non-Interactive Installation**: The `install.ps1` script utilizes interactive CLI prompts (`Read-Host`). To run it autonomously, pipe the target directory and assistant choice into standard input:
@@ -111,7 +111,7 @@ The Agent plugin sets up the Python AST server, the MCP JSON-RPC bridge, and age
    - Create a Python virtual environment inside the target project.
    - Install dependencies for the `bridge` proxy and `ExternalServer`.
    - Copy the MCP tools to `tau-game\.agents\plugins\UnrealEngine`.
-   - Write the `mcp_config.json` inside the target workspace.
+   - Write the appropriate configuration file (e.g. `mcp_config.json` for Antigravity, `.mcp.json` for Claude, `kilo.jsonc` for Kilo, or `.codex/config.toml` for Codex).
 
 ### 5.3 Verify Integration
 

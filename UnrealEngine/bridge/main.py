@@ -62,15 +62,24 @@ async def is_port_open_async(port):
     except Exception:
         return False
 
-async def fetch_agentframework_tools():
-    if not await is_port_open_async(18777):
+async def fetch_agentframework_tools(port=18777):
+    if not await is_port_open_async(port):
         return []
     async with httpx.AsyncClient() as client:
         try:
-            resp = await client.get("http://127.0.0.1:18777/api/tools", timeout=2.0)
+            resp = await client.get(f"http://127.0.0.1:{port}/api/tools", timeout=2.0)
             if resp.status_code == 200:
                 data = resp.json()
-                return data.get("tools", [])
+                schemas = data.get("tools", [])
+                flat_tools = []
+                for schema in schemas:
+                    if isinstance(schema, dict) and "tools" in schema:
+                        for tool in schema["tools"]:
+                            if isinstance(tool, dict) and "name" in tool:
+                                flat_tools.append(tool)
+                    elif isinstance(schema, dict) and "name" in schema:
+                        flat_tools.append(schema)
+                return flat_tools
         except Exception:
             return []
     return []
@@ -132,7 +141,8 @@ async def discover_tools(ue_port, profile):
                     await ue_stack.aclose()
                     ue_stack = None
                     
-        ag_tools = await fetch_agentframework_tools()
+        ag_port = int(os.environ.get("BRIDGE_HTTP_PORT", profile.get("ue_http_mcp_port", 18777)))
+        ag_tools = await fetch_agentframework_tools(ag_port)
         
         if not native_tools and not ag_tools:
             cache = load_tools_cache()

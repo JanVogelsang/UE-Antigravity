@@ -16,7 +16,9 @@ This file contains workspace-specific rules, constraints, and instructions for A
 - **Consulting the Project Index**: The entry-point skill `project-index` is auto-loaded by the assistant runner, but the detailed sub-documents in the `references/` subdirectory are not. When you need deep architectural context, gameplay specifications, or system designs, you **MUST** manually read the relevant reference documents under `.agents/skills/project-index/references/` (e.g., `concepts.md`, `gameplay.md`, `systems.md`, `files_index.md`) using the `view_file` tool to align your work with the project's pillars and conventions.
   * Always consult the documentation index and symbol directories (e.g., `files_index.md`) first to locate specific assets or screen classes before running generic directory searches (`Get-ChildItem -Recurse`).
 - **AST & Header Verification**:
-  * Before calling any class method, you MUST verify its exact signature in its respective C++ header file. Do NOT guess names or properties (e.g., verify `GetCurrency()` instead of guessing `GetCurrencyPoints()`).
+  * **Primary Lookup Tool**: Before calling any class method or reading Unreal C++ source files manually, you MUST use the `query_cpp_ast` MCP tool. This is the fastest and most accurate way to find class declarations, method signatures, UPROPERTIES, and function calls. Do NOT use `grep_search` or `view_file` on header files for basic symbol lookups.
+  * **Semantic Search**: Use `search_vector_db` to query Unreal Engine documentation and `search_similar_blueprints` to find relevant Blueprint assets by their described purpose.
+  * Do NOT guess names or properties (e.g., verify `GetCurrency()` instead of guessing `GetCurrencyPoints()`).
   * Utilize the `compile_commands.json` database or lookups to trace unfamiliar types or includes.
 - **Automation Test Run Safeguards**:
   * When running automated CLI tests via `UnrealEditor-Cmd.exe`, always append `; Quit` to the end of the `-ExecCmds` string (e.g. `-ExecCmds="Automation RunTests [ProjectOrTestName]; Quit"`). This prevents standalone engine processes from hanging indefinitely.

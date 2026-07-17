@@ -20,8 +20,23 @@ Write-Host "Installing to: $TargetProjectDir"
 
 $AgentFrameworkPluginDir = "$TargetProjectDir\.agents\plugins\UnrealEngine"
 
+# 0. Setup Unreal Engine C++ Plugin (AgentFramework)
+$CppPluginSource = Join-Path (Get-Item $PluginDir).Parent.FullName "AgentFramework"
+$CppPluginDest = "$TargetProjectDir\Plugins\AgentFramework"
+
+Write-Host "Setting up Unreal Engine C++ Plugin (AgentFramework)..."
+if (Test-Path $CppPluginSource) {
+    if (-not (Test-Path $CppPluginDest)) {
+        New-Item -ItemType Directory -Force -Path $CppPluginDest | Out-Null
+    }
+    Copy-Item -Path "$CppPluginSource\*" -Destination $CppPluginDest -Recurse -Force
+    Write-Host "Copied AgentFramework C++ plugin to $CppPluginDest"
+} else {
+    Write-Host "Warning: AgentFramework source not found at $CppPluginSource"
+}
+
 # 1. Setup AgentFramework plugin directory
-Write-Host "Setting up AgentFramework..."
+Write-Host "Setting up AgentFramework agent plugin..."
 if (-not (Test-Path $AgentFrameworkPluginDir)) {
     New-Item -ItemType Directory -Force -Path $AgentFrameworkPluginDir | Out-Null
 }
@@ -59,9 +74,11 @@ Write-Host "Which AI coding assistant do you want to configure?"
 Write-Host "  [0] Antigravity 2.0 (default)"
 Write-Host "  [1] Kilo Code"
 Write-Host "  [2] Claude Code"
+Write-Host "  [3] OpenAI Codex"
 $clientChoice = Read-Host "Select (press Enter for Antigravity 2.0)"
 $useKiloCode = ($clientChoice -eq "1")
 $useClaudeCode = ($clientChoice -eq "2")
+$useCodex = ($clientChoice -eq "3")
 
 # Resolve dynamic python path
 $UserDir = $env:USERPROFILE
@@ -272,6 +289,69 @@ if ($useKiloCode) {
     Write-Host "  Claude config      : $McpConfigPath"
     Write-Host "  Claude rules       : $TargetClaudePath"
 
+} elseif ($useCodex) {
+    # ── OpenAI Codex ─────────────────────────────────────────────────────────
+
+    # Setup Codex skills (skill hard-links)
+    $CodexSkillsDir = "$TargetProjectDir\.codex\skills"
+    Write-Host "Setting up OpenAI Codex skills..."
+    if (-not (Test-Path $CodexSkillsDir)) {
+        New-Item -ItemType Directory -Force -Path $CodexSkillsDir | Out-Null
+    }
+
+    $SkillsSourceDir = "$AgentFrameworkPluginDir\skills"
+    if (-not (Test-Path $SkillsSourceDir)) { $SkillsSourceDir = "$PluginDir\skills" }
+
+    Get-ChildItem -Path $SkillsSourceDir -Directory | ForEach-Object {
+        $SkillName = $_.Name
+        $SourceSkill = Join-Path $_.FullName "SKILL.md"
+        $TargetSkillDir = Join-Path $CodexSkillsDir $SkillName
+        if (-not (Test-Path $TargetSkillDir)) {
+            New-Item -ItemType Directory -Force -Path $TargetSkillDir | Out-Null
+        }
+        $LastTargetRule = Join-Path $TargetSkillDir "SKILL.md"
+        if (Test-Path $LastTargetRule) { Remove-Item $LastTargetRule }
+        if (Test-Path $SourceSkill) {
+            New-Item -ItemType HardLink -Path $LastTargetRule -Value $SourceSkill | Out-Null
+            Write-Host "  Linked skill '$SkillName'."
+        }
+    }
+
+    # Write .codex/config.toml
+    $CodexConfigDir = "$TargetProjectDir\.codex"
+    if (-not (Test-Path $CodexConfigDir)) {
+        New-Item -ItemType Directory -Force -Path $CodexConfigDir | Out-Null
+    }
+    $CodexConfigPath = "$CodexConfigDir\config.toml"
+    $CodexConfigContent = @"
+[mcp_servers.unrealengine]
+command = "$PythonExeEscaped"
+args = ["-X", "utf8", "-u", "-m", "bridge.main"]
+
+[mcp_servers.unrealengine.env]
+PYTHONPATH = "$PluginDirEscaped"
+
+[mcp_servers.cpp-ast-rag]
+command = "$PythonExeEscaped"
+args = ["-u", "-m", "ExternalServer.src.main"]
+
+[mcp_servers.cpp-ast-rag.env]
+PYTHONPATH = "$PluginDirEscaped"
+"@
+
+    if (-not (Test-Path $CodexConfigPath)) {
+        Set-Content -Path $CodexConfigPath -Value $CodexConfigContent
+        Write-Host "Created .codex/config.toml."
+    } else {
+        Write-Host ".codex/config.toml already exists. Please manually merge the MCP server definition:"
+        Write-Host $CodexConfigContent
+    }
+
+    Write-Host ""
+    Write-Host "Installation Complete (OpenAI Codex)."
+    Write-Host "  AgentFramework plugin : $AgentFrameworkPluginDir"
+    Write-Host "  Codex config       : $CodexConfigPath"
+
 } else {
     # ── Antigravity 2.0 (default) ────────────────────────────────────────────
 
@@ -368,6 +448,23 @@ if (Test-Path $SourceGithooksDir) {
     }
 }
 
+# 5. Append .env to .gitignore if target project is a Git repository
+$gitignore = Join-Path $TargetProjectDir ".gitignore"
+$envLine = ".env"
+if (Test-Path $gitignore) {
+    $content = Get-Content $gitignore -Raw
+    if ($content -notmatch '(?m)^\.env$') {
+        if ($content -and $content[-1] -ne "`n") {
+            Add-Content $gitignore ""
+        }
+        Add-Content $gitignore $envLine
+        Write-Host "Appended .env to target project .gitignore."
+    }
+} else {
+    Set-Content $gitignore $envLine
+    Write-Host "Created target project .gitignore and added .env."
+}
+
 Write-Host ""
 Write-Host "------------------------------------------------------------------------"
 Write-Host "Next Step (Highly Recommended):"
@@ -376,6 +473,8 @@ if ($useKiloCode) {
     Write-Host "  AI assistant (which will follow the linked Kilo rules), and ask to:"
 } elseif ($useClaudeCode) {
     Write-Host "  AI assistant (which will follow the linked Claude rules), and ask to:"
+} elseif ($useCodex) {
+    Write-Host "  AI assistant (which will follow the workspace AGENTS.md rules), and ask to:"
 } else {
     Write-Host "  AI assistant, and prompt it to run the setup:"
 }
