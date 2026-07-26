@@ -93,7 +93,7 @@ class MockAgentClient:
             "name": tool_name,
             "arguments": arguments
         }
-        response = requests.post(url, json=payload, timeout=10.0)
+        response = requests.post(url, json=payload, timeout=30.0)
         response.raise_for_status()
         return response.json()
 

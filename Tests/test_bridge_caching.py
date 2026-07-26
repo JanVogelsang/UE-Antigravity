@@ -14,22 +14,50 @@ BACKUP_FILE = PROJECT_ROOT / "UnrealEngine" / "profiles" / "discovered_tools_cac
 
 @pytest.fixture(autouse=True)
 def setup_cache_backup():
+    # Remove any stale backup file from previous interrupted runs
+    if BACKUP_FILE.exists():
+        try:
+            BACKUP_FILE.unlink()
+        except OSError:
+            pass
+
     # Back up existing cache file if it exists
     backup_made = False
     if CACHE_FILE.exists():
-        CACHE_FILE.rename(BACKUP_FILE)
-        backup_made = True
-    else:
-        if BACKUP_FILE.exists():
-            BACKUP_FILE.unlink()
-            
-    yield
-    
-    # Restore backup
+        try:
+            CACHE_FILE.rename(BACKUP_FILE)
+            backup_made = True
+        except OSError:
+            try:
+                CACHE_FILE.unlink()
+            except OSError:
+                pass
+
+    # Clean / ensure CACHE_FILE does not exist when starting test
     if CACHE_FILE.exists():
-        CACHE_FILE.unlink()
+        try:
+            CACHE_FILE.unlink()
+        except OSError:
+            pass
+
+    yield
+
+    # Teardown: Clean test cache file and restore backup if present
+    if CACHE_FILE.exists():
+        try:
+            CACHE_FILE.unlink()
+        except OSError:
+            pass
     if backup_made and BACKUP_FILE.exists():
-        BACKUP_FILE.rename(CACHE_FILE)
+        try:
+            BACKUP_FILE.rename(CACHE_FILE)
+        except OSError:
+            pass
+    elif BACKUP_FILE.exists():
+        try:
+            BACKUP_FILE.unlink()
+        except OSError:
+            pass
 
 def test_bridge_caching_and_fallback():
     # 1. Start the bridge process
@@ -138,10 +166,14 @@ def test_bridge_caching_and_fallback():
         proc.stdin.write(json.dumps(list_req_2) + "\n")
         proc.stdin.flush()
         
-        line = proc.stdout.readline()
-        assert line, "No response to tools/list query after notification"
-        list_resp_2 = json.loads(line)
-        assert list_resp_2.get("id") == 3
+        list_resp_2 = None
+        while True:
+            line = proc.stdout.readline()
+            assert line, "No response to tools/list query after notification"
+            msg = json.loads(line)
+            if msg.get("id") == 3:
+                list_resp_2 = msg
+                break
         tools_2 = list_resp_2.get("result", {}).get("tools", [])
         assert len(tools_2) == 1
         assert tools_2[0]["name"] == "mock_test_tool"

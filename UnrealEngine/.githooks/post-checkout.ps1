@@ -169,7 +169,7 @@ if (Test-Path $WorktreeTrackedSrc) {
     }
 }
 
-# E. skills (excluding unreal-env)
+# E. skills
 $WorktreeTrackedSkills = Join-Path $WorktreeRoot "UnrealEngine\skills"
 $WorktreePluginSkills = Join-Path $WorktreePluginDir "skills"
 if (Test-Path $WorktreeTrackedSkills) {
@@ -183,10 +183,8 @@ if (Test-Path $WorktreeTrackedSkills) {
     if (Test-Path $MainSkillsDir) {
         Get-ChildItem -Path $MainSkillsDir -Directory | ForEach-Object {
             $SkillName = $_.Name
-            if ($SkillName -ne "unreal-env") {
-                $WorktreeSkillPath = Join-Path $WorktreePluginSkills $SkillName
-                New-Item -ItemType Junction -Path $WorktreeSkillPath -Value $_.FullName -Force | Out-Null
-            }
+            $WorktreeSkillPath = Join-Path $WorktreePluginSkills $SkillName
+            New-Item -ItemType Junction -Path $WorktreeSkillPath -Value $_.FullName -Force | Out-Null
         }
         Log-Message "Linked main repo shared skills (plugin mode)."
     }
@@ -215,7 +213,7 @@ if (Test-Path $WorktreeTrackedPluginJson) {
     }
 }
 
-# 10. Regenerate Dynamic Local Environment Config (unreal-env)
+# 10. Regenerate Dynamic Local Environment Config (unreal-instructions)
 $EnvGenScript = Join-Path $WorktreePluginDir "src\generate_env_skill.ps1"
 if (Test-Path $EnvGenScript) {
     Log-Message "Running generate_env_skill.ps1 inside worktree context to configure isolated paths..."

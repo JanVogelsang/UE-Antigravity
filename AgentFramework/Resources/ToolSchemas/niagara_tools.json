@@ -138,6 +138,133 @@
         },
         "required": ["system_path"]
       }
+    },
+    {
+      "name": "set_niagara_parameter",
+      "description": "Set a System, Emitter, or User parameter value or dynamic curve on a UNiagaraSystem asset. Supports both PascalCase and snake_case parameter aliases.",
+      "input_schema": {
+        "type": "object",
+        "properties": {
+          "system_path": {
+            "type": "string",
+            "description": "Content path of the target UNiagaraSystem asset, e.g. /Game/Effects/NS_Explosion. Alias for SystemAsset."
+          },
+          "SystemAsset": {
+            "type": "string",
+            "description": "Object path of UNiagaraSystem asset. Alias for system_path."
+          },
+          "parameter_scope": {
+            "type": "string",
+            "enum": ["User", "System", "Emitter"],
+            "default": "User",
+            "description": "Parameter store scope ('User', 'System', or 'Emitter'). Default: 'User'. Alias for ParameterScope."
+          },
+          "ParameterScope": {
+            "type": "string",
+            "enum": ["User", "System", "Emitter"],
+            "default": "User",
+            "description": "Parameter store scope ('User', 'System', or 'Emitter'). Default: 'User'. Alias for parameter_scope."
+          },
+          "parameter_name": {
+            "type": "string",
+            "description": "Name of parameter to set (e.g. 'SpawnRate', 'PrimaryColor', 'User.SpawnRate'). Alias for ParameterName."
+          },
+          "ParameterName": {
+            "type": "string",
+            "description": "Name of parameter to set (e.g. 'SpawnRate', 'PrimaryColor'). Alias for parameter_name."
+          },
+          "data_type": {
+            "type": "string",
+            "enum": [
+              "Float",
+              "Vector2",
+              "Vector3",
+              "LinearColor",
+              "Bool",
+              "Int32",
+              "CurveFloat",
+              "CurveLinearColor"
+            ],
+            "default": "Float",
+            "description": "Niagara parameter data type. Default: 'Float'. Alias for DataType."
+          },
+          "DataType": {
+            "type": "string",
+            "enum": [
+              "Float",
+              "Vector2",
+              "Vector3",
+              "LinearColor",
+              "Bool",
+              "Int32",
+              "CurveFloat",
+              "CurveLinearColor"
+            ],
+            "default": "Float",
+            "description": "Niagara parameter data type. Default: 'Float'. Alias for data_type."
+          },
+          "value": {
+            "description": "Constant scalar, vector, color, bool, or int value payload (e.g. '500.0', '1.0, 0.0, 0.0', true). Alias for Value."
+          },
+          "Value": {
+            "description": "Constant scalar, vector, color, bool, or int value payload. Alias for value."
+          },
+          "curve_keys": {
+            "type": "array",
+            "description": "Array of curve keyframes for CurveFloat or CurveLinearColor data types. Alias for CurveKeys.",
+            "items": {
+              "type": "object",
+              "properties": {
+                "Time": {
+                  "type": "number",
+                  "description": "Keyframe time index. Alias for time."
+                },
+                "time": {
+                  "type": "number",
+                  "description": "Keyframe time index. Alias for Time."
+                },
+                "Value": {
+                  "type": "number",
+                  "description": "Keyframe float value. Alias for value."
+                },
+                "value": {
+                  "type": "number",
+                  "description": "Keyframe float value. Alias for Value."
+                }
+              }
+            }
+          },
+          "CurveKeys": {
+            "type": "array",
+            "description": "Array of curve keyframes for CurveFloat or CurveLinearColor data types. Alias for curve_keys.",
+            "items": {
+              "type": "object",
+              "properties": {
+                "Time": {
+                  "type": "number",
+                  "description": "Keyframe time index. Alias for time."
+                },
+                "time": {
+                  "type": "number",
+                  "description": "Keyframe time index. Alias for Time."
+                },
+                "Value": {
+                  "type": "number",
+                  "description": "Keyframe float value. Alias for value."
+                },
+                "value": {
+                  "type": "number",
+                  "description": "Keyframe float value. Alias for Value."
+                }
+              }
+            }
+          }
+        },
+        "anyOf": [
+          { "required": ["system_path", "parameter_name"] },
+          { "required": ["SystemAsset", "ParameterName"] }
+        ]
+      }
     }
   ]
 }

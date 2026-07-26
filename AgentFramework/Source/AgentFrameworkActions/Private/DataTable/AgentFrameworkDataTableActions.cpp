@@ -1,18 +1,19 @@
 // Copyright 2026 AgentFramework. All Rights Reserved.
 
 #include "DataTable/AgentFrameworkDataTableActions.h"
-#include "AgentFrameworkCoreModule.h"
-#include "AgentFrameworkSettings.h"
+#include "AgentFrameworkActionUtils.h"
 #include "Engine/DataTable.h"
-#include "AssetRegistry/AssetRegistryModule.h"
 #include "AssetToolsModule.h"
 #include "IAssetTools.h"
 #include "Factories/DataTableFactory.h"
-#include "UObject/SavePackage.h"
-#include "Misc/FileHelper.h"
 #include "Serialization/JsonReader.h"
 #include "Serialization/JsonSerializer.h"
 #include "Dom/JsonObject.h"
+
+#if WITH_EDITOR
+#include "Editor.h"
+#include "Sound/SoundBase.h"
+#endif
 
 #define LOCTEXT_NAMESPACE "AgentFrameworkDataTableActions"
 
@@ -27,7 +28,10 @@ FAgentFrameworkDataTableActions::~FAgentFrameworkDataTableActions() {}
 // IAgentFrameworkActionExecutor Interface
 // ============================================================================
 
-FName FAgentFrameworkDataTableActions::GetActionName() const { return FName(TEXT("DataTable")); }
+FName FAgentFrameworkDataTableActions::GetActionName() const
+{
+	return FName(TEXT("DataTable"));
+}
 
 TArray<FString> FAgentFrameworkDataTableActions::GetSupportedToolNames() const
 {
@@ -39,7 +43,17 @@ TArray<FString> FAgentFrameworkDataTableActions::GetSupportedToolNames() const
 
 bool FAgentFrameworkDataTableActions::ValidateParams(const TSharedRef<FJsonObject>& Params, TArray<FString>& OutErrors) const
 {
-	return true;
+	FString Action;
+	TArray<FString> TempErrors;
+	if (UAgentFrameworkActionUtils::TryGetStringParam(Params, TEXT("action"), Action, TempErrors, false) && !Action.IsEmpty())
+	{
+		if (Action != TEXT("create_data_table") && Action != TEXT("import_json_to_datatable"))
+		{
+			OutErrors.Add(FString::Printf(TEXT("Unknown action: %s"), *Action));
+			return false;
+		}
+	}
+	return OutErrors.Num() == 0;
 }
 
 FAgentFrameworkActionResult FAgentFrameworkDataTableActions::ExecuteAction(const TSharedRef<FJsonObject>& Params)
@@ -48,21 +62,46 @@ FAgentFrameworkActionResult FAgentFrameworkDataTableActions::ExecuteAction(const
 	Result.bSuccess = false;
 
 	FString Action;
-	if (!Params->TryGetStringField(TEXT("action"), Action) || Action.IsEmpty())
-		Params->TryGetStringField(TEXT("tool_name"), Action);
+	TArray<FString> TempErrors;
+	if (!UAgentFrameworkActionUtils::TryGetStringParam(Params, TEXT("action"), Action, TempErrors, false) || Action.IsEmpty())
+	{
+		UAgentFrameworkActionUtils::TryGetStringParam(Params, TEXT("tool_name"), Action, TempErrors, false);
+	}
 
 	if (Action == TEXT("create_data_table"))
-		return ExecuteCreateDataTable(Params, Result);
+	{
+		Result = ExecuteCreateDataTable(Params, Result);
+	}
 	else if (Action == TEXT("import_json_to_datatable"))
-		return ExecuteImportJsonToDataTable(Params, Result);
+	{
+		Result = ExecuteImportJsonToDataTable(Params, Result);
+	}
+	else
+	{
+		FString DummyRowStruct;
+		if (UAgentFrameworkActionUtils::TryGetStringParam(Params, TEXT("row_struct"), DummyRowStruct, TempErrors, false) && !DummyRowStruct.IsEmpty())
+		{
+			Result = ExecuteCreateDataTable(Params, Result);
+		}
+		else
+		{
+			FString DummyJsonData;
+			if (UAgentFrameworkActionUtils::TryGetStringParam(Params, TEXT("json_data"), DummyJsonData, TempErrors, false) && !DummyJsonData.IsEmpty())
+			{
+				Result = ExecuteImportJsonToDataTable(Params, Result);
+			}
+			else
+			{
+				Result.Errors.Add(TEXT("Could not determine DataTable action. Provide 'action' field or appropriate parameters."));
+			}
+		}
+	}
 
-	// Infer from params
-	if (Params->HasField(TEXT("row_struct")))
-		return ExecuteCreateDataTable(Params, Result);
-	if (Params->HasField(TEXT("json_data")))
-		return ExecuteImportJsonToDataTable(Params, Result);
+	if (Result.bSuccess)
+	{
+		PlaySuccessSound();
+	}
 
-	Result.Errors.Add(TEXT("Could not determine DataTable action. Provide 'action' field or appropriate parameters."));
 	return Result;
 }
 
@@ -74,29 +113,27 @@ FAgentFrameworkActionResult FAgentFrameworkDataTableActions::ExecuteCreateDataTa
 	const TSharedRef<FJsonObject>& Params, FAgentFrameworkActionResult& Result)
 {
 	FString AssetPath;
-	if (!Params->TryGetStringField(TEXT("asset_path"), AssetPath))
+	if (!UAgentFrameworkActionUtils::TryGetStringParam(Params, TEXT("asset_path"), AssetPath, Result.Errors, true))
 	{
-		Result.Errors.Add(TEXT("Missing required field: 'asset_path'"));
 		return Result;
 	}
 
 	FString RowStructName;
-	if (!Params->TryGetStringField(TEXT("row_struct"), RowStructName))
+	if (!UAgentFrameworkActionUtils::TryGetStringParam(Params, TEXT("row_struct"), RowStructName, Result.Errors, true))
 	{
-		Result.Errors.Add(TEXT("Missing required field: 'row_struct' â€” the name of the FTableRowBase-derived struct (e.g., 'FWeaponStatsRow')"));
 		return Result;
 	}
 
 	// Resolve the row struct by name
 	UScriptStruct* RowStruct = FindFirstObject<UScriptStruct>(*RowStructName, EFindFirstObjectOptions::NativeFirst);
-	if (!RowStruct)
+	if (!IsValid(RowStruct))
 	{
-		// Try without the 'F' prefix
+		// Try with the 'F' prefix
 		FString WithF = TEXT("F") + RowStructName;
 		RowStruct = FindFirstObject<UScriptStruct>(*WithF, EFindFirstObjectOptions::NativeFirst);
 	}
 
-	if (!RowStruct)
+	if (!IsValid(RowStruct))
 	{
 		Result.Errors.Add(FString::Printf(
 			TEXT("Row struct '%s' not found. Ensure it derives from FTableRowBase and is compiled. "
@@ -106,7 +143,8 @@ FAgentFrameworkActionResult FAgentFrameworkDataTableActions::ExecuteCreateDataTa
 	}
 
 	// Verify it derives from FTableRowBase
-	if (!RowStruct->IsChildOf(FTableRowBase::StaticStruct()))
+	UScriptStruct* TableRowBaseStruct = FTableRowBase::StaticStruct();
+	if (!IsValid(TableRowBaseStruct) || !RowStruct->IsChildOf(TableRowBaseStruct))
 	{
 		Result.Errors.Add(FString::Printf(
 			TEXT("Struct '%s' does not derive from FTableRowBase. DataTable row structs must inherit from FTableRowBase."),
@@ -121,23 +159,32 @@ FAgentFrameworkActionResult FAgentFrameworkDataTableActions::ExecuteCreateDataTa
 	IAssetTools& AssetTools = FModuleManager::LoadModuleChecked<FAssetToolsModule>("AssetTools").Get();
 
 	UDataTableFactory* Factory = NewObject<UDataTableFactory>();
+	if (!IsValid(Factory))
+	{
+		Result.Errors.Add(TEXT("Failed to create DataTableFactory."));
+		return Result;
+	}
 	Factory->Struct = RowStruct;
 
 	UObject* NewAsset = AssetTools.CreateAsset(AssetName, PackagePath, UDataTable::StaticClass(), Factory);
-
-	if (!NewAsset)
+	if (!IsValid(NewAsset))
 	{
 		Result.Errors.Add(FString::Printf(TEXT("Failed to create DataTable at '%s'. Check that the path is valid."), *AssetPath));
 		return Result;
 	}
 
 	UDataTable* DataTable = Cast<UDataTable>(NewAsset);
+	if (!IsValid(DataTable))
+	{
+		Result.Errors.Add(TEXT("Failed to cast created asset to UDataTable."));
+		return Result;
+	}
 
 	Result.bSuccess = true;
 	Result.ModifiedAssets.Add(AssetPath);
 	Result.ResultMessage = FString::Printf(
 		TEXT("Created DataTable '%s' with row struct '%s'. "
-			 "The table is empty â€” use import_json_to_datatable to populate it with rows."),
+			 "The table is empty — use import_json_to_datatable to populate it with rows."),
 		*AssetPath, *RowStruct->GetName());
 
 	return Result;
@@ -151,29 +198,26 @@ FAgentFrameworkActionResult FAgentFrameworkDataTableActions::ExecuteImportJsonTo
 	const TSharedRef<FJsonObject>& Params, FAgentFrameworkActionResult& Result)
 {
 	FString AssetPath;
-	if (!Params->TryGetStringField(TEXT("asset_path"), AssetPath))
+	if (!UAgentFrameworkActionUtils::TryGetStringParam(Params, TEXT("asset_path"), AssetPath, Result.Errors, true))
 	{
-		Result.Errors.Add(TEXT("Missing required field: 'asset_path'"));
 		return Result;
 	}
 
 	FString JsonDataStr;
-	if (!Params->TryGetStringField(TEXT("json_data"), JsonDataStr))
+	if (!UAgentFrameworkActionUtils::TryGetStringParam(Params, TEXT("json_data"), JsonDataStr, Result.Errors, true))
 	{
-		Result.Errors.Add(TEXT("Missing required field: 'json_data' â€” JSON array of row objects"));
 		return Result;
 	}
 
 	// Load the DataTable
 	UDataTable* DataTable = LoadObject<UDataTable>(nullptr, *AssetPath);
-	if (!DataTable)
+	if (!IsValid(DataTable))
 	{
 		Result.Errors.Add(FString::Printf(TEXT("DataTable not found at '%s'. Create it first with create_data_table."), *AssetPath));
 		return Result;
 	}
 
-	// Parse the JSON â€” expect an array of objects, each with a "Name" key
-	// Format: [{"Name": "Row_1", "Damage": 50, "FireRate": 0.5}, ...]
+	// Parse the JSON — expect an array of objects, each with a "Name" key
 	TArray<TSharedPtr<FJsonValue>> JsonRows;
 	TSharedRef<TJsonReader<>> Reader = TJsonReaderFactory<>::Create(JsonDataStr);
 
@@ -184,19 +228,14 @@ FAgentFrameworkActionResult FAgentFrameworkDataTableActions::ExecuteImportJsonTo
 	}
 
 	// Convert to the format UDataTable::CreateTableFromJSONString expects
-	// UDataTable::CreateTableFromJSONString takes an array of objects where
-	// the first column "Name" is the row key
 	FString FormattedJson;
 	TSharedRef<TJsonWriter<>> Writer = TJsonWriterFactory<>::Create(&FormattedJson);
 	FJsonSerializer::Serialize(JsonRows, Writer);
 
 	// Use DataTable's built-in JSON import
-	TArray<FString> ImportProblems;
 	DataTable->Modify();
 	DataTable->EmptyTable();
 
-	// DataTable expects JSON in the format:
-	// [{"Name":"RowName","Column1":Value1,...},...]
 	TArray<FString> ImportErrors = DataTable->CreateTableFromJSONString(FormattedJson);
 
 	if (ImportErrors.Num() > 0)
@@ -232,4 +271,19 @@ FAgentFrameworkActionResult FAgentFrameworkDataTableActions::ExecuteImportJsonTo
 	return Result;
 }
 
+void FAgentFrameworkDataTableActions::PlaySuccessSound()
+{
+#if WITH_EDITOR
+	if (IsValid(GEditor))
+	{
+		USoundBase* SuccessSound = LoadObject<USoundBase>(nullptr, TEXT("/Engine/EditorSounds/Notifications/CompileSuccess.CompileSuccess"));
+		if (IsValid(SuccessSound))
+		{
+			GEditor->PlayEditorSound(SuccessSound);
+		}
+	}
+#endif
+}
+
 #undef LOCTEXT_NAMESPACE
+

@@ -133,6 +133,69 @@
         },
         "required": ["asset_path"]
       }
+    },
+    {
+      "name": "create_pbr_material_from_textures",
+      "description": "Create a PBR Material asset from texture maps (Base Color, Normal, Roughness, Metallic, AO, etc.) and auto-wire shader pins.",
+      "input_schema": {
+        "type": "object",
+        "properties": {
+          "material_path": {
+            "type": "string",
+            "description": "Destination package path for Material asset (e.g. '/Game/Materials/M_CharacterPBR')"
+          },
+          "base_color_texture_path": {
+            "type": "string",
+            "description": "Object path of BaseColor texture (e.g. '/Game/Textures/T_Character_BC')"
+          },
+          "normal_texture_path": {
+            "type": "string",
+            "description": "Optional: Object path of Normal map texture"
+          },
+          "roughness_texture_path": {
+            "type": "string",
+            "description": "Optional: Object path of Roughness map texture"
+          },
+          "metallic_texture_path": {
+            "type": "string",
+            "description": "Optional: Object path of Metallic map texture"
+          },
+          "ao_texture_path": {
+            "type": "string",
+            "description": "Optional: Object path of Ambient Occlusion texture"
+          },
+          "specular_texture_path": {
+            "type": "string",
+            "description": "Optional: Object path of Specular texture"
+          },
+          "emissive_texture_path": {
+            "type": "string",
+            "description": "Optional: Object path of Emissive texture"
+          },
+          "opacity_texture_path": {
+            "type": "string",
+            "description": "Optional: Object path of Opacity texture"
+          },
+          "blend_mode": {
+            "type": "string",
+            "enum": ["Opaque", "Masked", "Translucent", "Additive"],
+            "default": "Opaque"
+          },
+          "shading_model": {
+            "type": "string",
+            "enum": ["DefaultLit", "Unlit", "Subsurface", "ClearCoat"],
+            "default": "DefaultLit"
+          },
+          "two_sided": {
+            "type": "boolean",
+            "default": false
+          }
+        },
+        "required": [
+          "material_path",
+          "base_color_texture_path"
+        ]
+      }
     }
   ]
 }

@@ -1,14 +1,18 @@
 // Copyright 2026 AgentFramework. All Rights Reserved.
 
 #include "Context/AgentFrameworkDiscoveryActions.h"
-#include "AgentFrameworkCoreModule.h"
+#include "AgentFrameworkActionUtils.h"
 #include "Misc/Paths.h"
 #include "Misc/FileHelper.h"
-#include "HAL/PlatformFileManager.h"
 #include "Interfaces/IPluginManager.h"
 #include "Serialization/JsonSerializer.h"
 #include "Serialization/JsonReader.h"
 #include "Serialization/JsonWriter.h"
+#include "Sound/SoundBase.h"
+
+#if WITH_EDITOR
+#include "Editor.h"
+#endif
 
 FAgentFrameworkDiscoveryActions::FAgentFrameworkDiscoveryActions() {}
 FAgentFrameworkDiscoveryActions::~FAgentFrameworkDiscoveryActions() {}
@@ -34,19 +38,44 @@ FAgentFrameworkActionResult FAgentFrameworkDiscoveryActions::ExecuteAction(const
 	Result.bSuccess = false;
 
 	FString ToolName;
-	if (Params->TryGetStringField(TEXT("_tool_name"), ToolName) || Params->TryGetStringField(TEXT("tool_name"), ToolName))
+	TSharedPtr<FJsonObject> ParamsPtr = Params;
+	TArray<FString> ParseErrors;
+	UAgentFrameworkActionUtils::TryGetStringParam(ParamsPtr, TEXT("_tool_name"), ToolName, ParseErrors, false);
+	if (ToolName.IsEmpty())
+	{
+		UAgentFrameworkActionUtils::TryGetStringParam(ParamsPtr, TEXT("tool_name"), ToolName, ParseErrors, false);
+	}
+
+	if (!ToolName.IsEmpty())
 	{
 		if (ToolName == TEXT("get_tool_info"))
 		{
-			return ExecuteGetToolInfo(Params, Result);
+			Result = ExecuteGetToolInfo(Params, Result);
 		}
 		else if (ToolName == TEXT("list_tools_in_category"))
 		{
-			return ExecuteListToolsInCategory(Params, Result);
+			Result = ExecuteListToolsInCategory(Params, Result);
 		}
 	}
+	else
+	{
+		Result.Errors.Add(TEXT("Could not determine discovery action."));
+	}
 
-	Result.Errors.Add(TEXT("Could not determine discovery action."));
+	if (Result.bSuccess)
+	{
+#if WITH_EDITOR
+		if (GEditor)
+		{
+			USoundBase* SuccessSound = LoadObject<USoundBase>(nullptr, TEXT("/Engine/EditorSounds/Notifications/CompileSuccess.CompileSuccess"));
+			if (IsValid(SuccessSound))
+			{
+				GEditor->PlayEditorSound(SuccessSound);
+			}
+		}
+#endif
+	}
+
 	return Result;
 }
 
@@ -75,9 +104,9 @@ static bool MatchCategory(const FString& Category, const FString& Domain)
 FAgentFrameworkActionResult FAgentFrameworkDiscoveryActions::ExecuteGetToolInfo(const TSharedRef<FJsonObject>& Params, FAgentFrameworkActionResult& Result)
 {
 	FString TargetToolName;
-	if (!Params->TryGetStringField(TEXT("tool_name"), TargetToolName) || TargetToolName.IsEmpty())
+	TSharedPtr<FJsonObject> ParamsPtr = Params;
+	if (!UAgentFrameworkActionUtils::TryGetStringParam(ParamsPtr, TEXT("tool_name"), TargetToolName, Result.Errors, true))
 	{
-		Result.Errors.Add(TEXT("Missing 'tool_name' parameter."));
 		return Result;
 	}
 
@@ -106,7 +135,8 @@ FAgentFrameworkActionResult FAgentFrameworkDiscoveryActions::ExecuteGetToolInfo(
 			if (FJsonSerializer::Deserialize(Reader, JsonObj) && JsonObj.IsValid())
 			{
 				const TArray<TSharedPtr<FJsonValue>>* ToolsArray = nullptr;
-				if (JsonObj->TryGetArrayField(TEXT("tools"), ToolsArray))
+				TArray<FString> TempErrors;
+				if (UAgentFrameworkActionUtils::TryGetArrayParam(JsonObj, TEXT("tools"), ToolsArray, TempErrors, false) && ToolsArray)
 				{
 					TSharedPtr<FJsonObject> TargetTool = nullptr;
 					for (const auto& ToolVal : *ToolsArray)
@@ -115,7 +145,7 @@ FAgentFrameworkActionResult FAgentFrameworkDiscoveryActions::ExecuteGetToolInfo(
 						if (ToolObj.IsValid())
 						{
 							FString Name;
-							if (ToolObj->TryGetStringField(TEXT("name"), Name) && Name == TargetToolName)
+							if (UAgentFrameworkActionUtils::TryGetStringParam(ToolObj, TEXT("name"), Name, TempErrors, false) && Name == TargetToolName)
 							{
 								TargetTool = ToolObj;
 							}
@@ -131,7 +161,7 @@ FAgentFrameworkActionResult FAgentFrameworkDiscoveryActions::ExecuteGetToolInfo(
 							if (ToolObj.IsValid())
 							{
 								FString Name;
-								if (ToolObj->TryGetStringField(TEXT("name"), Name) && Name != TargetToolName)
+								if (UAgentFrameworkActionUtils::TryGetStringParam(ToolObj, TEXT("name"), Name, TempErrors, false) && Name != TargetToolName)
 								{
 									RelatedTools.Add(Name);
 								}
@@ -172,9 +202,9 @@ FAgentFrameworkActionResult FAgentFrameworkDiscoveryActions::ExecuteGetToolInfo(
 FAgentFrameworkActionResult FAgentFrameworkDiscoveryActions::ExecuteListToolsInCategory(const TSharedRef<FJsonObject>& Params, FAgentFrameworkActionResult& Result)
 {
 	FString Category;
-	if (!Params->TryGetStringField(TEXT("category"), Category) || Category.IsEmpty())
+	TSharedPtr<FJsonObject> ParamsPtr = Params;
+	if (!UAgentFrameworkActionUtils::TryGetStringParam(ParamsPtr, TEXT("category"), Category, Result.Errors, true))
 	{
-		Result.Errors.Add(TEXT("Missing 'category' parameter."));
 		return Result;
 	}
 
@@ -203,11 +233,12 @@ FAgentFrameworkActionResult FAgentFrameworkDiscoveryActions::ExecuteListToolsInC
 			if (FJsonSerializer::Deserialize(Reader, JsonObj) && JsonObj.IsValid())
 			{
 				FString Domain;
-				JsonObj->TryGetStringField(TEXT("domain"), Domain);
+				TArray<FString> TempErrors;
+				UAgentFrameworkActionUtils::TryGetStringParam(JsonObj, TEXT("domain"), Domain, TempErrors, false);
 				if (MatchCategory(Category, Domain))
 				{
 					const TArray<TSharedPtr<FJsonValue>>* ToolsArray = nullptr;
-					if (JsonObj->TryGetArrayField(TEXT("tools"), ToolsArray))
+					if (UAgentFrameworkActionUtils::TryGetArrayParam(JsonObj, TEXT("tools"), ToolsArray, TempErrors, false) && ToolsArray)
 					{
 						for (const auto& ToolVal : *ToolsArray)
 						{
@@ -215,8 +246,8 @@ FAgentFrameworkActionResult FAgentFrameworkDiscoveryActions::ExecuteListToolsInC
 							if (ToolObj.IsValid())
 							{
 								FString Name, Description;
-								ToolObj->TryGetStringField(TEXT("name"), Name);
-								ToolObj->TryGetStringField(TEXT("description"), Description);
+								UAgentFrameworkActionUtils::TryGetStringParam(ToolObj, TEXT("name"), Name, TempErrors, false);
+								UAgentFrameworkActionUtils::TryGetStringParam(ToolObj, TEXT("description"), Description, TempErrors, false);
 
 								TSharedPtr<FJsonObject> SummaryObj = MakeShared<FJsonObject>();
 								SummaryObj->SetStringField(TEXT("name"), Name);

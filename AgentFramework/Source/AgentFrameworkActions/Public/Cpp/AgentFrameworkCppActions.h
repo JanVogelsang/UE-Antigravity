@@ -29,4 +29,8 @@ private:
 
     /** Write a file to disk with backup */
     bool WriteFileWithBackup(const FString& FilePath, const FString& Content);
+
+    /** Play success notification sound */
+    void PlaySuccessSound();
 };
+

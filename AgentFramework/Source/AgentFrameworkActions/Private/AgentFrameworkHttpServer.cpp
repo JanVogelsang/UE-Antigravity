@@ -46,6 +46,7 @@
 #include "Viewport/AgentFrameworkViewportActions.h"
 #include "Widget/AgentFrameworkWidgetActions.h"
 #include "DataAsset/AgentFrameworkDataAssetActions.h"
+#include "MetaSound/AgentFrameworkMetaSoundActions.h"
 #include "AIAssistant/AgentFrameworkAIAssistantActions.h"
 #include "AIAssistant/AIAssistantBridge.h"
 
@@ -108,6 +109,7 @@ void FAgentFrameworkHttpServer::RegisterAllExecutors(TSharedRef<FAgentFrameworkA
 	InRouter->RegisterExecutor(MakeShared<FAgentFrameworkWidgetActions>());
 	InRouter->RegisterExecutor(MakeShared<FAgentFrameworkDataAssetActions>());
 	InRouter->RegisterExecutor(MakeShared<FAgentFrameworkAIAssistantActions>());
+	InRouter->RegisterExecutor(MakeShared<FAgentFrameworkMetaSoundActions>());
 }
 
 bool FAgentFrameworkHttpServer::HandleListToolsRequest(const FHttpServerRequest& Request, const FHttpResultCallback& OnComplete)
@@ -380,18 +382,26 @@ bool FAgentFrameworkHttpServer::HandleExecuteToolRequest(const FHttpServerReques
 		ToolCall.InputParams = MakeShared<FJsonObject>();
 	}
 
-	AsyncTask(ENamedThreads::GameThread, [ToolCall, OnComplete]() {
+	if (!ActionRouter.IsValid())
+	{
 		FAgentFrameworkActionResult Result;
-		if (ActionRouter.IsValid())
-		{
-			Result = ActionRouter->RouteToolCall(ToolCall);
-		}
-		else
-		{
-			Result.bSuccess = false;
-			Result.ResultMessage = TEXT("Action Router not available");
-		}
+		Result.bSuccess = false;
+		Result.ResultMessage = TEXT("Action Router not available");
 
+		TSharedPtr<FJsonObject> ResultObj = MakeShared<FJsonObject>();
+		ResultObj->SetBoolField(TEXT("bSuccess"), Result.bSuccess);
+		ResultObj->SetStringField(TEXT("ResultMessage"), Result.ResultMessage);
+
+		FString ResponseString;
+		TSharedRef<TJsonWriter<>> Writer = TJsonWriterFactory<>::Create(&ResponseString);
+		FJsonSerializer::Serialize(ResultObj.ToSharedRef(), Writer);
+
+		TUniquePtr<FHttpServerResponse> Response = FHttpServerResponse::Create(ResponseString, TEXT("application/json"));
+		OnComplete(MoveTemp(Response));
+		return true;
+	}
+
+	ActionRouter->RouteToolCallAsync(ToolCall, [OnComplete, ToolCall](FAgentFrameworkActionResult Result) {
 		// Intercept start_pie_session to wait for it to actually start
 		if (ToolCall.ToolName == TEXT("start_pie_session") && Result.bSuccess)
 		{

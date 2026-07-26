@@ -26,7 +26,7 @@ pip install -r requirements.txt
 ### 2. Configuration
 The paths used to launch Unreal Engine are defined at the top of `conftest.py`:
 - `UNREAL_PATH`: Absolute path to `UnrealEditor-Cmd.exe` (default: `D:\UE_5.7\Engine\Binaries\Win64\UnrealEditor-Cmd.exe`).
-- `PROJECT_PATH`: Absolute path to the `.uproject` file (default: `c:\Users\Jan\Documents\Unreal Projects\Tau.uproject`).
+- `PROJECT_PATH`: Absolute path to the `.uproject` file (default: `C:\Users\janv1\Documents\Unreal Projects\AgentFrameworkTest\AgentFrameworkTest.uproject`).
 
 ### 3. Running the Tests
 To run the integration tests:

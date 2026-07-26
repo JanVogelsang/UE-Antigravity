@@ -1,86 +1,43 @@
-import unreal
-import os
+import json
+import urllib.request
+import urllib.error
 
-# Standard prefix mapping based on Unreal Engine 5 recommended naming conventions
-PREFIXES = {
-    "Blueprint": "BP_",
-    "Texture2D": "T_",
-    "Material": "M_",
-    "MaterialInstanceConstant": "MI_",
-    "MaterialInstance": "MI_",
-    "StaticMesh": "SM_",
-    "SkeletalMesh": "SK_",
-    "NiagaraSystem": "NS_",
-    "NiagaraEmitter": "NE_",
-    "SoundCue": "SC_",
-    "SoundWave": "S_",
-    "World": "L_",
-    "WidgetBlueprint": "WBP_"
-}
+EDITOR_HTTP_URL = "http://127.0.0.1:18777/api/execute_tool"
 
-def clean_naming_conventions(folder_path):
+def clean_naming_conventions(folder_path, recursive=True, dry_run=False):
     """
-    Scans the specified folder recursively and renames assets to match UE5 naming conventions.
+    Scans folder_path and enforces UE5 asset naming conventions using the native C++ action tool.
     """
-    if not unreal.EditorAssetLibrary.does_directory_exist(folder_path):
-        unreal.log_error(f"Directory {folder_path} does not exist.")
-        return
+    payload = {
+        "tool_name": "enforce_naming_conventions",
+        "parameters": {
+            "folder_path": folder_path,
+            "recursive": recursive,
+            "dry_run": dry_run
+        }
+    }
 
-    assets = unreal.EditorAssetLibrary.list_assets(folder_path, recursive=True)
-    unreal.log(f"Scanning {len(assets)} assets in {folder_path} for naming conventions...")
+    req = urllib.request.Request(
+        EDITOR_HTTP_URL,
+        data=json.dumps(payload).encode("utf-8"),
+        headers={"Content-Type": "application/json"}
+    )
 
-    renamed_count = 0
-
-    for asset_path in assets:
-        asset_data = unreal.EditorAssetLibrary.find_asset_data(asset_path)
-        if not asset_data:
-            continue
-
-        # Support both older and newer UE5 asset class resolution
-        asset_class = str(asset_data.asset_class_path.asset_name) if hasattr(asset_data, 'asset_class_path') else str(asset_data.asset_class)
-        prefix = PREFIXES.get(asset_class)
-
-        if not prefix:
-            continue
-
-        asset_name = str(asset_data.asset_name)
-
-        # Skip if already correctly prefixed
-        if asset_name.startswith(prefix):
-            continue
-
-        # Strip existing incorrect/case-insensitive prefixes if they exist
-        temp_name = asset_name
-        if asset_name.lower().startswith(prefix.lower()):
-            temp_name = asset_name[len(prefix):]
-
-        if not temp_name:
-            unreal.log_warning(f"Asset name would be empty after stripping prefix: {asset_name}. Skipping.")
-            continue
-
-        new_asset_name = prefix + temp_name
-        if new_asset_name == asset_name:
-            continue
-
-        parent_path = os.path.dirname(asset_path).replace("\\", "/")
-        new_asset_path = f"{parent_path}/{new_asset_name}"
-
-        # Handle naming conflicts by appending numeric suffixes
-        suffix_counter = 1
-        while unreal.EditorAssetLibrary.does_asset_exist(new_asset_path):
-            suffix = f"_{suffix_counter:02d}"
-            new_asset_path = f"{parent_path}/{new_asset_name}{suffix}"
-            suffix_counter += 1
-
-        unreal.log(f"Renaming: {asset_path} -> {new_asset_path}")
-        if unreal.EditorAssetLibrary.rename_asset(asset_path, new_asset_path):
-            renamed_count += 1
-        else:
-            unreal.log_error(f"Failed to rename: {asset_path}")
-
-    unreal.log(f"Completed clean_naming_conventions. Renamed {renamed_count} assets.")
+    try:
+        with urllib.request.urlopen(req, timeout=60) as response:
+            res_data = json.loads(response.read().decode("utf-8"))
+            if res_data.get("bSuccess"):
+                renamed_count = res_data.get("renamed_assets_count", 0)
+                print(f"Success: Enforced naming conventions on {folder_path}. Renamed: {renamed_count}")
+                return True
+            else:
+                print(f"Error: {res_data.get('Errors')}")
+                return False
+    except urllib.error.URLError as e:
+        print(f"Failed to connect to Editor HTTP server on port 18777: {e}")
+        return False
 
 if __name__ == "__main__":
     # Example usage:
-    # clean_naming_conventions("/Game/PathToFolder")
+    # clean_naming_conventions("/Game/TestFolder")
     pass

@@ -1,49 +1,50 @@
-import unreal
+import json
+import urllib.request
+import urllib.error
+
+EDITOR_HTTP_URL = "http://127.0.0.1:18777/api/execute_tool"
 
 def bulk_replace_references(source_path, target_path):
     """
-    Consolidates assets by replacing all references to the source asset
-    with references to the target asset, then deletes the source asset.
+    Consolidates assets by replacing all references to source_path with target_path,
+    then deletes source_path via the native C++ MCP tool 'consolidate_asset_references'.
     """
-    if not unreal.EditorAssetLibrary.does_asset_exist(source_path):
-        unreal.log_error(f"Source asset '{source_path}' does not exist.")
-        return False
-
-    if not unreal.EditorAssetLibrary.does_asset_exist(target_path):
-        unreal.log_error(f"Target asset '{target_path}' does not exist.")
+    if not source_path or not target_path:
+        print("Error: Both source_path and target_path must be specified.")
         return False
 
     if source_path == target_path:
-        unreal.log_warning("Source and target assets are the same. Skipping consolidation.")
+        print("Warning: Source and target paths are identical. Skipping.")
         return True
 
-    unreal.log(f"Loading source asset: {source_path}")
-    source_asset = unreal.EditorAssetLibrary.load_asset(source_path)
-    if not source_asset:
-        unreal.log_error(f"Failed to load source asset: {source_path}")
-        return False
+    payload = {
+        "tool_name": "consolidate_asset_references",
+        "parameters": {
+            "source_asset_path": source_path,
+            "target_asset_path": target_path
+        }
+    }
 
-    unreal.log(f"Loading target asset: {target_path}")
-    target_asset = unreal.EditorAssetLibrary.load_asset(target_path)
-    if not target_asset:
-        unreal.log_error(f"Failed to load target asset: {target_path}")
-        return False
+    req = urllib.request.Request(
+        EDITOR_HTTP_URL,
+        data=json.dumps(payload).encode("utf-8"),
+        headers={"Content-Type": "application/json"}
+    )
 
-    unreal.log(f"Consolidating references from '{source_path}' to '{target_path}'...")
     try:
-        # consolidate_assets replaces all references and deletes the assets in the list
-        success = unreal.EditorAssetLibrary.consolidate_assets(target_asset, [source_asset])
-        if success:
-            unreal.log("Consolidation and reference replacement completed successfully.")
-            return True
-        else:
-            unreal.log_error("Consolidate assets operation failed.")
-            return False
-    except Exception as e:
-        unreal.log_error(f"An error occurred during reference replacement: {e}")
+        with urllib.request.urlopen(req, timeout=30) as response:
+            res_data = json.loads(response.read().decode("utf-8"))
+            if res_data.get("bSuccess"):
+                print(f"Success: {res_data.get('ResultMessage')}")
+                return True
+            else:
+                print(f"Error: {res_data.get('Errors')}")
+                return False
+    except urllib.error.URLError as e:
+        print(f"Failed to connect to Editor HTTP server on port 18777: {e}")
         return False
 
 if __name__ == "__main__":
     # Example usage:
-    # bulk_replace_references("/Game/OldMaterial", "/Game/NewMaterial")
+    # bulk_replace_references("/Game/OldMat", "/Game/NewMat")
     pass

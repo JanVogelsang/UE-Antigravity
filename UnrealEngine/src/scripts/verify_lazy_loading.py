@@ -10,7 +10,7 @@ import sys
 def main():
     # 1. Determine target project directory
     user_profile = os.environ.get("USERPROFILE") or os.path.expanduser("~")
-    tau_game_dir = os.path.join(user_profile, "Documents", "Unreal Projects", "tau-game")
+    tau_game_dir = os.path.join(user_profile, "Documents", "Unreal Projects", "AgentFrameworkTest")
     if "TARGET_PROJECT_DIR" in os.environ:
         tau_game_dir = os.environ["TARGET_PROJECT_DIR"]
 

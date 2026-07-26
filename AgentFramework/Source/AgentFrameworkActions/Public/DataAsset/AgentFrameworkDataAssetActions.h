@@ -28,4 +28,7 @@ private:
 	FAgentFrameworkActionResult ExecuteCreateDataAsset(const TSharedRef<FJsonObject>& Params, FAgentFrameworkActionResult& Result);
 	FAgentFrameworkActionResult ExecuteSetDataAssetProperties(const TSharedRef<FJsonObject>& Params, FAgentFrameworkActionResult& Result);
 	FAgentFrameworkActionResult ExecuteGetDataAssetInfo(const TSharedRef<FJsonObject>& Params, FAgentFrameworkActionResult& Result);
+
+	void PlaySuccessSound();
 };
+

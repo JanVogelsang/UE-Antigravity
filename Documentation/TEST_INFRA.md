@@ -55,7 +55,7 @@ UE-AgentFramework/
 
 To execute the E2E tests:
 1. Ensure Unreal Engine 5.7 is installed at `D:\UE_5.7` (with `UnrealEditor-Cmd.exe` located at `D:\UE_5.7\Engine\Binaries\Win64\UnrealEditor-Cmd.exe`).
-2. The target game project must be located at `c:\Users\Jan\Documents\Unreal Projects\Tau.uproject`.
+2. The target game project must be located at `$env:USERPROFILE\Documents\Unreal Projects\AgentFrameworkTest\AgentFrameworkTest.uproject`.
 3. Install Python 3.10+ and install dependencies:
    ```bash
    pip install -r Tests/requirements.txt

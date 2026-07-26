@@ -74,6 +74,18 @@ private:
 
 	FAgentFrameworkActionResult ExecuteModifyBlueprint(const TSharedRef<FJsonObject>& Params, FAgentFrameworkActionResult& Result);
 
+	/** Disconnect one or all pin connections on a Blueprint graph node. */
+	FAgentFrameworkActionResult ExecuteDisconnectPins(const TSharedRef<FJsonObject>& Params, FAgentFrameworkActionResult& Result);
+
+	/** Mutate properties on design-time sub-objects (UMG WidgetTree children, SCS component templates, CDO sub-objects). */
+	FAgentFrameworkActionResult ExecuteModifySubobject(const TSharedRef<FJsonObject>& Params, FAgentFrameworkActionResult& Result);
+
+	/** Configure default network replication settings on Blueprint Actor CDO. */
+	FAgentFrameworkActionResult ExecuteConfigureActorReplication(const TSharedRef<FJsonObject>& Params, FAgentFrameworkActionResult& Result);
+
+	/** Configure member variable replication settings and auto-generate RepNotify callback graphs. */
+	FAgentFrameworkActionResult ExecuteSetVariableReplication(const TSharedRef<FJsonObject>& Params, FAgentFrameworkActionResult& Result);
+
 	// =========================================================================
 	// Helpers / Utilities
 	// =========================================================================

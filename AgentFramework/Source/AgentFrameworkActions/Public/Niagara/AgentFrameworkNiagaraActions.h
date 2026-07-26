@@ -6,7 +6,6 @@
 #include "AgentFrameworkInterfaces.h"
 
 class UNiagaraSystem;
-class UNiagaraEmitter;
 class UNiagaraGraph;
 
 class AGENTFRAMEWORKACTIONS_API FAgentFrameworkNiagaraActions : public IAgentFrameworkActionExecutor
@@ -29,8 +28,13 @@ private:
 	FAgentFrameworkActionResult ExecuteSetModulePin(const TSharedRef<FJsonObject>& Params, FAgentFrameworkActionResult& Result);
 	FAgentFrameworkActionResult ExecuteCompileSystem(const TSharedRef<FJsonObject>& Params, FAgentFrameworkActionResult& Result);
 	FAgentFrameworkActionResult ExecuteCaptureIsolated(const TSharedRef<FJsonObject>& Params, FAgentFrameworkActionResult& Result);
+	FAgentFrameworkActionResult ExecuteSetNiagaraParameter(const TSharedRef<FJsonObject>& Params, FAgentFrameworkActionResult& Result);
 
 	// Helper Graph-Editing and Compile Methods
 	UNiagaraGraph* FindGraphForPhase(UNiagaraSystem* System, const FString& EmitterName, const FString& PhaseStr, FString& OutError) const;
 	bool WaitAndReportCompile(UNiagaraSystem* System, FAgentFrameworkActionResult& Result) const;
+
+	// Audio feedback helper
+	void PlaySuccessSound();
 };
+

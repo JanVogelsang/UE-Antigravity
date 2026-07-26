@@ -22,4 +22,7 @@ private:
     FAgentFrameworkActionResult ExecuteAddMaterialExpression(const TSharedRef<FJsonObject>& Params, FAgentFrameworkActionResult& Result);
     FAgentFrameworkActionResult ExecuteConnectMaterialProperty(const TSharedRef<FJsonObject>& Params, FAgentFrameworkActionResult& Result);
     FAgentFrameworkActionResult ExecuteCaptureMaterial(const TSharedRef<FJsonObject>& Params, FAgentFrameworkActionResult& Result);
+    FAgentFrameworkActionResult ExecuteCreatePBRMaterialFromTextures(const TSharedRef<FJsonObject>& Params, FAgentFrameworkActionResult& Result);
+
+    void PlaySuccessSound();
 };

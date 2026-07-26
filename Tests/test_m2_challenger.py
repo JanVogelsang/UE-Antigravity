@@ -186,7 +186,7 @@ def test_inject_blueprint_nodes_t3d_guid_collision_prevention(mock_agent_client)
         "End Object"
     )
     
-    # We target BP_RoundPawn because it exists in the real tau-game workspace
+    # We target BP_RoundPawn because it is set up in the testing workspace
     res = mock_agent_client.call_cpp_tool(
         "inject_blueprint_nodes_t3d",
         {

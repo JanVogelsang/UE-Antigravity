@@ -7,8 +7,6 @@ ExternalServer/.venv/
 ExternalServer/ast_cache.db
 ExternalServer/vector_db_5.8/
 
-# Locally generated agent environment skill
-skills/unreal-env/
 
 # Git hook log files
 .githooks/*.log

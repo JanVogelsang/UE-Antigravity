@@ -2,6 +2,7 @@
 
 #include "Animation/AgentFrameworkAnimationActions.h"
 #include "AgentFrameworkCoreModule.h"
+#include "AgentFrameworkActionUtils.h"
 
 // Animation runtime
 #include "Animation/AnimBlueprint.h"
@@ -17,7 +18,6 @@
 #include "PoseSearch/PoseSearchDatabase.h"
 #include "PoseSearch/PoseSearchSchema.h"
 #include "Animation/TrajectoryTypes.h"
-#include "PoseSearch/PoseSearchFeatureChannel.h"
 
 // IK Rig & Retargeter
 #include "Rig/IKRigDefinition.h"
@@ -27,12 +27,14 @@
 #include "Retargeter/IKRetargetChainMapping.h"
 
 #if WITH_EDITOR
+#include "Editor.h"
 #include "RigEditor/IKRigController.h"
 #include "Retargeter/IKRetargeter.h"
 #include "RetargetEditor/IKRetargeterController.h"
 #include "ControlRigBlueprintLegacy.h"
 #include "RigVMModel/RigVMController.h"
 #include "RigVMModel/RigVMGraph.h"
+#include "Sound/SoundBase.h"
 #endif
 
 // Motion Warping
@@ -65,7 +67,6 @@ public:
 #include "Factories/FbxFactory.h"
 #include "Factories/FbxImportUI.h"
 #include "Factories/FbxAnimSequenceImportData.h"
-#include "FileHelpers.h"
 #include "UObject/SavePackage.h"
 #include "Misc/PackageName.h"
 
@@ -74,7 +75,6 @@ public:
 #include "Engine/SCS_Node.h"
 #include "Engine/SimpleConstructionScript.h"
 #include "Components/SkeletalMeshComponent.h"
-#include "Kismet2/BlueprintEditorUtils.h"
 #include "Kismet2/KismetEditorUtilities.h"
 
 // JSON
@@ -82,9 +82,6 @@ public:
 #include "Dom/JsonValue.h"
 #include "Serialization/JsonSerializer.h"
 #include "Serialization/JsonWriter.h"
-
-// Misc
-#include "ScopedTransaction.h"
 
 // ============================================================================
 // Statics / Lifecycle
@@ -125,12 +122,8 @@ bool FAgentFrameworkAnimationActions::ValidateParams(const TSharedRef<FJsonObjec
 		return true;
 	}
 
-	if (!Params->HasField(TEXT("asset_path")))
-	{
-		OutErrors.Add(TEXT("Missing required field: asset_path"));
-		return false;
-	}
-	return true;
+	FString AssetPath;
+	return UAgentFrameworkActionUtils::TryGetStringParam(Params, TEXT("asset_path"), AssetPath, OutErrors, true);
 }
 
 // ============================================================================
@@ -145,21 +138,30 @@ FAgentFrameworkActionResult FAgentFrameworkAnimationActions::ExecuteAction(const
 	FString ToolName;
 	Params->TryGetStringField(TEXT("_tool_name"), ToolName);
 
-	if (ToolName == TEXT("create_anim_blueprint"))      return ExecuteCreateAnimBlueprint(Params, Result);
-	if (ToolName == TEXT("import_animation_fbx"))       return ExecuteImportAnimationFBX(Params, Result);
-	if (ToolName == TEXT("assign_anim_blueprint"))      return ExecuteAssignAnimBlueprint(Params, Result);
-	if (ToolName == TEXT("create_anim_montage"))        return ExecuteCreateAnimMontage(Params, Result);
-	if (ToolName == TEXT("get_anim_info"))              return ExecuteGetAnimInfo(Params, Result);
-	if (ToolName == TEXT("configure_motion_matching"))  return ExecuteConfigureMotionMatching(Params, Result);
-	if (ToolName == TEXT("create_ik_rig"))              return ExecuteCreateIKRig(Params, Result);
-	if (ToolName == TEXT("create_ik_retargeter"))       return ExecuteCreateIKRetargeter(Params, Result);
-	if (ToolName == TEXT("create_control_rig"))         return ExecuteCreateControlRig(Params, Result);
-	if (ToolName == TEXT("setup_motion_warping"))       return ExecuteSetupMotionWarping(Params, Result);
-	if (ToolName == TEXT("create_blend_space"))         return ExecuteCreateBlendSpace(Params, Result);
-	if (ToolName == TEXT("configure_anim_montage"))     return ExecuteConfigureAnimMontage(Params, Result);
-	if (ToolName == TEXT("map_live_link_source"))       return ExecuteMapLiveLinkSource(Params, Result);
+	if (ToolName == TEXT("create_anim_blueprint"))      Result = ExecuteCreateAnimBlueprint(Params, Result);
+	else if (ToolName == TEXT("import_animation_fbx"))  Result = ExecuteImportAnimationFBX(Params, Result);
+	else if (ToolName == TEXT("assign_anim_blueprint")) Result = ExecuteAssignAnimBlueprint(Params, Result);
+	else if (ToolName == TEXT("create_anim_montage"))   Result = ExecuteCreateAnimMontage(Params, Result);
+	else if (ToolName == TEXT("get_anim_info"))         Result = ExecuteGetAnimInfo(Params, Result);
+	else if (ToolName == TEXT("configure_motion_matching")) Result = ExecuteConfigureMotionMatching(Params, Result);
+	else if (ToolName == TEXT("create_ik_rig"))         Result = ExecuteCreateIKRig(Params, Result);
+	else if (ToolName == TEXT("create_ik_retargeter"))  Result = ExecuteCreateIKRetargeter(Params, Result);
+	else if (ToolName == TEXT("create_control_rig"))    Result = ExecuteCreateControlRig(Params, Result);
+	else if (ToolName == TEXT("setup_motion_warping"))  Result = ExecuteSetupMotionWarping(Params, Result);
+	else if (ToolName == TEXT("create_blend_space"))    Result = ExecuteCreateBlendSpace(Params, Result);
+	else if (ToolName == TEXT("configure_anim_montage")) Result = ExecuteConfigureAnimMontage(Params, Result);
+	else if (ToolName == TEXT("map_live_link_source"))  Result = ExecuteMapLiveLinkSource(Params, Result);
+	else
+	{
+		Result.Errors.Add(FString::Printf(TEXT("Unknown Animation tool: '%s'"), *ToolName));
+		return Result;
+	}
 
-	Result.Errors.Add(FString::Printf(TEXT("Unknown Animation tool: '%s'"), *ToolName));
+	if (Result.bSuccess)
+	{
+		PlaySuccessSound();
+	}
+
 	return Result;
 }
 
@@ -169,11 +171,20 @@ FAgentFrameworkActionResult FAgentFrameworkAnimationActions::ExecuteAction(const
 
 FAgentFrameworkActionResult FAgentFrameworkAnimationActions::ExecuteCreateAnimBlueprint(const TSharedRef<FJsonObject>& Params, FAgentFrameworkActionResult& Result)
 {
-	FString AssetPath    = Params->GetStringField(TEXT("asset_path"));
-	FString SkeletonPath = Params->GetStringField(TEXT("skeleton_path"));
+	FString AssetPath;
+	if (!UAgentFrameworkActionUtils::TryGetStringParam(Params, TEXT("asset_path"), AssetPath, Result.Errors, true))
+	{
+		return Result;
+	}
+
+	FString SkeletonPath;
+	if (!UAgentFrameworkActionUtils::TryGetStringParam(Params, TEXT("skeleton_path"), SkeletonPath, Result.Errors, true))
+	{
+		return Result;
+	}
 
 	USkeleton* Skeleton = LoadObject<USkeleton>(nullptr, *SkeletonPath);
-	if (!Skeleton)
+	if (!IsValid(Skeleton))
 	{
 		Result.Errors.Add(FString::Printf(TEXT("Skeleton not found: '%s'. Ensure the skeleton asset exists (search_assets can help locate it)."), *SkeletonPath));
 		return Result;
@@ -185,24 +196,33 @@ FAgentFrameworkActionResult FAgentFrameworkAnimationActions::ExecuteCreateAnimBl
 	IAssetTools& AssetTools = FModuleManager::LoadModuleChecked<FAssetToolsModule>("AssetTools").Get();
 
 	UAnimBlueprintFactory* Factory = NewObject<UAnimBlueprintFactory>();
+	if (!IsValid(Factory))
+	{
+		Result.Errors.Add(TEXT("Failed to create UAnimBlueprintFactory."));
+		return Result;
+	}
 	Factory->TargetSkeleton = Skeleton;
 	Factory->ParentClass = UAnimInstance::StaticClass();
 
 	// Allow parent class override
 	FString ParentClassName;
-	if (Params->TryGetStringField(TEXT("parent_class"), ParentClassName) && !ParentClassName.IsEmpty())
+	if (UAgentFrameworkActionUtils::TryGetStringParam(Params, TEXT("parent_class"), ParentClassName, Result.Errors, false) && !ParentClassName.IsEmpty())
 	{
 		UClass* ParentClass = FindFirstObject<UClass>(*ParentClassName, EFindFirstObjectOptions::None);
-		if (ParentClass && ParentClass->IsChildOf(UAnimInstance::StaticClass()))
+		if (IsValid(ParentClass) && ParentClass->IsChildOf(UAnimInstance::StaticClass()))
+		{
 			Factory->ParentClass = ParentClass;
+		}
 		else
-			Result.Warnings.Add(FString::Printf(TEXT("Parent class '%s' not found or not an AnimInstance subclass â€” using default UAnimInstance."), *ParentClassName));
+		{
+			Result.Warnings.Add(FString::Printf(TEXT("Parent class '%s' not found or not an AnimInstance subclass — using default UAnimInstance."), *ParentClassName));
+		}
 	}
 
 	UObject* NewAsset = AssetTools.CreateAsset(AssetName, PackagePath, UAnimBlueprint::StaticClass(), Factory);
 	UAnimBlueprint* NewAnimBP = Cast<UAnimBlueprint>(NewAsset);
 
-	if (!NewAnimBP)
+	if (!IsValid(NewAnimBP))
 	{
 		Result.Errors.Add(FString::Printf(TEXT("Failed to create Animation Blueprint at '%s'."), *AssetPath));
 		return Result;
@@ -210,13 +230,16 @@ FAgentFrameworkActionResult FAgentFrameworkAnimationActions::ExecuteCreateAnimBl
 
 	// Save
 	UPackage* Package = NewAnimBP->GetOutermost();
-	Package->MarkPackageDirty();
-	FString PackageFilename;
-	if (FPackageName::TryConvertLongPackageNameToFilename(Package->GetName(), PackageFilename, FPackageName::GetAssetPackageExtension()))
+	if (IsValid(Package))
 	{
-		FSavePackageArgs SaveArgs;
-		SaveArgs.TopLevelFlags = RF_Standalone;
-		UPackage::SavePackage(Package, NewAnimBP, *PackageFilename, SaveArgs);
+		Package->MarkPackageDirty();
+		FString PackageFilename;
+		if (FPackageName::TryConvertLongPackageNameToFilename(Package->GetName(), PackageFilename, FPackageName::GetAssetPackageExtension()))
+		{
+			FSavePackageArgs SaveArgs;
+			SaveArgs.TopLevelFlags = RF_Standalone;
+			UPackage::SavePackage(Package, NewAnimBP, *PackageFilename, SaveArgs);
+		}
 	}
 	FAssetRegistryModule::AssetCreated(NewAnimBP);
 
@@ -239,10 +262,20 @@ FAgentFrameworkActionResult FAgentFrameworkAnimationActions::ExecuteCreateAnimBl
 
 FAgentFrameworkActionResult FAgentFrameworkAnimationActions::ExecuteImportAnimationFBX(const TSharedRef<FJsonObject>& Params, FAgentFrameworkActionResult& Result)
 {
-	FString SourceFile   = Params->GetStringField(TEXT("source_file"));
-	FString SkeletonPath = Params->GetStringField(TEXT("skeleton_path"));
-	FString DestPath     = TEXT("/Game/Animations");
-	Params->TryGetStringField(TEXT("destination_path"), DestPath);
+	FString SourceFile;
+	if (!UAgentFrameworkActionUtils::TryGetStringParam(Params, TEXT("source_file"), SourceFile, Result.Errors, true))
+	{
+		return Result;
+	}
+
+	FString SkeletonPath;
+	if (!UAgentFrameworkActionUtils::TryGetStringParam(Params, TEXT("skeleton_path"), SkeletonPath, Result.Errors, true))
+	{
+		return Result;
+	}
+
+	FString DestPath = TEXT("/Game/Animations");
+	UAgentFrameworkActionUtils::TryGetStringParam(Params, TEXT("destination_path"), DestPath, Result.Errors, false);
 
 	if (!FPaths::FileExists(SourceFile))
 	{
@@ -251,7 +284,7 @@ FAgentFrameworkActionResult FAgentFrameworkAnimationActions::ExecuteImportAnimat
 	}
 
 	USkeleton* Skeleton = LoadObject<USkeleton>(nullptr, *SkeletonPath);
-	if (!Skeleton)
+	if (!IsValid(Skeleton))
 	{
 		Result.Errors.Add(FString::Printf(TEXT("Skeleton not found: '%s'."), *SkeletonPath));
 		return Result;
@@ -259,13 +292,29 @@ FAgentFrameworkActionResult FAgentFrameworkAnimationActions::ExecuteImportAnimat
 
 	// Build import task
 	UFbxFactory* FbxFactory = NewObject<UFbxFactory>();
-	FbxFactory->ImportUI->bImportMesh = false;
-	FbxFactory->ImportUI->bImportAnimations = true;
-	FbxFactory->ImportUI->bImportTextures = false;
-	FbxFactory->ImportUI->AnimSequenceImportData->bImportCustomAttribute = true;
-	FbxFactory->ImportUI->Skeleton = Skeleton;
+	if (!IsValid(FbxFactory))
+	{
+		Result.Errors.Add(TEXT("Failed to create UFbxFactory."));
+		return Result;
+	}
+	if (IsValid(FbxFactory->ImportUI))
+	{
+		FbxFactory->ImportUI->bImportMesh = false;
+		FbxFactory->ImportUI->bImportAnimations = true;
+		FbxFactory->ImportUI->bImportTextures = false;
+		if (IsValid(FbxFactory->ImportUI->AnimSequenceImportData))
+		{
+			FbxFactory->ImportUI->AnimSequenceImportData->bImportCustomAttribute = true;
+		}
+		FbxFactory->ImportUI->Skeleton = Skeleton;
+	}
 
 	UAssetImportTask* Task = NewObject<UAssetImportTask>();
+	if (!IsValid(Task))
+	{
+		Result.Errors.Add(TEXT("Failed to create UAssetImportTask."));
+		return Result;
+	}
 	Task->Filename        = SourceFile;
 	Task->DestinationPath = DestPath;
 	Task->bAutomated      = true;
@@ -274,15 +323,17 @@ FAgentFrameworkActionResult FAgentFrameworkAnimationActions::ExecuteImportAnimat
 	Task->Factory         = FbxFactory;
 
 	FString AssetName;
-	if (Params->TryGetStringField(TEXT("asset_name"), AssetName) && !AssetName.IsEmpty())
+	if (UAgentFrameworkActionUtils::TryGetStringParam(Params, TEXT("asset_name"), AssetName, Result.Errors, false) && !AssetName.IsEmpty())
+	{
 		Task->DestinationName = AssetName;
+	}
 
 	IAssetTools& AssetTools = FModuleManager::LoadModuleChecked<FAssetToolsModule>("AssetTools").Get();
 	AssetTools.ImportAssetTasks({Task});
 
 	if (Task->ImportedObjectPaths.Num() == 0)
 	{
-		Result.Errors.Add(FString::Printf(TEXT("FBX animation import failed â€” no assets created. Check: file is valid FBX with animation data, skeleton bone names match the source rig. Source: '%s'"), *SourceFile));
+		Result.Errors.Add(FString::Printf(TEXT("FBX animation import failed — no assets created. Check: file is valid FBX with animation data, skeleton bone names match the source rig. Source: '%s'"), *SourceFile));
 		return Result;
 	}
 
@@ -292,7 +343,9 @@ FAgentFrameworkActionResult FAgentFrameworkAnimationActions::ExecuteImportAnimat
 		*FString::Join(Task->ImportedObjectPaths, TEXT("\n")));
 
 	for (const FString& Path : Task->ImportedObjectPaths)
+	{
 		Result.ModifiedAssets.Add(Path);
+	}
 
 	return Result;
 }
@@ -303,12 +356,26 @@ FAgentFrameworkActionResult FAgentFrameworkAnimationActions::ExecuteImportAnimat
 
 FAgentFrameworkActionResult FAgentFrameworkAnimationActions::ExecuteAssignAnimBlueprint(const TSharedRef<FJsonObject>& Params, FAgentFrameworkActionResult& Result)
 {
-	FString AssetPath      = Params->GetStringField(TEXT("asset_path"));
-	FString ComponentName  = Params->GetStringField(TEXT("component_name"));
-	FString AnimBPPath     = Params->GetStringField(TEXT("anim_blueprint_path"));
+	FString AssetPath;
+	if (!UAgentFrameworkActionUtils::TryGetStringParam(Params, TEXT("asset_path"), AssetPath, Result.Errors, true))
+	{
+		return Result;
+	}
+
+	FString ComponentName;
+	if (!UAgentFrameworkActionUtils::TryGetStringParam(Params, TEXT("component_name"), ComponentName, Result.Errors, true))
+	{
+		return Result;
+	}
+
+	FString AnimBPPath;
+	if (!UAgentFrameworkActionUtils::TryGetStringParam(Params, TEXT("anim_blueprint_path"), AnimBPPath, Result.Errors, true))
+	{
+		return Result;
+	}
 
 	UBlueprint* Blueprint = LoadObject<UBlueprint>(nullptr, *AssetPath);
-	if (!Blueprint)
+	if (!IsValid(Blueprint))
 	{
 		Result.Errors.Add(FString::Printf(TEXT("Blueprint not found: '%s'"), *AssetPath));
 		return Result;
@@ -316,11 +383,11 @@ FAgentFrameworkActionResult FAgentFrameworkAnimationActions::ExecuteAssignAnimBl
 
 	// Find the SCS node for the SkeletalMeshComponent
 	USCS_Node* TargetNode = nullptr;
-	if (Blueprint->SimpleConstructionScript)
+	if (IsValid(Blueprint->SimpleConstructionScript))
 	{
 		for (USCS_Node* Node : Blueprint->SimpleConstructionScript->GetAllNodes())
 		{
-			if (Node && Node->GetVariableName().ToString() == ComponentName)
+			if (IsValid(Node) && Node->GetVariableName().ToString() == ComponentName)
 			{
 				TargetNode = Node;
 				break;
@@ -328,31 +395,33 @@ FAgentFrameworkActionResult FAgentFrameworkAnimationActions::ExecuteAssignAnimBl
 		}
 	}
 
-	if (!TargetNode)
+	if (!IsValid(TargetNode))
 	{
 		Result.Errors.Add(FString::Printf(TEXT("Component '%s' not found in Blueprint SCS. Use get_blueprint_info to list available components."), *ComponentName));
 		return Result;
 	}
 
 	USkeletalMeshComponent* SKC = Cast<USkeletalMeshComponent>(TargetNode->ComponentTemplate);
-	if (!SKC)
+	if (!IsValid(SKC))
 	{
-		Result.Errors.Add(FString::Printf(TEXT("Component '%s' is not a SkeletalMeshComponent â€” cannot assign an AnimBlueprint."), *ComponentName));
+		Result.Errors.Add(FString::Printf(TEXT("Component '%s' is not a SkeletalMeshComponent — cannot assign an AnimBlueprint."), *ComponentName));
 		return Result;
 	}
 
 	// Load the AnimBlueprint generated class
 	UClass* AnimBPClass = LoadObject<UClass>(nullptr, *AnimBPPath);
-	if (!AnimBPClass)
+	if (!IsValid(AnimBPClass))
 	{
 		// Try appending _C for the generated class
 		FString GeneratedClassPath = AnimBPPath;
 		if (!GeneratedClassPath.EndsWith(TEXT("_C")))
+		{
 			GeneratedClassPath += TEXT("_C");
+		}
 		AnimBPClass = LoadObject<UClass>(nullptr, *GeneratedClassPath);
 	}
 
-	if (!AnimBPClass || !AnimBPClass->IsChildOf(UAnimInstance::StaticClass()))
+	if (!IsValid(AnimBPClass) || !AnimBPClass->IsChildOf(UAnimInstance::StaticClass()))
 	{
 		Result.Errors.Add(FString::Printf(TEXT("Animation Blueprint class not found at '%s'. Ensure it ends with '_C' (the generated class). Example: /Game/Animations/ABP_Char.ABP_Char_C"), *AnimBPPath));
 		return Result;
@@ -362,7 +431,11 @@ FAgentFrameworkActionResult FAgentFrameworkAnimationActions::ExecuteAssignAnimBl
 	SKC->AnimClass = AnimBPClass;
 
 	FKismetEditorUtilities::CompileBlueprint(Blueprint, EBlueprintCompileOptions::SkipGarbageCollection);
-	Blueprint->GetOutermost()->MarkPackageDirty();
+	UPackage* Package = Blueprint->GetOutermost();
+	if (IsValid(Package))
+	{
+		Package->MarkPackageDirty();
+	}
 
 	Result.bSuccess = true;
 	Result.ResultMessage = FString::Printf(TEXT("Assigned AnimBlueprint '%s' to component '%s' in '%s'."), *AnimBPPath, *ComponentName, *AssetPath);
@@ -376,18 +449,26 @@ FAgentFrameworkActionResult FAgentFrameworkAnimationActions::ExecuteAssignAnimBl
 
 FAgentFrameworkActionResult FAgentFrameworkAnimationActions::ExecuteCreateAnimMontage(const TSharedRef<FJsonObject>& Params, FAgentFrameworkActionResult& Result)
 {
-	FString AssetPath    = Params->GetStringField(TEXT("asset_path"));
-	FString SkeletonPath = Params->GetStringField(TEXT("skeleton_path"));
-
-	const TArray<TSharedPtr<FJsonValue>>* SequencesArray = nullptr;
-	if (!Params->TryGetArrayField(TEXT("sequences"), SequencesArray) || SequencesArray->Num() == 0)
+	FString AssetPath;
+	if (!UAgentFrameworkActionUtils::TryGetStringParam(Params, TEXT("asset_path"), AssetPath, Result.Errors, true))
 	{
-		Result.Errors.Add(TEXT("Missing required field: 'sequences' (array of AnimSequence content paths)."));
+		return Result;
+	}
+
+	FString SkeletonPath;
+	if (!UAgentFrameworkActionUtils::TryGetStringParam(Params, TEXT("skeleton_path"), SkeletonPath, Result.Errors, true))
+	{
+		return Result;
+	}
+
+	TArray<FString> Sequences;
+	if (!UAgentFrameworkActionUtils::TryGetStringArrayParam(Params, TEXT("sequences"), Sequences, Result.Errors, true))
+	{
 		return Result;
 	}
 
 	USkeleton* Skeleton = LoadObject<USkeleton>(nullptr, *SkeletonPath);
-	if (!Skeleton)
+	if (!IsValid(Skeleton))
 	{
 		Result.Errors.Add(FString::Printf(TEXT("Skeleton not found: '%s'"), *SkeletonPath));
 		return Result;
@@ -399,23 +480,31 @@ FAgentFrameworkActionResult FAgentFrameworkAnimationActions::ExecuteCreateAnimMo
 	IAssetTools& AssetTools = FModuleManager::LoadModuleChecked<FAssetToolsModule>("AssetTools").Get();
 
 	UAnimMontageFactory* Factory = NewObject<UAnimMontageFactory>();
+	if (!IsValid(Factory))
+	{
+		Result.Errors.Add(TEXT("Failed to create UAnimMontageFactory."));
+		return Result;
+	}
 	Factory->TargetSkeleton = Skeleton;
 
 	// Set the first sequence as the source
-	FString FirstSeqPath;
-	if ((*SequencesArray)[0]->TryGetString(FirstSeqPath))
+	if (Sequences.Num() > 0)
 	{
-		UAnimSequence* FirstSeq = LoadObject<UAnimSequence>(nullptr, *FirstSeqPath);
-		if (FirstSeq)
+		UAnimSequence* FirstSeq = LoadObject<UAnimSequence>(nullptr, *Sequences[0]);
+		if (IsValid(FirstSeq))
+		{
 			Factory->SourceAnimation = FirstSeq;
+		}
 		else
-			Result.Warnings.Add(FString::Printf(TEXT("First AnimSequence not found: '%s' â€” montage created with default settings."), *FirstSeqPath));
+		{
+			Result.Warnings.Add(FString::Printf(TEXT("First AnimSequence not found: '%s' — montage created with default settings."), *Sequences[0]));
+		}
 	}
 
 	UObject* NewAsset = AssetTools.CreateAsset(AssetName, PackagePath, UAnimMontage::StaticClass(), Factory);
 	UAnimMontage* NewMontage = Cast<UAnimMontage>(NewAsset);
 
-	if (!NewMontage)
+	if (!IsValid(NewMontage))
 	{
 		Result.Errors.Add(FString::Printf(TEXT("Failed to create AnimMontage at '%s'."), *AssetPath));
 		return Result;
@@ -423,13 +512,16 @@ FAgentFrameworkActionResult FAgentFrameworkAnimationActions::ExecuteCreateAnimMo
 
 	// Save
 	UPackage* Package = NewMontage->GetOutermost();
-	Package->MarkPackageDirty();
-	FString PackageFilename;
-	if (FPackageName::TryConvertLongPackageNameToFilename(Package->GetName(), PackageFilename, FPackageName::GetAssetPackageExtension()))
+	if (IsValid(Package))
 	{
-		FSavePackageArgs SaveArgs;
-		SaveArgs.TopLevelFlags = RF_Standalone;
-		UPackage::SavePackage(Package, NewMontage, *PackageFilename, SaveArgs);
+		Package->MarkPackageDirty();
+		FString PackageFilename;
+		if (FPackageName::TryConvertLongPackageNameToFilename(Package->GetName(), PackageFilename, FPackageName::GetAssetPackageExtension()))
+		{
+			FSavePackageArgs SaveArgs;
+			SaveArgs.TopLevelFlags = RF_Standalone;
+			UPackage::SavePackage(Package, NewMontage, *PackageFilename, SaveArgs);
+		}
 	}
 	FAssetRegistryModule::AssetCreated(NewMontage);
 
@@ -445,22 +537,28 @@ FAgentFrameworkActionResult FAgentFrameworkAnimationActions::ExecuteCreateAnimMo
 
 FAgentFrameworkActionResult FAgentFrameworkAnimationActions::ExecuteGetAnimInfo(const TSharedRef<FJsonObject>& Params, FAgentFrameworkActionResult& Result)
 {
-	FString AssetPath = Params->GetStringField(TEXT("asset_path"));
+	FString AssetPath;
+	if (!UAgentFrameworkActionUtils::TryGetStringParam(Params, TEXT("asset_path"), AssetPath, Result.Errors, true))
+	{
+		return Result;
+	}
 
 	TSharedPtr<FJsonObject> Root = MakeShared<FJsonObject>();
 	Root->SetStringField(TEXT("queried_asset"), AssetPath);
 
 	// Try loading as Skeleton first
 	USkeleton* Skeleton = LoadObject<USkeleton>(nullptr, *AssetPath);
-	if (!Skeleton)
+	if (!IsValid(Skeleton))
 	{
 		// Try loading as AnimBlueprint to get its skeleton
 		UAnimBlueprint* AnimBP = LoadObject<UAnimBlueprint>(nullptr, *AssetPath);
-		if (AnimBP && AnimBP->TargetSkeleton)
+		if (IsValid(AnimBP) && IsValid(AnimBP->TargetSkeleton))
+		{
 			Skeleton = AnimBP->TargetSkeleton;
+		}
 	}
 
-	if (!Skeleton)
+	if (!IsValid(Skeleton))
 	{
 		Result.Errors.Add(FString::Printf(TEXT("Could not load a Skeleton or AnimBlueprint from '%s'."), *AssetPath));
 		return Result;
@@ -486,13 +584,10 @@ FAgentFrameworkActionResult FAgentFrameworkAnimationActions::ExecuteGetAnimInfo(
 		FAssetTagValueRef SkeletonTag = AnimAsset.TagsAndValues.FindTag(FName(TEXT("Skeleton")));
 		if (SkeletonTag.IsSet() && SkeletonTag.GetValue().Contains(Skeleton->GetName()))
 		{
-			if (true)
-			{
-				TSharedPtr<FJsonObject> SeqObj = MakeShared<FJsonObject>();
-				SeqObj->SetStringField(TEXT("name"), AnimAsset.AssetName.ToString());
-				SeqObj->SetStringField(TEXT("path"), AnimAsset.GetObjectPathString());
-				SequencesArray.Add(MakeShared<FJsonValueObject>(SeqObj));
-			}
+			TSharedPtr<FJsonObject> SeqObj = MakeShared<FJsonObject>();
+			SeqObj->SetStringField(TEXT("name"), AnimAsset.AssetName.ToString());
+			SeqObj->SetStringField(TEXT("path"), AnimAsset.GetObjectPathString());
+			SequencesArray.Add(MakeShared<FJsonValueObject>(SeqObj));
 		}
 	}
 	Root->SetArrayField(TEXT("compatible_sequences"), SequencesArray);
@@ -532,11 +627,20 @@ FAgentFrameworkActionResult FAgentFrameworkAnimationActions::ExecuteGetAnimInfo(
 
 FAgentFrameworkActionResult FAgentFrameworkAnimationActions::ExecuteConfigureMotionMatching(const TSharedRef<FJsonObject>& Params, FAgentFrameworkActionResult& Result)
 {
-	FString AssetPath = Params->GetStringField(TEXT("asset_path"));
-	FString SchemaPath = Params->GetStringField(TEXT("schema_path"));
+	FString AssetPath;
+	if (!UAgentFrameworkActionUtils::TryGetStringParam(Params, TEXT("asset_path"), AssetPath, Result.Errors, true))
+	{
+		return Result;
+	}
+
+	FString SchemaPath;
+	if (!UAgentFrameworkActionUtils::TryGetStringParam(Params, TEXT("schema_path"), SchemaPath, Result.Errors, true))
+	{
+		return Result;
+	}
 
 	UPoseSearchSchema* Schema = LoadObject<UPoseSearchSchema>(nullptr, *SchemaPath);
-	if (!Schema)
+	if (!IsValid(Schema))
 	{
 		FString SchemaPkgPath = FPackageName::GetLongPackagePath(SchemaPath);
 		FString SchemaName = FPackageName::GetShortName(SchemaPath);
@@ -544,7 +648,7 @@ FAgentFrameworkActionResult FAgentFrameworkAnimationActions::ExecuteConfigureMot
 		Schema = Cast<UPoseSearchSchema>(AssetTools.CreateAsset(SchemaName, SchemaPkgPath, UPoseSearchSchema::StaticClass(), nullptr));
 	}
 
-	if (!Schema)
+	if (!IsValid(Schema))
 	{
 		Result.Errors.Add(FString::Printf(TEXT("Failed to load or create Schema at '%s'."), *SchemaPath));
 		return Result;
@@ -555,7 +659,7 @@ FAgentFrameworkActionResult FAgentFrameworkAnimationActions::ExecuteConfigureMot
 	IAssetTools& AssetTools = FModuleManager::LoadModuleChecked<FAssetToolsModule>("AssetTools").Get();
 	UPoseSearchDatabase* Database = Cast<UPoseSearchDatabase>(AssetTools.CreateAsset(DBName, DBPkgPath, UPoseSearchDatabase::StaticClass(), nullptr));
 
-	if (!Database)
+	if (!IsValid(Database))
 	{
 		Result.Errors.Add(FString::Printf(TEXT("Failed to create PoseSearchDatabase at '%s'."), *AssetPath));
 		return Result;
@@ -572,13 +676,16 @@ FAgentFrameworkActionResult FAgentFrameworkAnimationActions::ExecuteConfigureMot
 	Trajectory.Samples.Add(Sample);
 
 	UPackage* Package = Database->GetOutermost();
-	Package->MarkPackageDirty();
-	FString PackageFilename;
-	if (FPackageName::TryConvertLongPackageNameToFilename(Package->GetName(), PackageFilename, FPackageName::GetAssetPackageExtension()))
+	if (IsValid(Package))
 	{
-		FSavePackageArgs SaveArgs;
-		SaveArgs.TopLevelFlags = RF_Standalone;
-		UPackage::SavePackage(Package, Database, *PackageFilename, SaveArgs);
+		Package->MarkPackageDirty();
+		FString PackageFilename;
+		if (FPackageName::TryConvertLongPackageNameToFilename(Package->GetName(), PackageFilename, FPackageName::GetAssetPackageExtension()))
+		{
+			FSavePackageArgs SaveArgs;
+			SaveArgs.TopLevelFlags = RF_Standalone;
+			UPackage::SavePackage(Package, Database, *PackageFilename, SaveArgs);
+		}
 	}
 	FAssetRegistryModule::AssetCreated(Database);
 
@@ -590,14 +697,18 @@ FAgentFrameworkActionResult FAgentFrameworkAnimationActions::ExecuteConfigureMot
 
 FAgentFrameworkActionResult FAgentFrameworkAnimationActions::ExecuteCreateIKRig(const TSharedRef<FJsonObject>& Params, FAgentFrameworkActionResult& Result)
 {
-	FString AssetPath = Params->GetStringField(TEXT("asset_path"));
+	FString AssetPath;
+	if (!UAgentFrameworkActionUtils::TryGetStringParam(Params, TEXT("asset_path"), AssetPath, Result.Errors, true))
+	{
+		return Result;
+	}
 
 	FString PkgPath = FPackageName::GetLongPackagePath(AssetPath);
 	FString AssetName = FPackageName::GetShortName(AssetPath);
 	IAssetTools& AssetTools = FModuleManager::LoadModuleChecked<FAssetToolsModule>("AssetTools").Get();
 	UIKRigDefinition* IKRigDef = Cast<UIKRigDefinition>(AssetTools.CreateAsset(AssetName, PkgPath, UIKRigDefinition::StaticClass(), nullptr));
 
-	if (!IKRigDef)
+	if (!IsValid(IKRigDef))
 	{
 		Result.Errors.Add(FString::Printf(TEXT("Failed to create IK Rig at '%s'."), *AssetPath));
 		return Result;
@@ -605,7 +716,7 @@ FAgentFrameworkActionResult FAgentFrameworkAnimationActions::ExecuteCreateIKRig(
 
 #if WITH_EDITOR
 	UIKRigController* Controller = UIKRigController::GetController(IKRigDef);
-	if (Controller)
+	if (IsValid(Controller))
 	{
 		int32 SolverIndex = Controller->AddSolver(FIKRigLimbSolver::StaticStruct());
 		Controller->SetStartBone(FName("pelvis"), SolverIndex);
@@ -615,13 +726,16 @@ FAgentFrameworkActionResult FAgentFrameworkAnimationActions::ExecuteCreateIKRig(
 #endif
 
 	UPackage* Package = IKRigDef->GetOutermost();
-	Package->MarkPackageDirty();
-	FString PackageFilename;
-	if (FPackageName::TryConvertLongPackageNameToFilename(Package->GetName(), PackageFilename, FPackageName::GetAssetPackageExtension()))
+	if (IsValid(Package))
 	{
-		FSavePackageArgs SaveArgs;
-		SaveArgs.TopLevelFlags = RF_Standalone;
-		UPackage::SavePackage(Package, IKRigDef, *PackageFilename, SaveArgs);
+		Package->MarkPackageDirty();
+		FString PackageFilename;
+		if (FPackageName::TryConvertLongPackageNameToFilename(Package->GetName(), PackageFilename, FPackageName::GetAssetPackageExtension()))
+		{
+			FSavePackageArgs SaveArgs;
+			SaveArgs.TopLevelFlags = RF_Standalone;
+			UPackage::SavePackage(Package, IKRigDef, *PackageFilename, SaveArgs);
+		}
 	}
 	FAssetRegistryModule::AssetCreated(IKRigDef);
 
@@ -633,14 +747,28 @@ FAgentFrameworkActionResult FAgentFrameworkAnimationActions::ExecuteCreateIKRig(
 
 FAgentFrameworkActionResult FAgentFrameworkAnimationActions::ExecuteCreateIKRetargeter(const TSharedRef<FJsonObject>& Params, FAgentFrameworkActionResult& Result)
 {
-	FString AssetPath = Params->GetStringField(TEXT("asset_path"));
-	FString SourceRigPath = Params->GetStringField(TEXT("source_rig_path"));
-	FString TargetRigPath = Params->GetStringField(TEXT("target_rig_path"));
+	FString AssetPath;
+	if (!UAgentFrameworkActionUtils::TryGetStringParam(Params, TEXT("asset_path"), AssetPath, Result.Errors, true))
+	{
+		return Result;
+	}
+
+	FString SourceRigPath;
+	if (!UAgentFrameworkActionUtils::TryGetStringParam(Params, TEXT("source_rig_path"), SourceRigPath, Result.Errors, true))
+	{
+		return Result;
+	}
+
+	FString TargetRigPath;
+	if (!UAgentFrameworkActionUtils::TryGetStringParam(Params, TEXT("target_rig_path"), TargetRigPath, Result.Errors, true))
+	{
+		return Result;
+	}
 
 	UIKRigDefinition* SourceRig = LoadObject<UIKRigDefinition>(nullptr, *SourceRigPath);
 	UIKRigDefinition* TargetRig = LoadObject<UIKRigDefinition>(nullptr, *TargetRigPath);
 
-	if (!SourceRig || !TargetRig)
+	if (!IsValid(SourceRig) || !IsValid(TargetRig))
 	{
 		Result.Errors.Add(FString::Printf(TEXT("Failed to load source/target rigs: Source='%s', Target='%s'"), *SourceRigPath, *TargetRigPath));
 		return Result;
@@ -651,7 +779,7 @@ FAgentFrameworkActionResult FAgentFrameworkAnimationActions::ExecuteCreateIKReta
 	IAssetTools& AssetTools = FModuleManager::LoadModuleChecked<FAssetToolsModule>("AssetTools").Get();
 	UIKRetargeter* Retargeter = Cast<UIKRetargeter>(AssetTools.CreateAsset(AssetName, PkgPath, UIKRetargeter::StaticClass(), nullptr));
 
-	if (!Retargeter)
+	if (!IsValid(Retargeter))
 	{
 		Result.Errors.Add(FString::Printf(TEXT("Failed to create IK Retargeter at '%s'."), *AssetPath));
 		return Result;
@@ -659,7 +787,7 @@ FAgentFrameworkActionResult FAgentFrameworkAnimationActions::ExecuteCreateIKReta
 
 #if WITH_EDITOR
 	UIKRetargeterController* Controller = UIKRetargeterController::GetController(Retargeter);
-	if (Controller)
+	if (IsValid(Controller))
 	{
 		Controller->SetIKRig(ERetargetSourceOrTarget::Source, SourceRig);
 		Controller->SetIKRig(ERetargetSourceOrTarget::Target, TargetRig);
@@ -669,13 +797,16 @@ FAgentFrameworkActionResult FAgentFrameworkAnimationActions::ExecuteCreateIKReta
 #endif
 
 	UPackage* Package = Retargeter->GetOutermost();
-	Package->MarkPackageDirty();
-	FString PackageFilename;
-	if (FPackageName::TryConvertLongPackageNameToFilename(Package->GetName(), PackageFilename, FPackageName::GetAssetPackageExtension()))
+	if (IsValid(Package))
 	{
-		FSavePackageArgs SaveArgs;
-		SaveArgs.TopLevelFlags = RF_Standalone;
-		UPackage::SavePackage(Package, Retargeter, *PackageFilename, SaveArgs);
+		Package->MarkPackageDirty();
+		FString PackageFilename;
+		if (FPackageName::TryConvertLongPackageNameToFilename(Package->GetName(), PackageFilename, FPackageName::GetAssetPackageExtension()))
+		{
+			FSavePackageArgs SaveArgs;
+			SaveArgs.TopLevelFlags = RF_Standalone;
+			UPackage::SavePackage(Package, Retargeter, *PackageFilename, SaveArgs);
+		}
 	}
 	FAssetRegistryModule::AssetCreated(Retargeter);
 
@@ -687,14 +818,18 @@ FAgentFrameworkActionResult FAgentFrameworkAnimationActions::ExecuteCreateIKReta
 
 FAgentFrameworkActionResult FAgentFrameworkAnimationActions::ExecuteCreateControlRig(const TSharedRef<FJsonObject>& Params, FAgentFrameworkActionResult& Result)
 {
-	FString AssetPath = Params->GetStringField(TEXT("asset_path"));
+	FString AssetPath;
+	if (!UAgentFrameworkActionUtils::TryGetStringParam(Params, TEXT("asset_path"), AssetPath, Result.Errors, true))
+	{
+		return Result;
+	}
 
 	FString PkgPath = FPackageName::GetLongPackagePath(AssetPath);
 	FString AssetName = FPackageName::GetShortName(AssetPath);
 	IAssetTools& AssetTools = FModuleManager::LoadModuleChecked<FAssetToolsModule>("AssetTools").Get();
 	UControlRigBlueprint* ControlRigBP = Cast<UControlRigBlueprint>(AssetTools.CreateAsset(AssetName, PkgPath, UControlRigBlueprint::StaticClass(), nullptr));
 
-	if (!ControlRigBP)
+	if (!IsValid(ControlRigBP))
 	{
 		Result.Errors.Add(FString::Printf(TEXT("Failed to create Control Rig at '%s'."), *AssetPath));
 		return Result;
@@ -702,10 +837,10 @@ FAgentFrameworkActionResult FAgentFrameworkAnimationActions::ExecuteCreateContro
 
 #if WITH_EDITOR
 	URigVMController* Controller = ControlRigBP->GetController();
-	if (Controller)
+	if (IsValid(Controller))
 	{
 		URigVMGraph* Graph = ControlRigBP->GetModel();
-		if (Graph)
+		if (IsValid(Graph))
 		{
 			// Valid retrieval hook
 		}
@@ -713,13 +848,16 @@ FAgentFrameworkActionResult FAgentFrameworkAnimationActions::ExecuteCreateContro
 #endif
 
 	UPackage* Package = ControlRigBP->GetOutermost();
-	Package->MarkPackageDirty();
-	FString PackageFilename;
-	if (FPackageName::TryConvertLongPackageNameToFilename(Package->GetName(), PackageFilename, FPackageName::GetAssetPackageExtension()))
+	if (IsValid(Package))
 	{
-		FSavePackageArgs SaveArgs;
-		SaveArgs.TopLevelFlags = RF_Standalone;
-		UPackage::SavePackage(Package, ControlRigBP, *PackageFilename, SaveArgs);
+		Package->MarkPackageDirty();
+		FString PackageFilename;
+		if (FPackageName::TryConvertLongPackageNameToFilename(Package->GetName(), PackageFilename, FPackageName::GetAssetPackageExtension()))
+		{
+			FSavePackageArgs SaveArgs;
+			SaveArgs.TopLevelFlags = RF_Standalone;
+			UPackage::SavePackage(Package, ControlRigBP, *PackageFilename, SaveArgs);
+		}
 	}
 	FAssetRegistryModule::AssetCreated(ControlRigBP);
 
@@ -732,33 +870,47 @@ FAgentFrameworkActionResult FAgentFrameworkAnimationActions::ExecuteCreateContro
 FAgentFrameworkActionResult FAgentFrameworkAnimationActions::ExecuteSetupMotionWarping(const TSharedRef<FJsonObject>& Params, FAgentFrameworkActionResult& Result)
 {
 	FString TargetActorName;
-	Params->TryGetStringField(TEXT("actor_name"), TargetActorName);
+	UAgentFrameworkActionUtils::TryGetStringParam(Params, TEXT("actor_name"), TargetActorName, Result.Errors, false);
 
 	FString WarpTargetName = TEXT("JumpTarget");
-	Params->TryGetStringField(TEXT("warp_target_name"), WarpTargetName);
+	UAgentFrameworkActionUtils::TryGetStringParam(Params, TEXT("warp_target_name"), WarpTargetName, Result.Errors, false);
 
 	FVector Location = FVector(100.f, 200.f, 300.f);
 	const TSharedPtr<FJsonObject>* LocObj = nullptr;
-	if (Params->TryGetObjectField(TEXT("location"), LocObj))
+	if (Params->TryGetObjectField(TEXT("location"), LocObj) && LocObj && LocObj->IsValid())
 	{
-		double Val;
-		if ((*LocObj)->TryGetNumberField(TEXT("x"), Val)) Location.X = Val;
-		if ((*LocObj)->TryGetNumberField(TEXT("y"), Val)) Location.Y = Val;
-		if ((*LocObj)->TryGetNumberField(TEXT("z"), Val)) Location.Z = Val;
+		double X = Location.X;
+		double Y = Location.Y;
+		double Z = Location.Z;
+		UAgentFrameworkActionUtils::TryGetDoubleParam(*LocObj, TEXT("x"), X, Result.Errors, false);
+		UAgentFrameworkActionUtils::TryGetDoubleParam(*LocObj, TEXT("y"), Y, Result.Errors, false);
+		UAgentFrameworkActionUtils::TryGetDoubleParam(*LocObj, TEXT("z"), Z, Result.Errors, false);
+		Location.X = X;
+		Location.Y = Y;
+		Location.Z = Z;
 	}
 
 	FRotator Rotation = FRotator(0.f, 45.f, 0.f);
 	const TSharedPtr<FJsonObject>* RotObj = nullptr;
-	if (Params->TryGetObjectField(TEXT("rotation"), RotObj))
+	if (Params->TryGetObjectField(TEXT("rotation"), RotObj) && RotObj && RotObj->IsValid())
 	{
-		double Val;
-		if ((*RotObj)->TryGetNumberField(TEXT("pitch"), Val)) Rotation.Pitch = Val;
-		if ((*RotObj)->TryGetNumberField(TEXT("yaw"), Val)) Rotation.Yaw = Val;
-		if ((*RotObj)->TryGetNumberField(TEXT("roll"), Val)) Rotation.Roll = Val;
+		double Pitch = Rotation.Pitch;
+		double Yaw = Rotation.Yaw;
+		double Roll = Rotation.Roll;
+		UAgentFrameworkActionUtils::TryGetDoubleParam(*RotObj, TEXT("pitch"), Pitch, Result.Errors, false);
+		UAgentFrameworkActionUtils::TryGetDoubleParam(*RotObj, TEXT("yaw"), Yaw, Result.Errors, false);
+		UAgentFrameworkActionUtils::TryGetDoubleParam(*RotObj, TEXT("roll"), Roll, Result.Errors, false);
+		Rotation.Pitch = Pitch;
+		Rotation.Yaw = Yaw;
+		Rotation.Roll = Roll;
 	}
 
-	UWorld* World = GEditor ? GEditor->GetEditorWorldContext().World() : nullptr;
-	if (!World)
+	UWorld* World = nullptr;
+	if (IsValid(GEditor))
+	{
+		World = GEditor->GetEditorWorldContext().World();
+	}
+	if (!IsValid(World))
 	{
 		Result.Errors.Add(TEXT("No active editor world found."));
 		return Result;
@@ -769,7 +921,7 @@ FAgentFrameworkActionResult FAgentFrameworkAnimationActions::ExecuteSetupMotionW
 	{
 		for (TActorIterator<AActor> It(World); It; ++It)
 		{
-			if (It->GetName() == TargetActorName)
+			if (IsValid(*It) && It->GetName() == TargetActorName)
 			{
 				TargetActor = *It;
 				break;
@@ -777,20 +929,40 @@ FAgentFrameworkActionResult FAgentFrameworkAnimationActions::ExecuteSetupMotionW
 		}
 	}
 
-	if (!TargetActor)
+	if (!IsValid(TargetActor))
 	{
 		TargetActor = World->SpawnActor<AActor>();
-		TargetActor->SetActorLabel(TEXT("MotionWarpingTargetActor"));
+		if (IsValid(TargetActor))
+		{
+			TargetActor->SetActorLabel(TEXT("MotionWarpingTargetActor"));
+		}
+	}
+
+	if (!IsValid(TargetActor))
+	{
+		Result.Errors.Add(TEXT("Failed to spawn or locate TargetActor."));
+		return Result;
 	}
 
 	UMotionWarpingComponent* WarpingComp = TargetActor->FindComponentByClass<UMotionWarpingComponent>();
-	if (!WarpingComp)
+	if (!IsValid(WarpingComp))
 	{
 		WarpingComp = NewObject<UMotionWarpingComponent>(TargetActor, UMotionWarpingComponent::StaticClass());
-		WarpingComp->RegisterComponent();
+		if (IsValid(WarpingComp))
+		{
+			WarpingComp->RegisterComponent();
+		}
 	}
 
-	WarpingComp->AddOrUpdateWarpTargetFromLocationAndRotation(FName(*WarpTargetName), Location, Rotation);
+	if (IsValid(WarpingComp))
+	{
+		WarpingComp->AddOrUpdateWarpTargetFromLocationAndRotation(FName(*WarpTargetName), Location, Rotation);
+	}
+	else
+	{
+		Result.Errors.Add(TEXT("Failed to create or locate MotionWarpingComponent."));
+		return Result;
+	}
 
 	Result.bSuccess = true;
 	Result.ResultMessage = FString::Printf(TEXT("Successfully configured Motion Warping target '%s' on Actor '%s'."), *WarpTargetName, *TargetActor->GetName());
@@ -799,24 +971,29 @@ FAgentFrameworkActionResult FAgentFrameworkAnimationActions::ExecuteSetupMotionW
 
 FAgentFrameworkActionResult FAgentFrameworkAnimationActions::ExecuteCreateBlendSpace(const TSharedRef<FJsonObject>& Params, FAgentFrameworkActionResult& Result)
 {
-	FString AssetPath = Params->GetStringField(TEXT("asset_path"));
+	FString AssetPath;
+	if (!UAgentFrameworkActionUtils::TryGetStringParam(Params, TEXT("asset_path"), AssetPath, Result.Errors, true))
+	{
+		return Result;
+	}
+
 	FString ParamName = TEXT("Speed");
-	Params->TryGetStringField(TEXT("parameter_name"), ParamName);
+	UAgentFrameworkActionUtils::TryGetStringParam(Params, TEXT("parameter_name"), ParamName, Result.Errors, false);
 
 	float MinValue = 0.f;
 	float MaxValue = 600.f;
-	Params->TryGetNumberField(TEXT("min_value"), MinValue);
-	Params->TryGetNumberField(TEXT("max_value"), MaxValue);
+	UAgentFrameworkActionUtils::TryGetFloatParam(Params, TEXT("min_value"), MinValue, Result.Errors, false);
+	UAgentFrameworkActionUtils::TryGetFloatParam(Params, TEXT("max_value"), MaxValue, Result.Errors, false);
 
 	int32 GridNum = 4;
-	Params->TryGetNumberField(TEXT("grid_num"), GridNum);
+	UAgentFrameworkActionUtils::TryGetIntParam(Params, TEXT("grid_num"), GridNum, Result.Errors, false);
 
 	FString PkgPath = FPackageName::GetLongPackagePath(AssetPath);
 	FString AssetName = FPackageName::GetShortName(AssetPath);
 	IAssetTools& AssetTools = FModuleManager::LoadModuleChecked<FAssetToolsModule>("AssetTools").Get();
 	UBlendSpace* BlendSpace = Cast<UBlendSpace>(AssetTools.CreateAsset(AssetName, PkgPath, UBlendSpace::StaticClass(), nullptr));
 
-	if (!BlendSpace)
+	if (!IsValid(BlendSpace))
 	{
 		Result.Errors.Add(FString::Printf(TEXT("Failed to create Blend Space at '%s'."), *AssetPath));
 		return Result;
@@ -832,13 +1009,16 @@ FAgentFrameworkActionResult FAgentFrameworkAnimationActions::ExecuteCreateBlendS
 	UTauBlendSpaceHelper::SetBlendParameterHelper(BlendSpace, 0, Param);
 
 	UPackage* Package = BlendSpace->GetOutermost();
-	Package->MarkPackageDirty();
-	FString PackageFilename;
-	if (FPackageName::TryConvertLongPackageNameToFilename(Package->GetName(), PackageFilename, FPackageName::GetAssetPackageExtension()))
+	if (IsValid(Package))
 	{
-		FSavePackageArgs SaveArgs;
-		SaveArgs.TopLevelFlags = RF_Standalone;
-		UPackage::SavePackage(Package, BlendSpace, *PackageFilename, SaveArgs);
+		Package->MarkPackageDirty();
+		FString PackageFilename;
+		if (FPackageName::TryConvertLongPackageNameToFilename(Package->GetName(), PackageFilename, FPackageName::GetAssetPackageExtension()))
+		{
+			FSavePackageArgs SaveArgs;
+			SaveArgs.TopLevelFlags = RF_Standalone;
+			UPackage::SavePackage(Package, BlendSpace, *PackageFilename, SaveArgs);
+		}
 	}
 	FAssetRegistryModule::AssetCreated(BlendSpace);
 
@@ -850,10 +1030,15 @@ FAgentFrameworkActionResult FAgentFrameworkAnimationActions::ExecuteCreateBlendS
 
 FAgentFrameworkActionResult FAgentFrameworkAnimationActions::ExecuteConfigureAnimMontage(const TSharedRef<FJsonObject>& Params, FAgentFrameworkActionResult& Result)
 {
-	FString AssetPath = Params->GetStringField(TEXT("asset_path"));
+	FString AssetPath;
+	if (!UAgentFrameworkActionUtils::TryGetStringParam(Params, TEXT("asset_path"), AssetPath, Result.Errors, true))
+	{
+		return Result;
+	}
+
 	UAnimMontage* Montage = LoadObject<UAnimMontage>(nullptr, *AssetPath);
 
-	if (!Montage)
+	if (!IsValid(Montage))
 	{
 		Result.Errors.Add(FString::Printf(TEXT("AnimMontage not found: '%s'"), *AssetPath));
 		return Result;
@@ -868,13 +1053,16 @@ FAgentFrameworkActionResult FAgentFrameworkAnimationActions::ExecuteConfigureAni
 	Montage->CompositeSections.Add(NewSection);
 
 	UPackage* Package = Montage->GetOutermost();
-	Package->MarkPackageDirty();
-	FString PackageFilename;
-	if (FPackageName::TryConvertLongPackageNameToFilename(Package->GetName(), PackageFilename, FPackageName::GetAssetPackageExtension()))
+	if (IsValid(Package))
 	{
-		FSavePackageArgs SaveArgs;
-		SaveArgs.TopLevelFlags = RF_Standalone;
-		UPackage::SavePackage(Package, Montage, *PackageFilename, SaveArgs);
+		Package->MarkPackageDirty();
+		FString PackageFilename;
+		if (FPackageName::TryConvertLongPackageNameToFilename(Package->GetName(), PackageFilename, FPackageName::GetAssetPackageExtension()))
+		{
+			FSavePackageArgs SaveArgs;
+			SaveArgs.TopLevelFlags = RF_Standalone;
+			UPackage::SavePackage(Package, Montage, *PackageFilename, SaveArgs);
+		}
 	}
 
 	Result.bSuccess = true;
@@ -886,14 +1074,17 @@ FAgentFrameworkActionResult FAgentFrameworkAnimationActions::ExecuteConfigureAni
 FAgentFrameworkActionResult FAgentFrameworkAnimationActions::ExecuteMapLiveLinkSource(const TSharedRef<FJsonObject>& Params, FAgentFrameworkActionResult& Result)
 {
 	FString SubjectNameStr;
-	if (!Params->TryGetStringField(TEXT("subject_name"), SubjectNameStr))
+	if (!UAgentFrameworkActionUtils::TryGetStringParam(Params, TEXT("subject_name"), SubjectNameStr, Result.Errors, true))
 	{
-		Result.Errors.Add(TEXT("Missing required parameter: subject_name"));
 		return Result;
 	}
 
-	UWorld* World = GEditor ? GEditor->GetEditorWorldContext().World() : nullptr;
-	if (!World)
+	UWorld* World = nullptr;
+	if (IsValid(GEditor))
+	{
+		World = GEditor->GetEditorWorldContext().World();
+	}
+	if (!IsValid(World))
 	{
 		Result.Errors.Add(TEXT("No active editor world found."));
 		return Result;
@@ -902,19 +1093,34 @@ FAgentFrameworkActionResult FAgentFrameworkAnimationActions::ExecuteMapLiveLinkS
 	ULiveLinkComponentController* LiveLinkController = nullptr;
 	for (TActorIterator<AActor> It(World); It; ++It)
 	{
-		LiveLinkController = It->FindComponentByClass<ULiveLinkComponentController>();
-		if (LiveLinkController)
+		if (IsValid(*It))
 		{
-			break;
+			LiveLinkController = It->FindComponentByClass<ULiveLinkComponentController>();
+			if (IsValid(LiveLinkController))
+			{
+				break;
+			}
 		}
 	}
 
-	if (!LiveLinkController)
+	if (!IsValid(LiveLinkController))
 	{
 		AActor* TempActor = World->SpawnActor<AActor>();
-		TempActor->SetActorLabel(TEXT("LiveLinkControllerActor"));
-		LiveLinkController = NewObject<ULiveLinkComponentController>(TempActor, ULiveLinkComponentController::StaticClass());
-		LiveLinkController->RegisterComponent();
+		if (IsValid(TempActor))
+		{
+			TempActor->SetActorLabel(TEXT("LiveLinkControllerActor"));
+			LiveLinkController = NewObject<ULiveLinkComponentController>(TempActor, ULiveLinkComponentController::StaticClass());
+			if (IsValid(LiveLinkController))
+			{
+				LiveLinkController->RegisterComponent();
+			}
+		}
+	}
+
+	if (!IsValid(LiveLinkController))
+	{
+		Result.Errors.Add(TEXT("Failed to create or locate LiveLinkComponentController."));
+		return Result;
 	}
 
 	LiveLinkController->Modify();
@@ -926,5 +1132,19 @@ FAgentFrameworkActionResult FAgentFrameworkAnimationActions::ExecuteMapLiveLinkS
 	Result.bSuccess = true;
 	Result.ResultMessage = FString::Printf(TEXT("Mapped Live Link Component Controller to subject: %s"), *SubjectNameStr);
 	return Result;
+}
+
+void FAgentFrameworkAnimationActions::PlaySuccessSound()
+{
+#if WITH_EDITOR
+	if (IsValid(GEditor))
+	{
+		USoundBase* SuccessSound = LoadObject<USoundBase>(nullptr, TEXT("/Engine/EditorSounds/Notifications/CompileSuccess.CompileSuccess"));
+		if (IsValid(SuccessSound))
+		{
+			GEditor->PlayEditorSound(SuccessSound);
+		}
+	}
+#endif
 }
 

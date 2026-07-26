@@ -36,4 +36,8 @@ private:
 	 */
 	FAgentFrameworkActionResult ExecuteReadMessageLog(const TSharedRef<FJsonObject>& Params, FAgentFrameworkActionResult& Result);
 	FAgentFrameworkActionResult ExecuteShutdownEditor(const TSharedRef<FJsonObject>& Params, FAgentFrameworkActionResult& Result);
+	FAgentFrameworkActionResult ExecuteFindUnreferencedAssets(const TSharedRef<FJsonObject>& Params, FAgentFrameworkActionResult& Result);
+	FAgentFrameworkActionResult ExecuteInspectUObjectProperties(const TSharedRef<FJsonObject>& Params, FAgentFrameworkActionResult& Result);
+
+	void PlaySuccessSound();
 };

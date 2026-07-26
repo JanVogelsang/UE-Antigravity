@@ -2,8 +2,9 @@
 
 #include "PCG/AgentFrameworkPCGActions.h"
 #include "AgentFrameworkCoreModule.h"
+#include "AgentFrameworkActionUtils.h"
 
-// PCG plugin headers â€” guarded with a module availability check at runtime
+// PCG plugin headers — guarded with a module availability check at runtime
 // The PCGComponent and PCGGraph types are only available when the PCG plugin is loaded.
 // We use dynamic module loading and reflection to avoid a hard compile dependency.
 #if WITH_EDITOR
@@ -14,12 +15,12 @@
 #include "Components/ActorComponent.h"
 #include "PCGGraph.h"
 #include "PCGNode.h"
+#include "Sound/SoundBase.h"
 #endif
 
 // Asset management
 #include "AssetToolsModule.h"
 #include "AssetRegistry/AssetRegistryModule.h"
-#include "FileHelpers.h"
 #include "UObject/SavePackage.h"
 #include "Misc/PackageName.h"
 
@@ -56,55 +57,45 @@ TArray<FString> FAgentFrameworkPCGActions::GetSupportedToolNames() const
 bool FAgentFrameworkPCGActions::ValidateParams(const TSharedRef<FJsonObject>& Params, TArray<FString>& OutErrors) const
 {
 	FString ToolName;
-	Params->TryGetStringField(TEXT("_tool_name"), ToolName);
+	if (!UAgentFrameworkActionUtils::TryGetStringParam(Params, TEXT("_tool_name"), ToolName, OutErrors, true))
+	{
+		return false;
+	}
 
+	FString DummyString;
 	if (ToolName == TEXT("create_pcg_graph"))
 	{
-		if (!Params->HasField(TEXT("asset_path")))
-		{
-			OutErrors.Add(TEXT("Missing required field for create_pcg_graph: asset_path"));
-			return false;
-		}
+		return UAgentFrameworkActionUtils::TryGetStringParam(Params, TEXT("asset_path"), DummyString, OutErrors, true);
 	}
 	else if (ToolName == TEXT("attach_pcg_component"))
 	{
-		if (!Params->HasField(TEXT("actor_name")))
-		{
-			OutErrors.Add(TEXT("Missing required field for attach_pcg_component: actor_name"));
-			return false;
-		}
+		return UAgentFrameworkActionUtils::TryGetStringParam(Params, TEXT("actor_name"), DummyString, OutErrors, true);
 	}
 	else if (ToolName == TEXT("set_pcg_parameter"))
 	{
-		if (!Params->HasField(TEXT("actor_name")) || !Params->HasField(TEXT("parameter_name")) || !Params->HasField(TEXT("parameter_value")))
-		{
-			OutErrors.Add(TEXT("Missing required field(s) for set_pcg_parameter: actor_name, parameter_name, parameter_value"));
-			return false;
-		}
+		bool bValid = true;
+		bValid &= UAgentFrameworkActionUtils::TryGetStringParam(Params, TEXT("actor_name"), DummyString, OutErrors, true);
+		bValid &= UAgentFrameworkActionUtils::TryGetStringParam(Params, TEXT("parameter_name"), DummyString, OutErrors, true);
+		bValid &= UAgentFrameworkActionUtils::TryGetStringParam(Params, TEXT("parameter_value"), DummyString, OutErrors, true);
+		return bValid;
 	}
 	else if (ToolName == TEXT("generate_pcg_local"))
 	{
-		if (!Params->HasField(TEXT("actor_name")))
-		{
-			OutErrors.Add(TEXT("Missing required field for generate_pcg_local: actor_name"));
-			return false;
-		}
+		return UAgentFrameworkActionUtils::TryGetStringParam(Params, TEXT("actor_name"), DummyString, OutErrors, true);
 	}
 	else if (ToolName == TEXT("get_pcg_info"))
 	{
-		if (!Params->HasField(TEXT("actor_name")))
-		{
-			OutErrors.Add(TEXT("Missing required field for get_pcg_info: actor_name"));
-			return false;
-		}
+		return UAgentFrameworkActionUtils::TryGetStringParam(Params, TEXT("actor_name"), DummyString, OutErrors, true);
 	}
 	else if (ToolName == TEXT("wire_pcg_nodes"))
 	{
-		if (!Params->HasField(TEXT("graph_path")) || !Params->HasField(TEXT("source_node")) || !Params->HasField(TEXT("source_pin")) || !Params->HasField(TEXT("target_node")) || !Params->HasField(TEXT("target_pin")))
-		{
-			OutErrors.Add(TEXT("Missing required fields for wire_pcg_nodes."));
-			return false;
-		}
+		bool bValid = true;
+		bValid &= UAgentFrameworkActionUtils::TryGetStringParam(Params, TEXT("graph_path"), DummyString, OutErrors, true);
+		bValid &= UAgentFrameworkActionUtils::TryGetStringParam(Params, TEXT("source_node"), DummyString, OutErrors, true);
+		bValid &= UAgentFrameworkActionUtils::TryGetStringParam(Params, TEXT("source_pin"), DummyString, OutErrors, true);
+		bValid &= UAgentFrameworkActionUtils::TryGetStringParam(Params, TEXT("target_node"), DummyString, OutErrors, true);
+		bValid &= UAgentFrameworkActionUtils::TryGetStringParam(Params, TEXT("target_pin"), DummyString, OutErrors, true);
+		return bValid;
 	}
 
 	return true;
@@ -133,33 +124,38 @@ AActor* FAgentFrameworkPCGActions::FindActorByName(const FString& ActorName)
 #if WITH_EDITOR
 	if (!GEditor) return nullptr;
 	UWorld* World = GEditor->GetEditorWorldContext().World();
-	if (!World) return nullptr;
+	if (!IsValid(World)) return nullptr;
 
 	for (TActorIterator<AActor> It(World); It; ++It)
 	{
 		AActor* Actor = *It;
-		if (Actor && Actor->GetActorLabel() == ActorName)
+		if (IsValid(Actor) && Actor->GetActorLabel() == ActorName)
+		{
 			return Actor;
+		}
 	}
 	// Fallback: match by object name
 	for (TActorIterator<AActor> It(World); It; ++It)
 	{
 		AActor* Actor = *It;
-		if (Actor && Actor->GetName() == ActorName)
+		if (IsValid(Actor) && Actor->GetName() == ActorName)
+		{
 			return Actor;
+		}
 	}
 #endif
 	return nullptr;
 }
 
 // ============================================================================
-// ExecuteAction â€” Dispatch
+// ExecuteAction — Dispatch
 // ============================================================================
 
 FAgentFrameworkActionResult FAgentFrameworkPCGActions::ExecuteAction(const TSharedRef<FJsonObject>& Params)
 {
 	FString ToolName;
-	Params->TryGetStringField(TEXT("_tool_name"), ToolName);
+	TArray<FString> DummyErrors;
+	UAgentFrameworkActionUtils::TryGetStringParam(Params, TEXT("_tool_name"), ToolName, DummyErrors, false);
 
 	bool bIsReadOnly = (ToolName == TEXT("get_pcg_info"));
 
@@ -197,6 +193,17 @@ FAgentFrameworkActionResult FAgentFrameworkPCGActions::ExecuteAction(const TShar
 		Transaction->Cancel();
 	}
 
+#if WITH_EDITOR
+	if (Result.bSuccess && GEditor)
+	{
+		USoundBase* SuccessSound = LoadObject<USoundBase>(nullptr, TEXT("/Engine/EditorSounds/Notifications/CompileSuccess.CompileSuccess"));
+		if (IsValid(SuccessSound))
+		{
+			GEditor->PlayEditorSound(SuccessSound);
+		}
+	}
+#endif
+
 	return Result;
 }
 
@@ -208,14 +215,20 @@ FAgentFrameworkActionResult FAgentFrameworkPCGActions::ExecuteCreatePCGGraph(con
 {
 	if (!CheckPCGAvailable(Result)) return Result;
 
-	FString AssetPath = Params->GetStringField(TEXT("asset_path"));
+	FString AssetPath;
+	if (!UAgentFrameworkActionUtils::TryGetStringParam(Params, TEXT("asset_path"), AssetPath, Result.Errors, true))
+	{
+		return Result;
+	}
 
 	// Look up the PCGGraph class via reflection (avoids hard-linking the PCG module)
 	UClass* PCGGraphClass = FindFirstObject<UClass>(TEXT("PCGGraph"), EFindFirstObjectOptions::None);
-	if (!PCGGraphClass)
+	if (!IsValid(PCGGraphClass))
+	{
 		PCGGraphClass = FindFirstObject<UClass>(TEXT("UPCGGraph"), EFindFirstObjectOptions::None);
+	}
 
-	if (!PCGGraphClass)
+	if (!IsValid(PCGGraphClass))
 	{
 		Result.Errors.Add(TEXT("PCGGraph class not found via reflection. Ensure the PCG plugin is fully loaded and UE5.2+ is in use."));
 		return Result;
@@ -228,14 +241,16 @@ FAgentFrameworkActionResult FAgentFrameworkPCGActions::ExecuteCreatePCGGraph(con
 	FString UniqueName, UniquePackagePath;
 	AssetTools.CreateUniqueAssetName(AssetPath, TEXT(""), UniquePackagePath, UniqueName);
 
-	// Use UObject factory pattern â€” PCG provides UPCGGraphFactory
+	// Use UObject factory pattern — PCG provides UPCGGraphFactory
 	UClass* FactoryClass = FindFirstObject<UClass>(TEXT("PCGGraphFactory"), EFindFirstObjectOptions::None);
 	UFactory* Factory = nullptr;
-	if (FactoryClass)
+	if (IsValid(FactoryClass))
+	{
 		Factory = NewObject<UFactory>(GetTransientPackage(), FactoryClass);
+	}
 
 	UObject* NewAsset = nullptr;
-	if (Factory)
+	if (IsValid(Factory))
 	{
 		NewAsset = AssetTools.CreateAsset(AssetName, PackagePath, PCGGraphClass, Factory);
 	}
@@ -244,24 +259,30 @@ FAgentFrameworkActionResult FAgentFrameworkPCGActions::ExecuteCreatePCGGraph(con
 		// Fallback: create empty package and construct directly
 		FString PackageName = PackagePath / AssetName;
 		UPackage* Package = CreatePackage(*PackageName);
-		NewAsset = NewObject<UObject>(Package, PCGGraphClass, FName(*AssetName), RF_Public | RF_Standalone);
-		FAssetRegistryModule::AssetCreated(NewAsset);
+		if (IsValid(Package))
+		{
+			NewAsset = NewObject<UObject>(Package, PCGGraphClass, FName(*AssetName), RF_Public | RF_Standalone);
+			FAssetRegistryModule::AssetCreated(NewAsset);
+		}
 	}
 
-	if (!NewAsset)
+	if (!IsValid(NewAsset))
 	{
 		Result.Errors.Add(FString::Printf(TEXT("Failed to create PCG graph at '%s'. Check the path is valid."), *AssetPath));
 		return Result;
 	}
 
 	UPackage* Package = NewAsset->GetOutermost();
-	Package->MarkPackageDirty();
-	FString PackageFilename;
-	if (FPackageName::TryConvertLongPackageNameToFilename(Package->GetName(), PackageFilename, FPackageName::GetAssetPackageExtension()))
+	if (IsValid(Package))
 	{
-		FSavePackageArgs SaveArgs;
-		SaveArgs.TopLevelFlags = RF_Standalone;
-		UPackage::SavePackage(Package, NewAsset, *PackageFilename, SaveArgs);
+		Package->MarkPackageDirty();
+		FString PackageFilename;
+		if (FPackageName::TryConvertLongPackageNameToFilename(Package->GetName(), PackageFilename, FPackageName::GetAssetPackageExtension()))
+		{
+			FSavePackageArgs SaveArgs;
+			SaveArgs.TopLevelFlags = RF_Standalone;
+			UPackage::SavePackage(Package, NewAsset, *PackageFilename, SaveArgs);
+		}
 	}
 
 	UE_LOG(LogAgentFramework, Log, TEXT("PCGActions: Created PCG graph at '%s'"), *AssetPath);
@@ -286,10 +307,14 @@ FAgentFrameworkActionResult FAgentFrameworkPCGActions::ExecuteAttachPCGComponent
 {
 	if (!CheckPCGAvailable(Result)) return Result;
 
-	FString ActorName = Params->GetStringField(TEXT("actor_name"));
+	FString ActorName;
+	if (!UAgentFrameworkActionUtils::TryGetStringParam(Params, TEXT("actor_name"), ActorName, Result.Errors, true))
+	{
+		return Result;
+	}
 
 	AActor* TargetActor = FindActorByName(ActorName);
-	if (!TargetActor)
+	if (!IsValid(TargetActor))
 	{
 		Result.Errors.Add(FString::Printf(TEXT("Actor '%s' not found in the current level. Check the actor label in the Outliner. Spawn it first using spawn_actor if needed."), *ActorName));
 		return Result;
@@ -297,10 +322,12 @@ FAgentFrameworkActionResult FAgentFrameworkPCGActions::ExecuteAttachPCGComponent
 
 	// Find PCGComponent class via reflection
 	UClass* PCGComponentClass = FindFirstObject<UClass>(TEXT("PCGComponent"), EFindFirstObjectOptions::None);
-	if (!PCGComponentClass)
+	if (!IsValid(PCGComponentClass))
+	{
 		PCGComponentClass = FindFirstObject<UClass>(TEXT("UPCGComponent"), EFindFirstObjectOptions::None);
+	}
 
-	if (!PCGComponentClass)
+	if (!IsValid(PCGComponentClass))
 	{
 		Result.Errors.Add(TEXT("PCGComponent class not found. Ensure the PCG plugin is enabled."));
 		return Result;
@@ -310,51 +337,64 @@ FAgentFrameworkActionResult FAgentFrameworkPCGActions::ExecuteAttachPCGComponent
 	UActorComponent* ExistingComp = TargetActor->FindComponentByClass(PCGComponentClass);
 	UActorComponent* PCGComp = ExistingComp;
 
-	if (!ExistingComp)
+	if (!IsValid(ExistingComp))
 	{
 		TargetActor->Modify();
 		PCGComp = NewObject<UActorComponent>(TargetActor, PCGComponentClass, TEXT("PCGComponent"), RF_Transactional);
-		TargetActor->AddInstanceComponent(PCGComp);
-		PCGComp->RegisterComponent();
-		UE_LOG(LogAgentFramework, Log, TEXT("PCGActions: Added PCGComponent to actor '%s'"), *ActorName);
+		if (IsValid(PCGComp))
+		{
+			TargetActor->AddInstanceComponent(PCGComp);
+			PCGComp->RegisterComponent();
+			UE_LOG(LogAgentFramework, Log, TEXT("PCGActions: Added PCGComponent to actor '%s'"), *ActorName);
+		}
+		else
+		{
+			Result.Errors.Add(FString::Printf(TEXT("Failed to create PCGComponent on actor '%s'."), *ActorName));
+			return Result;
+		}
 	}
 	else
 	{
-		Result.Warnings.Add(FString::Printf(TEXT("Actor '%s' already has a PCGComponent â€” reusing it."), *ActorName));
+		Result.Warnings.Add(FString::Printf(TEXT("Actor '%s' already has a PCGComponent — reusing it."), *ActorName));
 	}
 
 	// Optionally assign graph
 	FString GraphPath;
-	if (Params->TryGetStringField(TEXT("graph_path"), GraphPath) && !GraphPath.IsEmpty())
+	if (UAgentFrameworkActionUtils::TryGetStringParam(Params, TEXT("graph_path"), GraphPath, Result.Errors, false) && !GraphPath.IsEmpty())
 	{
 		UObject* GraphAsset = LoadObject<UObject>(nullptr, *GraphPath);
-		if (GraphAsset)
+		if (IsValid(GraphAsset))
 		{
-			FProperty* GraphProp = PCGComp->GetClass()->FindPropertyByName(FName(TEXT("Graph")));
-			if (GraphProp)
+			if (IsValid(PCGComp))
 			{
-				PCGComp->Modify();
-				void* PropAddr = GraphProp->ContainerPtrToValuePtr<void>(PCGComp);
-				FObjectProperty* ObjProp = CastField<FObjectProperty>(GraphProp);
-				if (ObjProp)
-					ObjProp->SetObjectPropertyValue(PropAddr, GraphAsset);
-			}
-			else
-			{
-				Result.Warnings.Add(TEXT("Could not find 'Graph' property on PCGComponent via reflection â€” graph not assigned."));
+				FProperty* GraphProp = PCGComp->GetClass()->FindPropertyByName(FName(TEXT("Graph")));
+				if (GraphProp)
+				{
+					PCGComp->Modify();
+					void* PropAddr = GraphProp->ContainerPtrToValuePtr<void>(PCGComp);
+					FObjectProperty* ObjProp = CastField<FObjectProperty>(GraphProp);
+					if (ObjProp)
+					{
+						ObjProp->SetObjectPropertyValue(PropAddr, GraphAsset);
+					}
+				}
+				else
+				{
+					Result.Warnings.Add(TEXT("Could not find 'Graph' property on PCGComponent via reflection — graph not assigned."));
+				}
 			}
 		}
 		else
 		{
-			Result.Warnings.Add(FString::Printf(TEXT("PCG graph not found at '%s' â€” component added without graph assignment."), *GraphPath));
+			Result.Warnings.Add(FString::Printf(TEXT("PCG graph not found at '%s' — component added without graph assignment."), *GraphPath));
 		}
 	}
 
 	Result.bSuccess = true;
 	Result.ResultMessage = FString::Printf(TEXT("PCGComponent %s on actor '%s'.%s"),
-		ExistingComp ? TEXT("already exists") : TEXT("added"),
+		IsValid(ExistingComp) ? TEXT("already exists") : TEXT("added"),
 		*ActorName,
-		GraphPath.IsEmpty() ? TEXT(" No graph assigned â€” use set_pcg_parameter after assigning a graph.") : *FString::Printf(TEXT(" Graph: '%s'"), *GraphPath));
+		GraphPath.IsEmpty() ? TEXT(" No graph assigned — use set_pcg_parameter after assigning a graph.") : *FString::Printf(TEXT(" Graph: '%s'"), *GraphPath));
 	return Result;
 }
 
@@ -366,22 +406,29 @@ FAgentFrameworkActionResult FAgentFrameworkPCGActions::ExecuteSetPCGParameter(co
 {
 	if (!CheckPCGAvailable(Result)) return Result;
 
-	FString ActorName      = Params->GetStringField(TEXT("actor_name"));
-	FString ParameterName  = Params->GetStringField(TEXT("parameter_name"));
-	FString ParameterValue = Params->GetStringField(TEXT("parameter_value"));
+	FString ActorName, ParameterName, ParameterValue;
+	if (!UAgentFrameworkActionUtils::TryGetStringParam(Params, TEXT("actor_name"), ActorName, Result.Errors, true) ||
+		!UAgentFrameworkActionUtils::TryGetStringParam(Params, TEXT("parameter_name"), ParameterName, Result.Errors, true) ||
+		!UAgentFrameworkActionUtils::TryGetStringParam(Params, TEXT("parameter_value"), ParameterValue, Result.Errors, true))
+	{
+		return Result;
+	}
 
 	AActor* TargetActor = FindActorByName(ActorName);
-	if (!TargetActor)
+	if (!IsValid(TargetActor))
 	{
 		Result.Errors.Add(FString::Printf(TEXT("Actor '%s' not found in current level."), *ActorName));
 		return Result;
 	}
 
 	UClass* PCGComponentClass = FindFirstObject<UClass>(TEXT("PCGComponent"), EFindFirstObjectOptions::None);
-	if (!PCGComponentClass) PCGComponentClass = FindFirstObject<UClass>(TEXT("UPCGComponent"), EFindFirstObjectOptions::None);
+	if (!IsValid(PCGComponentClass))
+	{
+		PCGComponentClass = FindFirstObject<UClass>(TEXT("UPCGComponent"), EFindFirstObjectOptions::None);
+	}
 
-	UActorComponent* PCGComp = PCGComponentClass ? TargetActor->FindComponentByClass(PCGComponentClass) : nullptr;
-	if (!PCGComp)
+	UActorComponent* PCGComp = IsValid(PCGComponentClass) ? TargetActor->FindComponentByClass(PCGComponentClass) : nullptr;
+	if (!IsValid(PCGComp))
 	{
 		Result.Errors.Add(FString::Printf(TEXT("No PCGComponent found on actor '%s'. Use attach_pcg_component first."), *ActorName));
 		return Result;
@@ -406,7 +453,7 @@ FAgentFrameworkActionResult FAgentFrameworkPCGActions::ExecuteSetPCGParameter(co
 			return Result;
 		}
 
-		Result.Warnings.Add(FString::Printf(TEXT("SetOverrideAttribute not available â€” parameter '%s' may need to be set via the PCG Editor UI or the parameter must be exposed in the graph settings."), *ParameterName));
+		Result.Warnings.Add(FString::Printf(TEXT("SetOverrideAttribute not available — parameter '%s' may need to be set via the PCG Editor UI or the parameter must be exposed in the graph settings."), *ParameterName));
 		Result.bSuccess = false;
 		Result.ResultMessage = FString::Printf(TEXT("Could not set PCG parameter '%s' programmatically on actor '%s'. Expose the parameter in the PCG graph settings asset and try again."), *ParameterName, *ActorName);
 		return Result;
@@ -427,22 +474,30 @@ FAgentFrameworkActionResult FAgentFrameworkPCGActions::ExecuteGeneratePCGLocal(c
 {
 	if (!CheckPCGAvailable(Result)) return Result;
 
-	FString ActorName = Params->GetStringField(TEXT("actor_name"));
+	FString ActorName;
+	if (!UAgentFrameworkActionUtils::TryGetStringParam(Params, TEXT("actor_name"), ActorName, Result.Errors, true))
+	{
+		return Result;
+	}
+
 	bool bForce = true;
-	Params->TryGetBoolField(TEXT("force"), bForce);
+	UAgentFrameworkActionUtils::TryGetBoolParam(Params, TEXT("force"), bForce, Result.Errors, false);
 
 	AActor* TargetActor = FindActorByName(ActorName);
-	if (!TargetActor)
+	if (!IsValid(TargetActor))
 	{
 		Result.Errors.Add(FString::Printf(TEXT("Actor '%s' not found in current level."), *ActorName));
 		return Result;
 	}
 
 	UClass* PCGComponentClass = FindFirstObject<UClass>(TEXT("PCGComponent"), EFindFirstObjectOptions::None);
-	if (!PCGComponentClass) PCGComponentClass = FindFirstObject<UClass>(TEXT("UPCGComponent"), EFindFirstObjectOptions::None);
+	if (!IsValid(PCGComponentClass))
+	{
+		PCGComponentClass = FindFirstObject<UClass>(TEXT("UPCGComponent"), EFindFirstObjectOptions::None);
+	}
 
-	UActorComponent* PCGComp = PCGComponentClass ? TargetActor->FindComponentByClass(PCGComponentClass) : nullptr;
-	if (!PCGComp)
+	UActorComponent* PCGComp = IsValid(PCGComponentClass) ? TargetActor->FindComponentByClass(PCGComponentClass) : nullptr;
+	if (!IsValid(PCGComp))
 	{
 		Result.Errors.Add(FString::Printf(TEXT("No PCGComponent on actor '%s'. Use attach_pcg_component first."), *ActorName));
 		return Result;
@@ -462,7 +517,9 @@ FAgentFrameworkActionResult FAgentFrameworkPCGActions::ExecuteGeneratePCGLocal(c
 		// Fallback: try Generate (older API)
 		UFunction* GenerateFunc = PCGComp->FindFunction(FName(TEXT("Generate")));
 		if (GenerateFunc)
+		{
 			PCGComp->ProcessEvent(GenerateFunc, nullptr);
+		}
 		else
 		{
 			Result.Errors.Add(TEXT("GenerateLocal function not found on PCGComponent. Ensure the PCG plugin version supports this API (UE5.2+)."));
@@ -471,7 +528,7 @@ FAgentFrameworkActionResult FAgentFrameworkPCGActions::ExecuteGeneratePCGLocal(c
 	}
 
 	Result.bSuccess = true;
-	Result.ResultMessage = FString::Printf(TEXT("PCG generation triggered on actor '%s' (force=%s). Generation runs asynchronously â€” use get_pcg_info to check the output actor count after completion."),
+	Result.ResultMessage = FString::Printf(TEXT("PCG generation triggered on actor '%s' (force=%s). Generation runs asynchronously — use get_pcg_info to check the output actor count after completion."),
 		*ActorName, bForce ? TEXT("true") : TEXT("false"));
 	return Result;
 }
@@ -484,10 +541,14 @@ FAgentFrameworkActionResult FAgentFrameworkPCGActions::ExecuteGetPCGInfo(const T
 {
 	if (!CheckPCGAvailable(Result)) return Result;
 
-	FString ActorName = Params->GetStringField(TEXT("actor_name"));
+	FString ActorName;
+	if (!UAgentFrameworkActionUtils::TryGetStringParam(Params, TEXT("actor_name"), ActorName, Result.Errors, true))
+	{
+		return Result;
+	}
 
 	AActor* TargetActor = FindActorByName(ActorName);
-	if (!TargetActor)
+	if (!IsValid(TargetActor))
 	{
 		Result.Errors.Add(FString::Printf(TEXT("Actor '%s' not found in current level."), *ActorName));
 		return Result;
@@ -497,11 +558,14 @@ FAgentFrameworkActionResult FAgentFrameworkPCGActions::ExecuteGetPCGInfo(const T
 	Root->SetStringField(TEXT("actor"), ActorName);
 
 	UClass* PCGComponentClass = FindFirstObject<UClass>(TEXT("PCGComponent"), EFindFirstObjectOptions::None);
-	if (!PCGComponentClass) PCGComponentClass = FindFirstObject<UClass>(TEXT("UPCGComponent"), EFindFirstObjectOptions::None);
+	if (!IsValid(PCGComponentClass))
+	{
+		PCGComponentClass = FindFirstObject<UClass>(TEXT("UPCGComponent"), EFindFirstObjectOptions::None);
+	}
 
-	UActorComponent* PCGComp = PCGComponentClass ? TargetActor->FindComponentByClass(PCGComponentClass) : nullptr;
+	UActorComponent* PCGComp = IsValid(PCGComponentClass) ? TargetActor->FindComponentByClass(PCGComponentClass) : nullptr;
 
-	if (!PCGComp)
+	if (!IsValid(PCGComp))
 	{
 		Root->SetBoolField(TEXT("has_pcg_component"), false);
 	}
@@ -518,7 +582,7 @@ FAgentFrameworkActionResult FAgentFrameworkPCGActions::ExecuteGetPCGInfo(const T
 			if (ObjProp)
 			{
 				UObject* Graph = ObjProp->GetObjectPropertyValue_InContainer(PCGComp);
-				Root->SetStringField(TEXT("graph"), Graph ? Graph->GetPathName() : TEXT("none"));
+				Root->SetStringField(TEXT("graph"), IsValid(Graph) ? Graph->GetPathName() : TEXT("none"));
 			}
 		}
 
@@ -528,7 +592,9 @@ FAgentFrameworkActionResult FAgentFrameworkPCGActions::ExecuteGetPCGInfo(const T
 		{
 			FBoolProperty* BoolProp = CastField<FBoolProperty>(IsGeneratingProp);
 			if (BoolProp)
+			{
 				Root->SetBoolField(TEXT("is_generating"), BoolProp->GetPropertyValue_InContainer(PCGComp));
+			}
 		}
 	}
 
@@ -541,18 +607,26 @@ FAgentFrameworkActionResult FAgentFrameworkPCGActions::ExecuteGetPCGInfo(const T
 	return Result;
 }
 
+// ============================================================================
+// ExecuteWirePCGNodes
+// ============================================================================
+
 FAgentFrameworkActionResult FAgentFrameworkPCGActions::ExecuteWirePCGNodes(const TSharedRef<FJsonObject>& Params, FAgentFrameworkActionResult& Result)
 {
 	if (!CheckPCGAvailable(Result)) return Result;
 
-	FString GraphPath = Params->GetStringField(TEXT("graph_path"));
-	FString SourceNodeName = Params->GetStringField(TEXT("source_node"));
-	FString SourcePin = Params->GetStringField(TEXT("source_pin"));
-	FString TargetNodeName = Params->GetStringField(TEXT("target_node"));
-	FString TargetPin = Params->GetStringField(TEXT("target_pin"));
+	FString GraphPath, SourceNodeName, SourcePin, TargetNodeName, TargetPin;
+	if (!UAgentFrameworkActionUtils::TryGetStringParam(Params, TEXT("graph_path"), GraphPath, Result.Errors, true) ||
+		!UAgentFrameworkActionUtils::TryGetStringParam(Params, TEXT("source_node"), SourceNodeName, Result.Errors, true) ||
+		!UAgentFrameworkActionUtils::TryGetStringParam(Params, TEXT("source_pin"), SourcePin, Result.Errors, true) ||
+		!UAgentFrameworkActionUtils::TryGetStringParam(Params, TEXT("target_node"), TargetNodeName, Result.Errors, true) ||
+		!UAgentFrameworkActionUtils::TryGetStringParam(Params, TEXT("target_pin"), TargetPin, Result.Errors, true))
+	{
+		return Result;
+	}
 
 	UPCGGraph* Graph = LoadObject<UPCGGraph>(nullptr, *GraphPath);
-	if (!Graph)
+	if (!IsValid(Graph))
 	{
 		Result.Errors.Add(FString::Printf(TEXT("PCG Graph not found at '%s'."), *GraphPath));
 		return Result;
@@ -563,7 +637,7 @@ FAgentFrameworkActionResult FAgentFrameworkPCGActions::ExecuteWirePCGNodes(const
 
 	for (UPCGNode* Node : Graph->GetNodes())
 	{
-		if (Node)
+		if (IsValid(Node))
 		{
 			if (Node->GetName() == SourceNodeName)
 			{
@@ -576,7 +650,7 @@ FAgentFrameworkActionResult FAgentFrameworkPCGActions::ExecuteWirePCGNodes(const
 		}
 	}
 
-	if (!SourceNode || !TargetNode)
+	if (!IsValid(SourceNode) || !IsValid(TargetNode))
 	{
 		Result.Errors.Add(FString::Printf(TEXT("Source node '%s' or Target node '%s' not found in PCG Graph. Nodes must exist before wiring."), *SourceNodeName, *TargetNodeName));
 		return Result;
@@ -586,13 +660,16 @@ FAgentFrameworkActionResult FAgentFrameworkPCGActions::ExecuteWirePCGNodes(const
 	Graph->AddEdge(SourceNode, FName(*SourcePin), TargetNode, FName(*TargetPin));
 
 	UPackage* Package = Graph->GetOutermost();
-	Package->MarkPackageDirty();
-	FString PackageFilename;
-	if (FPackageName::TryConvertLongPackageNameToFilename(Package->GetName(), PackageFilename, FPackageName::GetAssetPackageExtension()))
+	if (IsValid(Package))
 	{
-		FSavePackageArgs SaveArgs;
-		SaveArgs.TopLevelFlags = RF_Standalone;
-		UPackage::SavePackage(Package, Graph, *PackageFilename, SaveArgs);
+		Package->MarkPackageDirty();
+		FString PackageFilename;
+		if (FPackageName::TryConvertLongPackageNameToFilename(Package->GetName(), PackageFilename, FPackageName::GetAssetPackageExtension()))
+		{
+			FSavePackageArgs SaveArgs;
+			SaveArgs.TopLevelFlags = RF_Standalone;
+			UPackage::SavePackage(Package, Graph, *PackageFilename, SaveArgs);
+		}
 	}
 
 	Result.bSuccess = true;

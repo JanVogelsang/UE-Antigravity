@@ -76,6 +76,46 @@
         },
         "required": ["plugins"]
       }
+    },
+    {
+      "name": "get_plugin_settings",
+      "description": "Retrieve active AgentFramework Developer Settings (SecurityMode, protected paths, etc.).",
+      "input_schema": {
+        "type": "object",
+        "properties": {}
+      }
+    },
+    {
+      "name": "list_config_sections",
+      "description": "List all INI section headers present in a specified project config file.",
+      "input_schema": {
+        "type": "object",
+        "properties": {
+          "config_file": {
+            "type": "string",
+            "description": "Config filename: Engine, Game, Editor, Input, Scalability"
+          }
+        },
+        "required": ["config_file"]
+      }
+    },
+    {
+      "name": "read_config_section",
+      "description": "Read all key-value entries under a specified INI section in a config file.",
+      "input_schema": {
+        "type": "object",
+        "properties": {
+          "config_file": {
+            "type": "string",
+            "description": "Config filename: Engine, Game, Editor, Input, Scalability"
+          },
+          "section": {
+            "type": "string",
+            "description": "INI section name, e.g. /Script/Engine.RendererSettings"
+          }
+        },
+        "required": ["section"]
+      }
     }
   ]
 }

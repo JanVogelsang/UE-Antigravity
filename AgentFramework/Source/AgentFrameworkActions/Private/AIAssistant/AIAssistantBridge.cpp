@@ -1,13 +1,17 @@
 // Copyright 2026 AgentFramework. All Rights Reserved.
 
 #include "AIAssistant/AIAssistantBridge.h"
-#include "Framework/Application/SlateApplication.h"
 #include "Widgets/Docking/SDockTab.h"
 #include "Framework/Docking/TabManager.h"
 #include "SWebBrowser.h"
 #include "Modules/ModuleManager.h"
 
+#if WITH_EDITOR
+#include "Editor.h"
+#endif
+
 UAIAssistantBridge::UAIAssistantBridge()
+	: QueryCompletedSound(nullptr)
 {
 }
 
@@ -67,6 +71,10 @@ TSharedPtr<SWebBrowser> UAIAssistantBridge::FindWebBrowserWidget()
 
 bool UAIAssistantBridge::InitializeBridge()
 {
+	if (!IsValid(this))
+	{
+		return false;
+	}
 	TSharedPtr<SWebBrowser> WebBrowser = FindWebBrowserWidget();
 	if (!WebBrowser.IsValid())
 	{
@@ -83,6 +91,10 @@ bool UAIAssistantBridge::InitializeBridge()
 
 bool UAIAssistantBridge::SendQuery(const FString& InPrompt, FAIAssistantResponseDelegate InCallback)
 {
+	if (!IsValid(this))
+	{
+		return false;
+	}
 	TSharedPtr<SWebBrowser> WebBrowser = BoundWebBrowser.Pin();
 	if (!WebBrowser.IsValid())
 	{
@@ -166,6 +178,11 @@ bool UAIAssistantBridge::SendQuery(const FString& InPrompt, FAIAssistantResponse
 
 void UAIAssistantBridge::OnResponseReceived(const FString& Response, bool bSuccess)
 {
+	if (!IsValid(this))
+	{
+		return;
+	}
+
 	FAIAssistantResponseDelegate Callback = CurrentCallback;
 	CurrentCallback.Unbind();
 
@@ -173,4 +190,21 @@ void UAIAssistantBridge::OnResponseReceived(const FString& Response, bool bSucce
 	{
 		Callback.Execute(Response, bSuccess);
 	}
+
+	if (OnQueryCompleted.IsBound())
+	{
+		OnQueryCompleted.Broadcast(Response, bSuccess);
+	}
+
+	if (OnQueryCompletedDynamic.IsBound())
+	{
+		OnQueryCompletedDynamic.Broadcast(Response, bSuccess);
+	}
+
+#if WITH_EDITOR
+	if (IsValid(QueryCompletedSound) && GEditor)
+	{
+		GEditor->PlayEditorSound(QueryCompletedSound);
+	}
+#endif
 }

@@ -31,4 +31,8 @@ private:
 	FAgentFrameworkActionResult ExecuteCreateInputAction(const TSharedRef<FJsonObject>& Params);
 	FAgentFrameworkActionResult ExecuteCreateInputMappingContext(const TSharedRef<FJsonObject>& Params);
 	FAgentFrameworkActionResult ExecuteAddInputMapping(const TSharedRef<FJsonObject>& Params);
+	FAgentFrameworkActionResult ExecuteConfigureInputMappingModifiersTriggers(const TSharedRef<FJsonObject>& Params);
+
+	void PlaySuccessSound();
 };
+

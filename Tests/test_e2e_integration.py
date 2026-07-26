@@ -1,5 +1,6 @@
 import pytest
 import json
+import uuid
 
 def test_python_mcp_query_cpp_ast(mock_agent_client):
     """
@@ -197,7 +198,7 @@ def test_cpp_mcp_execute_python_script_validation(mock_agent_client):
     )
     assert response is not None
     assert response.get("bSuccess") is False
-    assert "Missing or empty required field" in "".join(response.get("Errors", []))
+    assert "is required" in "".join(response.get("Errors", []))
 
     # 2. Justification too short (< 10 chars)
     response = mock_agent_client.call_cpp_tool(
@@ -278,3 +279,147 @@ def test_cpp_mcp_query_epic_assistant(mock_agent_client):
     else:
         errors = "".join(response.get("Errors", []))
         assert "not enabled or loaded" in errors or "Failed to locate" in errors
+
+def test_cpp_mcp_search_assets(mock_agent_client):
+    """
+    Test C++ HTTP tool: search_assets
+    """
+    response = mock_agent_client.call_cpp_tool(
+        "search_assets",
+        {"query": "BP_RoundPawn", "max_results": 5}
+    )
+    assert response is not None
+    assert response.get("bSuccess") is True
+    assert "BP_RoundPawn" in response.get("ResultMessage", "")
+
+def test_cpp_mcp_list_directory(mock_agent_client):
+    """
+    Test C++ HTTP tool: list_directory
+    """
+    response = mock_agent_client.call_cpp_tool(
+        "list_directory",
+        {"directory": "Source"}
+    )
+    assert response is not None
+    assert response.get("bSuccess") is True
+    assert "Contents of directory:" in response.get("ResultMessage", "")
+
+def test_cpp_mcp_read_file_snippet(mock_agent_client):
+    """
+    Test C++ HTTP tool: read_file_snippet
+    """
+    response = mock_agent_client.call_cpp_tool(
+        "read_file_snippet",
+        {"file_path": "Config/DefaultEngine.ini", "start_line": 1, "end_line": 10}
+    )
+    assert response is not None
+    assert response.get("bSuccess") is True
+    assert "File:" in response.get("ResultMessage", "")
+
+def test_cpp_mcp_get_tool_info(mock_agent_client):
+    """
+    Test C++ HTTP tool: get_tool_info
+    """
+    response = mock_agent_client.call_cpp_tool(
+        "get_tool_info",
+        {"tool_name": "get_tool_info"}
+    )
+    assert response is not None
+    assert response.get("bSuccess") is True
+    result_data = json.loads(response.get("ResultMessage", "{}"))
+    assert "tool" in result_data
+    assert result_data["tool"].get("name") == "get_tool_info"
+
+def test_cpp_mcp_list_tools_in_category(mock_agent_client):
+    """
+    Test C++ HTTP tool: list_tools_in_category
+    """
+    response = mock_agent_client.call_cpp_tool(
+        "list_tools_in_category",
+        {"category": "Context"}
+    )
+    assert response is not None
+    assert response.get("bSuccess") is True
+    result_data = json.loads(response.get("ResultMessage", "{}"))
+    assert "tools" in result_data
+    tool_names = [t.get("name") for t in result_data["tools"]]
+    assert "search_assets" in tool_names
+
+
+def test_cpp_mcp_data_asset_actions(mock_agent_client):
+    """
+    Test C++ HTTP tools: create_data_asset, set_data_asset_properties, and get_data_asset_info
+    """
+    # 1. Create a PrimaryDataAsset
+    asset_path = f"/Game/DA_TestAsset_{uuid.uuid4().hex[:8]}"
+    create_response = mock_agent_client.call_cpp_tool(
+        "create_data_asset",
+        {
+            "asset_path": asset_path,
+            "class_name": "PrimaryDataAsset"
+        }
+    )
+    assert create_response is not None
+    assert create_response.get("bSuccess") is True
+    assert "Successfully created Data Asset" in create_response.get("ResultMessage", "")
+
+    # 2. Get Data Asset Info
+    info_response = mock_agent_client.call_cpp_tool(
+        "get_data_asset_info",
+        {
+            "asset_path": asset_path
+        }
+    )
+    assert info_response is not None
+    assert info_response.get("bSuccess") is True
+    info_msg = info_response.get("ResultMessage", "")
+    info_json = json.loads(info_msg)
+    assert info_json.get("asset_path") == asset_path
+    assert info_json.get("class_name") == "PrimaryDataAsset"
+
+    # 3. Set Properties on the Data Asset
+    set_response = mock_agent_client.call_cpp_tool(
+        "set_data_asset_properties",
+        {
+            "asset_path": asset_path,
+            "properties": {}
+        }
+    )
+    assert set_response is not None
+    assert set_response.get("bSuccess") is True
+    assert "Successfully updated properties" in set_response.get("ResultMessage", "")
+
+
+def test_cpp_mcp_data_table_actions(mock_agent_client):
+    """
+    Test C++ HTTP tools: create_data_table and import_json_to_datatable
+    """
+    asset_path = f"/Game/TestDataTable_{uuid.uuid4().hex[:8]}"
+
+    # 1. Create DataTable
+    create_response = mock_agent_client.call_cpp_tool(
+        "create_data_table",
+        {
+            "asset_path": asset_path,
+            "row_struct": "GameplayTagTableRow"
+        }
+    )
+    assert create_response is not None
+    assert create_response.get("bSuccess") is True
+    assert "Created DataTable" in create_response.get("ResultMessage", "")
+
+    # 2. Import JSON into DataTable
+    import_response = mock_agent_client.call_cpp_tool(
+        "import_json_to_datatable",
+        {
+            "asset_path": asset_path,
+            "json_data": '[{"Name": "TestTag1", "Tag": "TestTag1", "Comment": "Test comment 1"}]'
+        }
+    )
+    assert import_response is not None
+    assert import_response.get("bSuccess") is True
+    assert "Successfully imported" in import_response.get("ResultMessage", "")
+
+
+
+

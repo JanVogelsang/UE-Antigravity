@@ -38,6 +38,48 @@
         "properties": {},
         "required": []
       }
+    },
+    {
+      "name": "find_unreferenced_assets",
+      "description": "Scan a content directory and find assets that have zero external referencers across the project. Useful for auditing orphan assets and disk space cleanup.",
+      "input_schema": {
+        "type": "object",
+        "properties": {
+          "folder_path": {
+            "type": "string",
+            "description": "Package directory path to scan for unreferenced assets (e.g. '/Game/Blueprints', '/Game/Materials', or '/Game/')"
+          },
+          "include_soft_references": {
+            "type": "boolean",
+            "default": true,
+            "description": "If true, soft references count as referencers so assets with soft references will not be flagged. Default: true."
+          }
+        },
+        "required": [
+          "folder_path"
+        ]
+      }
+    },
+    {
+      "name": "inspect_uobject_properties",
+      "description": "Reflect and serialize all exported property values of a loaded UObject instance (e.g. DataAsset, Blueprint CDO, SoundBase, World asset) by object path.",
+      "input_schema": {
+        "type": "object",
+        "properties": {
+          "object_path": {
+            "type": "string",
+            "description": "Full object path or package path of the target UObject (e.g. '/Game/Data/DA_Config.DA_Config' or '/Game/Data/DA_Config')"
+          },
+          "include_inherited": {
+            "type": "boolean",
+            "default": true,
+            "description": "If true, includes inherited properties from parent super classes. Default: true."
+          }
+        },
+        "required": [
+          "object_path"
+        ]
+      }
     }
   ]
 }

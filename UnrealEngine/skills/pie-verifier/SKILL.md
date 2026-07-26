@@ -35,7 +35,7 @@ If the game starts with a UI menu (e.g., a main menu, inventory, or overlay):
 
 ### Step 3: Simulate Gameplay Actions
 Use `simulate_input` to move the character or trigger actions (e.g., press `W` to move, `SpaceBar` to jump, or custom keys).
-* Since inputs are processed instantly, call `simulate_input` with `action_type: "down"` to hold a key, wait a moment using `schedule` (timer), and then call `action_type: "up"` to release it.
+* Since inputs are processed instantly, call `simulate_input` with `action_type: "down"` to hold a key, wait a moment using your harness's native wait mechanism (e.g. Antigravity's `schedule` tool, or a short bounded shell wait), and then call `action_type: "up"` to release it.
 
 ### Step 4: Extract World State
 Call `query_world_state` with specific filters to verify that the gameplay action completed successfully:

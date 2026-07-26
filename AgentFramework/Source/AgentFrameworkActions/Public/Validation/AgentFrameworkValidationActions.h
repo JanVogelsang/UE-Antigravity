@@ -57,4 +57,27 @@ private:
 	 *                "test_flags" (string: "Smoke", "Product", "Stress", etc.)
 	 */
 	FAgentFrameworkActionResult ExecuteRunAutomationTests(const TSharedRef<FJsonObject>& Params, FAgentFrameworkActionResult& Result);
+
+	/**
+	 * Validate asset naming conventions against standard Unreal Engine prefixes.
+	 *
+	 * @param Params  JSON with optional "path" or "search_path" (content path, default "/Game/")
+	 *                and optional "asset_paths" (array of asset paths).
+	 */
+	FAgentFrameworkActionResult ExecuteValidateNamingConventions(const TSharedRef<FJsonObject>& Params, FAgentFrameworkActionResult& Result);
+
+	/**
+	 * Scan specified content path for ObjectRedirectors.
+	 *
+	 * @param Params  JSON with optional "path" or "search_path" (content path, default "/Game/")
+	 *                and optional "fix_redirectors" (bool).
+	 */
+	FAgentFrameworkActionResult ExecuteValidateRedirectors(const TSharedRef<FJsonObject>& Params, FAgentFrameworkActionResult& Result);
+
+	/**
+	 * Validate a level/map asset or current editor world for common map issues.
+	 *
+	 * @param Params  JSON with optional "map_path" (content path to level asset).
+	 */
+	FAgentFrameworkActionResult ExecuteValidateMap(const TSharedRef<FJsonObject>& Params, FAgentFrameworkActionResult& Result);
 };

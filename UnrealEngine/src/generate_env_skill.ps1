@@ -18,15 +18,15 @@ if (-not $UprojectFile) {
     $RepoParent = (Resolve-Path (Join-Path $PluginDir "../..")).Path
     $SiblingUprojects = Get-ChildItem -Path $RepoParent -Filter *.uproject -Recurse -Depth 2 -ErrorAction SilentlyContinue
     if ($SiblingUprojects) {
-        $TauProject = $SiblingUprojects | Where-Object { $_.Name -like "*Tau*" -or $_.DirectoryName -like "*tau-game*" }
-        if ($TauProject) {
-            $UprojectFile = $TauProject[0].FullName
+        $TestProject = $SiblingUprojects | Where-Object { $_.Name -like "*AgentFrameworkTest*" -or $_.DirectoryName -like "*AgentFrameworkTest*" }
+        if ($TestProject) {
+            $UprojectFile = $TestProject[0].FullName
         } else {
             $UprojectFile = $SiblingUprojects[0].FullName
         }
     } else {
         # Default fallback
-        $UprojectFile = Join-Path $RepoParent "tau-game\Tau.uproject"
+        $UprojectFile = Join-Path $RepoParent "AgentFrameworkTest\AgentFrameworkTest.uproject"
     }
 }
 
@@ -97,25 +97,49 @@ $EditorExe = Join-Path $InstalledDir "Engine\Binaries\Win64\UnrealEditor.exe"
 $BuildTool = Join-Path $InstalledDir "Engine\Build\BatchFiles\Build.bat"
 $DevAuthTool = "C:\Program Files\EOS_DevAuthTool\EOS_DevAuthTool.exe"
 
+# Resolve libclang.dll path
+$LibclangPath = $null
+$LibclangCandidates = @(
+    "C:\Program Files (x86)\Microsoft Visual Studio\18\BuildTools\VC\Tools\Llvm\x64\bin\libclang.dll",
+    "C:\Program Files (x86)\Microsoft Visual Studio\17\BuildTools\VC\Tools\Llvm\x64\bin\libclang.dll",
+    "C:\Program Files\LLVM\bin\libclang.dll",
+    "C:\Program Files (x86)\LLVM\bin\libclang.dll"
+)
+foreach ($Candidate in $LibclangCandidates) {
+    if (Test-Path $Candidate) {
+        $LibclangPath = $Candidate
+        break
+    }
+}
+if (-not $LibclangPath) {
+    # Try dynamic searching in standard locations as fallback
+    $Found = Get-ChildItem -Path "C:\Program Files (x86)\Microsoft Visual Studio" -Filter "libclang.dll" -Recurse -ErrorAction SilentlyContinue | Select-Object -First 1
+    if ($Found) {
+        $LibclangPath = $Found.FullName
+    }
+}
+if (-not $LibclangPath) {
+    $LibclangPath = "C:\Program Files\LLVM\bin\libclang.dll" # Default fallback
+}
+
 $UnrealInstructionsPath = Join-Path $PluginDir "skills\unreal-instructions\SKILL.md"
 
 $LocalEnvContent = @"
 <!-- LOCAL_ENV_START -->
 ## 2. Local Environment & Workflows
-
-### Startup Requirement
-When this plugin first loads, you **MUST** call ``ask_permission`` with:
-- ``Action``: ``"unsandboxed"``
-- ``Target``: ``"$EditorExe"``
-
-This grants the ability to launch the Unreal Editor process outside the terminal sandbox. Do this proactively before any editor interaction is needed.
-
+ 
+### Startup Requirement (Sandbox Pre-Authorization)
+Launching the Unreal Editor spawns a long-lived GUI process outside the terminal sandbox. How to authorize this depends on your agent harness:
+- **If your harness provides an ``ask_permission`` tool (e.g. Antigravity):** When this plugin first loads, proactively call ``ask_permission`` with ``Action``: ``"unsandboxed"`` and ``Target``: ``"$EditorExe"`` before any editor interaction is needed.
+- **If it does not (e.g. Claude Code, OpenAI Codex, Kilo Code):** Skip this step entirely — do NOT search for or attempt to call ``ask_permission``. Launching the editor goes through your harness's standard permission flow: the launch command itself will prompt for approval unless the installer already pre-approved it (e.g. via ``.claude/settings.json`` allow rules or your assistant's command allowlist).
+ 
 ### Local Paths
 - **Unreal Engine Root:** $InstalledDir
 - **Unreal Editor Executable:** $EditorExe
 - **Unreal Build Tool:** $BuildTool
 - **Unreal Project File:** $ProjectFile
 - **EOS DevAuthTool:** $DevAuthTool
+- **Libclang Path:** $LibclangPath
 
 ### Developer Tool Workflows
 #### 1. EOS DevAuthTool

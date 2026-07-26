@@ -32,10 +32,12 @@ class UPanelSlot;
  *   2. Widget Blueprint Graph: standard K2 nodes for event binding (OnClicked, etc.)
  *      â€” use bind_widget_event to create event nodes, then inject_blueprint_nodes_t3d for logic.
  *
- * Supported tools (11):
- *   create_widget_blueprint, add_widget, set_widget_slot, set_widget_property,
- *   set_widget_font, set_widget_brush, bind_widget_event, remove_widget,
- *   get_widget_tree, compile_widget_blueprint, macro_create_basic_ui_menu
+ * Supported tools (17):
+ *   create_widget_blueprint, add_widget, set_widget_slot, set_widget_slot_properties,
+ *   set_widget_property, set_widget_font, set_widget_brush, bind_widget_event,
+ *   remove_widget, get_widget_tree, compile_widget_blueprint, macro_create_basic_ui_menu,
+ *   capture_widget, instantiate_ui_hierarchy, get_widget_info,
+ *   clear_panel_children, get_widget_slots
  */
 class AGENTFRAMEWORKACTIONS_API FAgentFrameworkWidgetActions : public IAgentFrameworkActionExecutor
 {
@@ -62,6 +64,9 @@ private:
 
 	/** Configure the layout slot of a widget (anchors, offsets, padding, alignment, fill). */
 	FAgentFrameworkActionResult ExecuteSetWidgetSlot(const TSharedRef<FJsonObject>& Params, FAgentFrameworkActionResult& Result);
+
+	/** Configure layout slot properties on a child widget (anchors, offsets, padding, alignment, size, grid, z-order). Spec 16 tool: set_widget_slot_properties. */
+	FAgentFrameworkActionResult ExecuteSetWidgetSlotProperties(const TSharedRef<FJsonObject>& Params, FAgentFrameworkActionResult& Result);
 
 	/** Set a property on a named widget via reflection. */
 	FAgentFrameworkActionResult ExecuteSetWidgetProperty(const TSharedRef<FJsonObject>& Params, FAgentFrameworkActionResult& Result);
@@ -93,6 +98,16 @@ private:
 	/** Instantiate a complete UI widget tree, configuring slot layout, properties, fonts, brushes, and event bindings in a single call. */
 	FAgentFrameworkActionResult ExecuteInstantiateUIHierarchy(const TSharedRef<FJsonObject>& Params, FAgentFrameworkActionResult& Result);
 
+	/** Read-only: return detailed information for a specific widget in a Widget Blueprint. */
+	FAgentFrameworkActionResult ExecuteGetWidgetInfo(const TSharedRef<FJsonObject>& Params, FAgentFrameworkActionResult& Result);
+
+	/** Clear all children from a specified panel widget. */
+	FAgentFrameworkActionResult ExecuteClearPanelChildren(const TSharedRef<FJsonObject>& Params, FAgentFrameworkActionResult& Result);
+
+	/** Read-only: list all widget slots and layout configurations in a Widget Blueprint. */
+	FAgentFrameworkActionResult ExecuteGetWidgetSlots(const TSharedRef<FJsonObject>& Params, FAgentFrameworkActionResult& Result);
+
+public:
 	// ======================================================================
 	// Helpers
 	// ======================================================================
@@ -131,6 +146,6 @@ private:
 	/** Parse a linear color string "(R=1,G=0,B=0,A=1)" to FLinearColor. */
 	static bool ParseLinearColor(const FString& Str, FLinearColor& OutColor);
 
-	/** Compile and mark dirty â€” common post-modification step. */
+	/** Compile and mark dirty — common post-modification step. */
 	static void CompileAndMarkDirty(UWidgetBlueprint* WidgetBP);
 };

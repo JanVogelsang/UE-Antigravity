@@ -1,51 +1,23 @@
-// Copyright 2026 AgentFramework. All Rights Reserved.
-
 #include "Diagnostics/AgentFrameworkDiagnosticsActions.h"
-#include "AgentFrameworkCoreModule.h"
-#include "Logging/MessageLog.h"
-#include "Logging/TokenizedMessage.h"
+#include "AgentFrameworkActionUtils.h"
+#include "AgentFrameworkLogCapture.h"
 #include "Misc/OutputDeviceRedirector.h"
-#include "Misc/OutputDeviceHelper.h"
+#include "Misc/Paths.h"
 #include "Async/Async.h"
+#include "AssetRegistry/AssetRegistryModule.h"
+#include "AssetRegistry/IAssetRegistry.h"
+#include "Serialization/JsonSerializer.h"
+#include "Serialization/JsonWriter.h"
+#include "UObject/UObjectGlobals.h"
+#include "UObject/Class.h"
+#include "UObject/UnrealType.h"
+
+#if WITH_EDITOR
+#include "Editor.h"
+#include "Sound/SoundBase.h"
+#endif
 
 #define LOCTEXT_NAMESPACE "AgentFrameworkDiagnosticsActions"
-
-/**
- * Custom output device that captures log messages into a buffer.
- * Attached temporarily during read_message_log to capture recent entries.
- */
-class FAgentFrameworkLogCapture : public FOutputDevice
-{
-public:
-	struct FLogEntry
-	{
-		FString Category;
-		FString Message;
-		ELogVerbosity::Type Verbosity;
-		double Time;
-	};
-
-	TArray<FLogEntry> Entries;
-	int32 MaxEntries = 500;
-
-	virtual void Serialize(const TCHAR* V, ELogVerbosity::Type Verbosity, const FName& Category) override
-	{
-		FLogEntry Entry;
-		Entry.Category = Category.ToString();
-		Entry.Message = V;
-		Entry.Verbosity = Verbosity;
-		Entry.Time = FPlatformTime::Seconds();
-
-		if (Entries.Num() >= MaxEntries)
-		{
-			Entries.RemoveAt(0, 1, EAllowShrinking::No);
-		}
-		Entries.Add(MoveTemp(Entry));
-	}
-};
-
-// Static log capture instance â€” always listening
-static TSharedPtr<FAgentFrameworkLogCapture> GAgentFrameworkLogCapture;
 
 // ============================================================================
 // Lifecycle
@@ -53,18 +25,12 @@ static TSharedPtr<FAgentFrameworkLogCapture> GAgentFrameworkLogCapture;
 
 FAgentFrameworkDiagnosticsActions::FAgentFrameworkDiagnosticsActions()
 {
-	// Create and attach the log capture device so it accumulates messages
-	if (!GAgentFrameworkLogCapture.IsValid())
-	{
-		GAgentFrameworkLogCapture = MakeShared<FAgentFrameworkLogCapture>();
-		GLog->AddOutputDevice(GAgentFrameworkLogCapture.Get());
-	}
+	// Initialize log capture singleton
+	FAgentFrameworkLogCapture::Get();
 }
 
 FAgentFrameworkDiagnosticsActions::~FAgentFrameworkDiagnosticsActions()
 {
-	// We intentionally do NOT remove the device here â€” it's a singleton
-	// that persists for the editor session.
 }
 
 // ============================================================================
@@ -75,7 +41,7 @@ FName FAgentFrameworkDiagnosticsActions::GetActionName() const { return FName(TE
 
 TArray<FString> FAgentFrameworkDiagnosticsActions::GetSupportedToolNames() const
 {
-	return { TEXT("read_message_log"), TEXT("shutdown_editor") };
+	return { TEXT("read_message_log"), TEXT("shutdown_editor"), TEXT("find_unreferenced_assets"), TEXT("inspect_uobject_properties") };
 }
 
 bool FAgentFrameworkDiagnosticsActions::ValidateParams(const TSharedRef<FJsonObject>& Params, TArray<FString>& OutErrors) const
@@ -85,22 +51,42 @@ bool FAgentFrameworkDiagnosticsActions::ValidateParams(const TSharedRef<FJsonObj
 
 FAgentFrameworkActionResult FAgentFrameworkDiagnosticsActions::ExecuteAction(const TSharedRef<FJsonObject>& Params)
 {
-	FString ToolName;
-	Params->TryGetStringField(TEXT("_tool_name"), ToolName);
-
 	FAgentFrameworkActionResult Result;
 	Result.bSuccess = false;
 
+	FString ToolName;
+	TArray<FString> TempErrors;
+	if (!UAgentFrameworkActionUtils::TryGetStringParam(Params, TEXT("_tool_name"), ToolName, TempErrors, false) || ToolName.IsEmpty())
+	{
+		UAgentFrameworkActionUtils::TryGetStringParam(Params, TEXT("action"), ToolName, TempErrors, false);
+	}
+
 	if (ToolName == TEXT("read_message_log"))
 	{
-		return ExecuteReadMessageLog(Params, Result);
+		Result = ExecuteReadMessageLog(Params, Result);
 	}
 	else if (ToolName == TEXT("shutdown_editor"))
 	{
-		return ExecuteShutdownEditor(Params, Result);
+		Result = ExecuteShutdownEditor(Params, Result);
+	}
+	else if (ToolName == TEXT("find_unreferenced_assets"))
+	{
+		Result = ExecuteFindUnreferencedAssets(Params, Result);
+	}
+	else if (ToolName == TEXT("inspect_uobject_properties"))
+	{
+		Result = ExecuteInspectUObjectProperties(Params, Result);
+	}
+	else
+	{
+		Result.Errors.Add(FString::Printf(TEXT("Unknown tool name: %s"), *ToolName));
 	}
 
-	Result.Errors.Add(FString::Printf(TEXT("Unknown tool name: %s"), *ToolName));
+	if (Result.bSuccess)
+	{
+		PlaySuccessSound();
+	}
+
 	return Result;
 }
 
@@ -111,7 +97,8 @@ FAgentFrameworkActionResult FAgentFrameworkDiagnosticsActions::ExecuteAction(con
 FAgentFrameworkActionResult FAgentFrameworkDiagnosticsActions::ExecuteReadMessageLog(
 	const TSharedRef<FJsonObject>& Params, FAgentFrameworkActionResult& Result)
 {
-	if (!GAgentFrameworkLogCapture.IsValid())
+	TSharedPtr<FAgentFrameworkLogCapture> LogCapture = FAgentFrameworkLogCapture::Get();
+	if (!LogCapture.IsValid())
 	{
 		Result.Errors.Add(TEXT("Log capture device is not initialized."));
 		return Result;
@@ -119,22 +106,26 @@ FAgentFrameworkActionResult FAgentFrameworkDiagnosticsActions::ExecuteReadMessag
 
 	// Parse optional filters
 	int32 MaxLines = 100;
-	Params->TryGetNumberField(TEXT("max_lines"), MaxLines);
+	UAgentFrameworkActionUtils::TryGetIntParam(Params, TEXT("max_lines"), MaxLines, Result.Errors, false);
 	MaxLines = FMath::Clamp(MaxLines, 1, 500);
 
 	FString CategoryFilter;
-	Params->TryGetStringField(TEXT("category_filter"), CategoryFilter);
+	UAgentFrameworkActionUtils::TryGetStringParam(Params, TEXT("category_filter"), CategoryFilter, Result.Errors, false);
 
 	FString SeverityFilter;
-	Params->TryGetStringField(TEXT("severity_filter"), SeverityFilter);
+	UAgentFrameworkActionUtils::TryGetStringParam(Params, TEXT("severity_filter"), SeverityFilter, Result.Errors, false);
 
 	bool bErrorsOnly = false;
 	if (SeverityFilter.Equals(TEXT("Error"), ESearchCase::IgnoreCase))
+	{
 		bErrorsOnly = true;
+	}
 
 	bool bWarningsAndErrors = false;
 	if (SeverityFilter.Equals(TEXT("Warning"), ESearchCase::IgnoreCase))
+	{
 		bWarningsAndErrors = true;
+	}
 
 	// Filter and format entries
 	FString Output = TEXT("=== Output Log ===\n");
@@ -143,7 +134,8 @@ FAgentFrameworkActionResult FAgentFrameworkDiagnosticsActions::ExecuteReadMessag
 	int32 TotalWarnings = 0;
 
 	// Read from end (most recent first)
-	const auto& Entries = GAgentFrameworkLogCapture->Entries;
+	TArray<FAgentFrameworkLogEntry> Entries;
+	LogCapture->GetEntries(Entries);
 	int32 StartIdx = FMath::Max(0, Entries.Num() - MaxLines * 2); // Over-read to account for filtering
 
 	for (int32 i = Entries.Num() - 1; i >= StartIdx && OutputCount < MaxLines; --i)
@@ -152,20 +144,30 @@ FAgentFrameworkActionResult FAgentFrameworkDiagnosticsActions::ExecuteReadMessag
 
 		// Count stats
 		if (Entry.Verbosity == ELogVerbosity::Error || Entry.Verbosity == ELogVerbosity::Fatal)
+		{
 			TotalErrors++;
+		}
 		if (Entry.Verbosity == ELogVerbosity::Warning)
+		{
 			TotalWarnings++;
+		}
 
 		// Apply category filter
 		if (!CategoryFilter.IsEmpty() && !Entry.Category.Contains(CategoryFilter, ESearchCase::IgnoreCase))
+		{
 			continue;
+		}
 
 		// Apply severity filter
 		if (bErrorsOnly && Entry.Verbosity != ELogVerbosity::Error && Entry.Verbosity != ELogVerbosity::Fatal)
+		{
 			continue;
+		}
 		if (bWarningsAndErrors && Entry.Verbosity != ELogVerbosity::Error
 			&& Entry.Verbosity != ELogVerbosity::Fatal && Entry.Verbosity != ELogVerbosity::Warning)
+		{
 			continue;
+		}
 
 		// Format the entry
 		FString Severity;
@@ -193,10 +195,10 @@ FAgentFrameworkActionResult FAgentFrameworkDiagnosticsActions::ExecuteReadMessag
 
 	// Optionally clear after reading
 	bool bClearAfterRead = false;
-	Params->TryGetBoolField(TEXT("clear_after_read"), bClearAfterRead);
+	UAgentFrameworkActionUtils::TryGetBoolParam(Params, TEXT("clear_after_read"), bClearAfterRead, Result.Errors, false);
 	if (bClearAfterRead)
 	{
-		GAgentFrameworkLogCapture->Entries.Empty();
+		LogCapture->ClearEntries();
 		Output += TEXT("(log buffer cleared)\n");
 	}
 
@@ -215,6 +217,186 @@ FAgentFrameworkActionResult FAgentFrameworkDiagnosticsActions::ExecuteShutdownEd
 	Result.bSuccess = true;
 	Result.ResultMessage = TEXT("Editor shutdown initiated successfully.");
 	return Result;
+}
+
+FAgentFrameworkActionResult FAgentFrameworkDiagnosticsActions::ExecuteFindUnreferencedAssets(
+	const TSharedRef<FJsonObject>& Params, FAgentFrameworkActionResult& Result)
+{
+	FString FolderPath;
+	UAgentFrameworkActionUtils::TryGetStringParam(Params, TEXT("folder_path"), FolderPath, Result.Errors, false);
+	if (FolderPath.IsEmpty()) UAgentFrameworkActionUtils::TryGetStringParam(Params, TEXT("directory_path"), FolderPath, Result.Errors, false);
+	if (FolderPath.IsEmpty()) UAgentFrameworkActionUtils::TryGetStringParam(Params, TEXT("FolderPath"), FolderPath, Result.Errors, false);
+	if (FolderPath.IsEmpty()) UAgentFrameworkActionUtils::TryGetStringParam(Params, TEXT("target_folder"), FolderPath, Result.Errors, false);
+
+	if (FolderPath.IsEmpty())
+	{
+		Result.Errors.Add(TEXT("Parameter 'folder_path' is required."));
+		return Result;
+	}
+
+	if (!FolderPath.StartsWith(TEXT("/Game")))
+	{
+		if (FolderPath.StartsWith(TEXT("Content/"))) FolderPath = TEXT("/Game/") + FolderPath.RightChop(8);
+		else if (FolderPath.StartsWith(TEXT("Content"))) FolderPath = TEXT("/Game");
+		else if (!FolderPath.StartsWith(TEXT("/"))) FolderPath = TEXT("/Game/") + FolderPath;
+	}
+	FPaths::NormalizeDirectoryName(FolderPath);
+
+	bool bIncludeSoftReferences = true;
+	if (Params->HasField(TEXT("include_soft_references")))
+	{
+		UAgentFrameworkActionUtils::TryGetBoolParam(Params, TEXT("include_soft_references"), bIncludeSoftReferences, Result.Errors, false);
+	}
+	else if (Params->HasField(TEXT("IncludeSoftReferences")))
+	{
+		UAgentFrameworkActionUtils::TryGetBoolParam(Params, TEXT("IncludeSoftReferences"), bIncludeSoftReferences, Result.Errors, false);
+	}
+
+	FAssetRegistryModule& AssetRegistryModule = FModuleManager::LoadModuleChecked<FAssetRegistryModule>("AssetRegistry");
+	IAssetRegistry& AssetRegistry = AssetRegistryModule.Get();
+
+	TArray<FAssetData> Assets;
+	AssetRegistry.GetAssetsByPath(FName(*FolderPath), Assets, true, false);
+
+	TArray<TSharedPtr<FJsonValue>> UnreferencedAssetsJson;
+	TArray<FString> UnreferencedAssetsList;
+
+	FAssetRegistryDependencyOptions DependencyOptions;
+	DependencyOptions.bIncludeHardPackageReferences = true;
+	DependencyOptions.bIncludeSoftPackageReferences = bIncludeSoftReferences;
+	DependencyOptions.bIncludeSearchableNames = false;
+#if ENGINE_MAJOR_VERSION == 5 && ENGINE_MINOR_VERSION < 8
+	DependencyOptions.bIncludeManagementReferences = false;
+#endif
+
+	for (const FAssetData& Asset : Assets)
+	{
+		FName PackageName = Asset.PackageName;
+		TArray<FName> Referencers;
+		AssetRegistry.K2_GetReferencers(PackageName, DependencyOptions, Referencers);
+
+		int32 ExternalReferencersCount = 0;
+		for (const FName& Referencer : Referencers)
+		{
+			if (Referencer != PackageName)
+			{
+				ExternalReferencersCount++;
+			}
+		}
+
+		if (ExternalReferencersCount == 0)
+		{
+			FString AssetPath = Asset.GetObjectPathString();
+			UnreferencedAssetsList.Add(AssetPath);
+			UnreferencedAssetsJson.Add(MakeShared<FJsonValueString>(AssetPath));
+		}
+	}
+
+	FString SummaryMsg = FString::Printf(TEXT("Found %d unreferenced assets in %s (include_soft_references: %s)."),
+		UnreferencedAssetsList.Num(), *FolderPath, bIncludeSoftReferences ? TEXT("true") : TEXT("false"));
+
+	TSharedPtr<FJsonObject> OutputObj = MakeShared<FJsonObject>();
+	OutputObj->SetBoolField(TEXT("bSuccess"), true);
+	OutputObj->SetStringField(TEXT("folder_path"), FolderPath);
+	OutputObj->SetBoolField(TEXT("include_soft_references"), bIncludeSoftReferences);
+	OutputObj->SetArrayField(TEXT("unreferenced_assets"), UnreferencedAssetsJson);
+	OutputObj->SetNumberField(TEXT("count"), UnreferencedAssetsList.Num());
+	OutputObj->SetStringField(TEXT("ResultMessage"), SummaryMsg);
+
+	FString ResponseJsonString;
+	TSharedRef<TJsonWriter<>> Writer = TJsonWriterFactory<>::Create(&ResponseJsonString);
+	FJsonSerializer::Serialize(OutputObj.ToSharedRef(), Writer);
+
+	Result.bSuccess = true;
+	Result.ResultMessage = ResponseJsonString;
+	return Result;
+}
+
+FAgentFrameworkActionResult FAgentFrameworkDiagnosticsActions::ExecuteInspectUObjectProperties(
+	const TSharedRef<FJsonObject>& Params, FAgentFrameworkActionResult& Result)
+{
+	FString ObjectPath;
+	UAgentFrameworkActionUtils::TryGetStringParam(Params, TEXT("object_path"), ObjectPath, Result.Errors, false);
+	if (ObjectPath.IsEmpty()) UAgentFrameworkActionUtils::TryGetStringParam(Params, TEXT("ObjectPath"), ObjectPath, Result.Errors, false);
+	if (ObjectPath.IsEmpty()) UAgentFrameworkActionUtils::TryGetStringParam(Params, TEXT("target_object"), ObjectPath, Result.Errors, false);
+
+	if (ObjectPath.IsEmpty())
+	{
+		Result.Errors.Add(TEXT("Parameter 'object_path' is required."));
+		return Result;
+	}
+
+	bool bIncludeInherited = true;
+	if (Params->HasField(TEXT("include_inherited")))
+	{
+		UAgentFrameworkActionUtils::TryGetBoolParam(Params, TEXT("include_inherited"), bIncludeInherited, Result.Errors, false);
+	}
+	else if (Params->HasField(TEXT("IncludeInherited")))
+	{
+		UAgentFrameworkActionUtils::TryGetBoolParam(Params, TEXT("IncludeInherited"), bIncludeInherited, Result.Errors, false);
+	}
+
+	UObject* TargetObject = StaticLoadObject(UObject::StaticClass(), nullptr, *ObjectPath);
+	if (!TargetObject && !ObjectPath.Contains(TEXT(".")))
+	{
+		FString AssetName = FPaths::GetBaseFilename(ObjectPath);
+		FString FullPath = ObjectPath + TEXT(".") + AssetName;
+		TargetObject = StaticLoadObject(UObject::StaticClass(), nullptr, *FullPath);
+	}
+
+	if (!TargetObject)
+	{
+		Result.Errors.Add(FString::Printf(TEXT("Failed to load object at path: %s"), *ObjectPath));
+		return Result;
+	}
+
+	TSharedPtr<FJsonObject> PropertiesObj = MakeShared<FJsonObject>();
+	UClass* TargetClass = TargetObject->GetClass();
+
+	EFieldIteratorFlags::SuperClassFlags SuperFlags = bIncludeInherited ? EFieldIteratorFlags::IncludeSuper : EFieldIteratorFlags::ExcludeSuper;
+	for (TFieldIterator<FProperty> It(TargetClass, SuperFlags); It; ++It)
+	{
+		FProperty* Prop = *It;
+		if (Prop)
+		{
+			FString ValueStr;
+			const void* PropAddr = Prop->ContainerPtrToValuePtr<void>(TargetObject);
+			Prop->ExportTextItem_Direct(ValueStr, PropAddr, nullptr, TargetObject, PPF_None);
+			PropertiesObj->SetStringField(Prop->GetName(), ValueStr);
+		}
+	}
+
+	FString SummaryMsg = FString::Printf(TEXT("Successfully inspected properties of %s [%s]."),
+		*ObjectPath, *TargetClass->GetName());
+
+	TSharedPtr<FJsonObject> OutputObj = MakeShared<FJsonObject>();
+	OutputObj->SetBoolField(TEXT("bSuccess"), true);
+	OutputObj->SetStringField(TEXT("object_path"), ObjectPath);
+	OutputObj->SetStringField(TEXT("object_class"), TargetClass->GetName());
+	OutputObj->SetObjectField(TEXT("properties"), PropertiesObj);
+	OutputObj->SetStringField(TEXT("ResultMessage"), SummaryMsg);
+
+	FString ResponseJsonString;
+	TSharedRef<TJsonWriter<>> Writer = TJsonWriterFactory<>::Create(&ResponseJsonString);
+	FJsonSerializer::Serialize(OutputObj.ToSharedRef(), Writer);
+
+	Result.bSuccess = true;
+	Result.ResultMessage = ResponseJsonString;
+	return Result;
+}
+
+void FAgentFrameworkDiagnosticsActions::PlaySuccessSound()
+{
+#if WITH_EDITOR
+	if (IsValid(GEditor))
+	{
+		USoundBase* SuccessSound = LoadObject<USoundBase>(nullptr, TEXT("/Engine/EditorSounds/Notifications/CompileSuccess.CompileSuccess"));
+		if (IsValid(SuccessSound))
+		{
+			GEditor->PlayEditorSound(SuccessSound);
+		}
+	}
+#endif
 }
 
 #undef LOCTEXT_NAMESPACE

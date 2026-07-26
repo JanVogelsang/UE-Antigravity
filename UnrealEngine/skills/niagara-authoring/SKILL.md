@@ -24,15 +24,45 @@ Create, modify, compile, and visually evaluate AAA-quality Niagara particle syst
    - `AddVelocity`, `GravityForce`, `Drag`, `Collision`, `LightRenderer`, `AccelerationForce`.
 
 4. **Parameter and Curve Binding**:
-   Use `set_niagara_module_pin` to configure constants or time-value curves for module inputs (e.g. setting size/color curves over particle life).
+   - **Module Stack Input Pins (`set_niagara_module_pin`)**:
+     Configure constants or time-value curves for module inputs (e.g., setting size/color curves over particle life).
    
+   - **System/Emitter Level User Parameters & Curves (`set_niagara_parameter`)**:
+     Use `set_niagara_parameter` to set exposed User parameters or dynamic curve parameter overrides on the system store:
+     
+     *Scalar / Color User Parameter*:
+     ```json
+     {
+       "SystemAsset": "/Game/VFX/NS_Explosion",
+       "ParameterScope": "User",
+       "ParameterName": "SpawnRate",
+       "DataType": "Float",
+       "Value": 500.0
+     }
+     ```
+
+     *Float Curve Override*:
+     ```json
+     {
+       "SystemAsset": "/Game/VFX/NS_Explosion",
+       "ParameterScope": "User",
+       "ParameterName": "SizeOverLife",
+       "DataType": "CurveFloat",
+       "CurveKeys": [
+         { "Time": 0.0, "Value": 10.0 },
+         { "Time": 0.5, "Value": 50.0 },
+         { "Time": 1.0, "Value": 0.0 }
+       ]
+     }
+     ```
+    
 5. **Compilation Verification**:
    Call `compile_niagara_system` to build the script bytecode. Analyze the returned compile warnings and error messages to verify structural correctness.
 
 6. **Temporal Vision Capture loop**:
    Call `capture_niagara_system_isolated` to retrieve a stitched 2x2 grid image representing the start, middle, peak, and dissipation keyframes of the simulation.
    * Examine time labels (`t = 0.5s`) and the visual scale indicator bar (e.g. `1m` or `10cm`) to evaluate size and speed.
-   * Make adjustments to parameters using `set_niagara_module_pin` and iterate until target look matches user prompts/reference images.
+   * Make adjustments to parameters using `set_niagara_module_pin` or `set_niagara_parameter` and iterate until target look matches user prompts/reference images.
 
 ## Performance Optimization Rules
 - **GPU Throttling**: If particle spawn rate $\ge$ 1,000, change the simulation target (`SimTarget`) to GPU Simulation.

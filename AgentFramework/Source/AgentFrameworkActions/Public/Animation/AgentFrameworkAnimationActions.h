@@ -97,4 +97,7 @@ private:
 	FAgentFrameworkActionResult ExecuteCreateBlendSpace(const TSharedRef<FJsonObject>& Params, FAgentFrameworkActionResult& Result);
 	FAgentFrameworkActionResult ExecuteConfigureAnimMontage(const TSharedRef<FJsonObject>& Params, FAgentFrameworkActionResult& Result);
 	FAgentFrameworkActionResult ExecuteMapLiveLinkSource(const TSharedRef<FJsonObject>& Params, FAgentFrameworkActionResult& Result);
+
+private:
+	void PlaySuccessSound();
 };

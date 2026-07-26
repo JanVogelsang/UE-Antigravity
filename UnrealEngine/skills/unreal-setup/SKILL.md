@@ -1,6 +1,6 @@
 ---
 name: unreal-setup
-description: One-time setup skill to scan the Unreal Engine project, generate the unreal-env skill, and compile a permanent OKF project-index skill.
+description: One-time setup skill to scan the Unreal Engine project, configure the local environment in unreal-instructions, and compile a permanent OKF project-index skill.
 ---
 # Unreal Engine Project Setup and Indexing SOP
 
@@ -16,25 +16,25 @@ Before executing or implementing any setup steps, you must perform a diagnostic 
 
 1. **Perform Setup Diagnostic Check**:
    Evaluate the current project state to identify what is already completed and what remains to be done:
-   - **Check for LLVM/Clang**: Check if `libclang.dll` can be resolved in registry or standard paths (e.g., `C:\Program Files\LLVM\bin\libclang.dll`).
+   - **Check for LLVM/Clang**: Check if `libclang.dll` can be resolved via the registry, standard standalone-installer paths (e.g., `C:\Program Files\LLVM\bin\libclang.dll`), or a Visual Studio / Visual Studio Build Tools "C++ Clang tools for Windows" component install (see Step 1).
    - **Check for Git and Git LFS**: Verify that `.git` exists, and that `.gitattributes` tracks `*.uasset` and `*.umap` via Git LFS.
-   - **Check for Antigravity plugin installation**: Check if the folder `.agents/plugins/UnrealEngine` exists.
+   - **Check for agent plugin installation**: Check if the folder `.agents/plugins/UnrealEngine` exists.
    - **Check for compilation database**: Check if `compile_commands.json` exists in the game project directory.
-   - **Check for environment skill**: Check if `.agents/plugins/UnrealEngine/skills/unreal-env/SKILL.md` exists.
+   - **Check for local environment configuration**: Check if local environment paths are already configured inside `unreal-instructions/SKILL.md`.
    - **Check for C++ AST database cache**: Check if `ast_cache.db` exists in the external server directory and contains indexed symbol tables.
    - **Check for project index skill**: Check if `.agents/skills/project-index/SKILL.md` and references under `references/` exist.
    - **Check for AGENTS.md**: Check if `.agents/AGENTS.md` is present and configured at the workspace root.
 
 2. **Create Implementation Plan**:
-   Generate an `implementation_plan.md` artifact in the artifact directory (`<appDataDir>\brain\<conversation-id>`). Set `request_feedback: true` and `user_facing: true` in the metadata.
+   Present an implementation plan using your harness's native planning mechanism (in Antigravity: an `implementation_plan.md` artifact in the artifact directory `<appDataDir>\brain\<conversation-id>` with `request_feedback: true` and `user_facing: true` in the metadata; in Claude Code: plan mode or a plain plan message in the conversation; in other harnesses: a plan message).
    - Detail the findings of your diagnostic check.
    - Present a clear markdown checklist of the setup steps, marking already-completed steps as `[x]` and pending steps as `[ ]`:
      - `[ ] Step 1: Verify LLVM/Clang installation`
      - `[ ] Step 1.5: Verify Git & Git LFS configuration`
      - `[ ] Step 2: Install Python dependencies (ChromaDB, ONNX runtime, PyPDF)`
-     - `[ ] Step 3: Install Antigravity plugin dependencies (Run install.ps1)`
+     - `[ ] Step 3: Install agent plugin dependencies (Run install.ps1)`
      - `[ ] Step 4: Generate compilation database (compile_commands.json)`
-     - `[ ] Step 5: Generate/Refresh local environment skill (unreal-env)`
+     - `[ ] Step 5: Update/Refresh local environment in unreal-instructions`
      - `[ ] Step 6: Verify C++ AST caching & Vector DB indexing`
      - `[ ] Step 7: Full Workspace Scanning (uproject, configs, assets)`
      - `[ ] Step 8: Create OKF project-index skill & references`
@@ -43,23 +43,27 @@ Before executing or implementing any setup steps, you must perform a diagnostic 
 
 3. **Initialize Task List**:
    Once the user approves the implementation plan:
-   - Create a `task.md` artifact in the artifact directory.
+   - Create a task list using your harness's native task-tracking mechanism (in Antigravity: a `task.md` artifact in the artifact directory; in Claude Code: the built-in task/todo list; otherwise: a `task.md` file in the workspace).
    - The task list MUST contain **exactly one task per pending setup step** (e.g., one task for Step 1, one task for Step 2, etc., based on what still needs to be executed).
 
 4. **Sequential Execution & Summarization Protocol**:
    Address the tasks in `task.md` one by one:
    - **CRITICAL**: Before executing any commands or editing files for a step, output a clear, user-visible summary explaining what you are about to execute.
    - Perform the step's actions.
-   - Upon successful completion (or failure) of the step, mark the corresponding task as completed (or in progress/failed) in `task.md` before moving to the next task.
+   - Upon successful completion (or failure) of the step, mark the corresponding task as completed (or in progress/failed) in the task list before moving to the next task.
    - If a step fails, stop execution and report the error to the user.
 
 ### Step 1: Verify LLVM/Clang Installation
-1. Search the registry or standard paths for `libclang.dll`:
-   - `C:\Program Files\LLVM\bin\libclang.dll`
-   - `C:\Program Files (x86)\LLVM\bin\libclang.dll`
-2. If `libclang.dll` cannot be found:
-   - Ask the user to install LLVM/Clang (e.g., by running `winget install LLVM.LLVM` in a new terminal window) OR to provide the absolute path to `libclang.dll` on their system.
-   - If the user provides a custom path, save it by writing `LIBCLANG_PATH` to the `unreal-env` skill under local environment configuration so the external server can find it.
+1. The external AST server (`resolve_and_load_libclang` in `ExternalServer/src/main.py`) auto-detects `libclang.dll` from several sources, in order: the `LIBCLANG_PATH`/`LLVM_PATH` environment variables, the standalone LLVM installer's registry key, Unreal Engine's bundled IWYU copy, a **Visual Studio / Visual Studio Build Tools "C++ Clang tools for Windows" component install** (discovered dynamically via `vswhere.exe`, so any edition — Community, Professional, Enterprise, or Build Tools without the full IDE — is picked up automatically), hardcoded standalone-installer paths, and finally `PATH`.
+2. To check whether detection will succeed without starting the server, run `vswhere.exe` yourself and inspect the result:
+   ```powershell
+   & "${env:ProgramFiles(x86)}\Microsoft Visual Studio\Installer\vswhere.exe" -products * -property installationPath
+   ```
+   Then check whether `VC\Tools\Llvm\x64\bin\libclang.dll` (or `VC\Tools\Llvm\bin\libclang.dll`) exists under any returned installation path, or check the standalone paths (`C:\Program Files\LLVM\bin\libclang.dll`, `C:\Program Files (x86)\LLVM\bin\libclang.dll`).
+3. If `libclang.dll` cannot be found anywhere:
+   - Recommend the user open the **Visual Studio Installer**, modify their installation, and check **C++ Clang tools for Windows** under the Desktop C++ workload (works for both the full IDE and Build Tools-only installs) — since Visual Studio is already required to build Unreal Engine, this is usually a single checkbox away.
+   - Alternatively, ask the user to install standalone LLVM/Clang (e.g., by running `winget install LLVM.LLVM` in a new terminal window) OR to provide the absolute path to `libclang.dll` on their system.
+   - If the user provides a custom path, save it by writing `LIBCLANG_PATH` to the `unreal-instructions` skill under local environment configuration so the external server can find it.
    - Do NOT proceed to compile commands or indexing until LLVM/Clang is verified as available.
 
 ### Step 1.5: Verify Git & Git LFS Configuration
@@ -87,13 +91,13 @@ Before executing or implementing any setup steps, you must perform a diagnostic 
 
 ### Step 2: Install Python Dependencies (ChromaDB, ONNX runtime, PyPDF)
 1. Verify Python is installed and located on the system path.
-2. Install the required runtime dependencies using the system Python interpreter. **Note:** Since installing these packages may take time, you may delegate this step to a background sub-agent (by calling `invoke_subagent` using the `self` role) to execute the installation asynchronously:
+2. Install the required runtime dependencies using the system Python interpreter. **Note:** Since installing these packages may take time, you may delegate this step to a background sub-agent (e.g. `invoke_subagent` with the `self` role in Antigravity, or a background subagent/task in Claude Code) to execute the installation asynchronously; if your harness has no sub-agent mechanism, run the command directly:
    ```powershell
    & "python" -m pip install -r UnrealEngine/ExternalServer/requirements.txt --user
    ```
 3. If the command fails, query the system registry or common installation directories to resolve the explicit path to `python.exe` and retry.
 
-### Step 3: Install Antigravity Plugin Dependencies (Run install.ps1)
+### Step 3: Install Agent Plugin Dependencies (Run install.ps1)
 1. If `.agents/plugins/UnrealEngine` does not exist:
    - Run the installation script using default options by piping input:
      ```powershell
@@ -103,7 +107,7 @@ Before executing or implementing any setup steps, you must perform a diagnostic 
 
 ### Step 3.5: Verify Git Hooks Configuration
 1. Run `git config core.hooksPath` to check the current hooks path.
-2. If it is empty or not set to `.githooks`, configure it so the Antigravity worktree hooks activate automatically:
+2. If it is empty or not set to `.githooks`, configure it so the agent worktree hooks activate automatically:
    ```powershell
    git config core.hooksPath .githooks
    ```
@@ -119,12 +123,12 @@ Before executing or implementing any setup steps, you must perform a diagnostic 
    (Resolve the actual paths dynamically based on your findings, ensuring no trailing backslashes are present).
 3. Verify that `compile_commands.json` exists in the game project folder.
 
-### Step 5: Generate/Refresh Local Environment Skill (unreal-env)
+### Step 5: Update/Refresh Local Environment in unreal-instructions
 1. Run the local environment generation script:
    ```powershell
    powershell -ExecutionPolicy Bypass -File .agents/plugins/UnrealEngine/src/generate_env_skill.ps1
    ```
-2. Verify that `.agents/plugins/UnrealEngine/skills/unreal-env/SKILL.md` has been successfully created.
+2. Verify that the local environment configuration has been successfully merged into `.agents/plugins/UnrealEngine/skills/unreal-instructions/SKILL.md`.
 
 ### Step 6: Verify C++ AST Caching & Vector DB Indexing
 1. Ensure the `cpp-ast-rag` MCP server is running.
@@ -146,7 +150,7 @@ Before executing or implementing any setup steps, you must perform a diagnostic 
    - **Execute the Indexing Prompt Loop**:
      - Do not attempt to process all files in a single assistant turn, as this will lead to truncation or incomplete indexing due to context limit constraints.
      - Split the target file list into manageable batches of 10 to 20 files.
-     - For each batch, read the files using the `view_file` tool to inspect their code or structure.
+     - For each batch, read the files using your harness's native file-reading tool (`view_file` in Antigravity, `Read` in Claude Code) to inspect their code or structure.
      - Maintain an active progress log tracking which files have been successfully scanned and which are pending (e.g., "Indexed 15/84 C++ files, 20/120 total files. Remaining: [...]").
      - Write the gathered indexing metadata (class declarations, key functions, purpose, and dependencies) to the files index reference file: `.agents/skills/project-index/references/files_index.md`.
      - **Self-Prompt Loop**: Write a message to yourself indicating the progress and the list of files to process next, prompting yourself to execute the next batch. Do not proceed to subsequent steps until every single C++ and other readable file in the project has been fully scanned and indexed.
@@ -291,14 +295,14 @@ Consult these detailed documentation files to understand the project architectur
 - **[System / Database]:** `[Class/Asset]` ([Path](file:///absolute/path/to/file))
 
 ## Developer Workflow & Scripts
-- **Local Env Config:** Check [unreal-env SKILL.md](file:///absolute/path/to/unreal-env/SKILL.md)
+- **Local Env Config:** Check [unreal-instructions SKILL.md](file:///absolute/path/to/unreal-instructions/SKILL.md)
 - **Automation Scripts:** [e.g., run_tests.ps1, build_plugin.ps1]
 ```
 
 ### Step 9: Append Workspace Rules and Game Description (AGENTS.md)
 Check if `.agents/AGENTS.md` exists at the project root.
 - If it does not exist, copy `UnrealEngine/AGENTS.md` to `.agents/AGENTS.md`.
-- If it does exist, inspect its contents. If the "Ponytail Ladder" or "Project Knowledge & Navigation" sections are already present, do NOT append. Otherwise, read the entire contents of `UnrealEngine/AGENTS.md` using `view_file` or `Get-Content`, and append the entire content to `.agents/AGENTS.md`. This ensures that all critical global instructions and efficiency rules are correctly applied to the workspace.
+- If it does exist, inspect its contents. If the "Ponytail Ladder" or "Project Knowledge & Navigation" sections are already present, do NOT append. Otherwise, read the entire contents of `UnrealEngine/AGENTS.md` using your file-reading tool or `Get-Content`, and append the entire content to `.agents/AGENTS.md`. This ensures that all critical global instructions and efficiency rules are correctly applied to the workspace.
 
 After setting up the workspace rules, extend `.agents/AGENTS.md` (or the copied file) by inserting a short and precise description of the game:
 1. Check if a game description or summary is already created in the workspace (e.g., in the root `AGENTS.md` under a `## Game Summary` or `## Game Description` section, or in `.agents/skills/project-index/references/concepts.md` under `## Core Gameplay Fantasy - Overview`).

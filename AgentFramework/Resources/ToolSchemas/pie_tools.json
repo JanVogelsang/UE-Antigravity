@@ -95,6 +95,48 @@
         },
         "required": []
       }
+    },
+    {
+      "name": "invoke_pie_widget_delegate",
+      "description": "Directly broadcast a script delegate (e.g. OnClicked) on a UUserWidget or child widget instance during a Play-In-Editor (PIE) session.",
+      "input_schema": {
+        "type": "object",
+        "properties": {
+          "widget_class_or_name": {
+            "type": "string",
+            "description": "Class or instance name of target UUserWidget (e.g. 'W_MainMenu_C', 'W_MainMenu')"
+          },
+          "widget_property_name": {
+            "type": "string",
+            "description": "Child widget property name or target widget property (e.g. 'PvPButton', 'StartButton')"
+          },
+          "delegate_name": {
+            "type": "string",
+            "default": "OnClicked",
+            "description": "Multicast delegate property name to broadcast (default: 'OnClicked')"
+          }
+        },
+        "required": ["widget_class_or_name", "widget_property_name"]
+      }
+    },
+    {
+      "name": "get_active_runtime_widgets",
+      "description": "Query all active runtime UUserWidget instances during a Play-In-Editor (PIE) session with visibility, parent hierarchy, and child counts.",
+      "input_schema": {
+        "type": "object",
+        "properties": {
+          "widget_class_name": {
+            "type": "string",
+            "description": "Optional class name filter (e.g. 'UUserWidget', 'W_MainMenu_C')"
+          },
+          "include_hidden": {
+            "type": "boolean",
+            "default": true,
+            "description": "Whether to include collapsed or hidden widgets (default: true)"
+          }
+        },
+        "required": []
+      }
     }
   ]
 }

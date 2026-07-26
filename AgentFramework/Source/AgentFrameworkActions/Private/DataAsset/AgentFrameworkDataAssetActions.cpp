@@ -1,8 +1,7 @@
 // Copyright 2026 AgentFramework. All Rights Reserved.
 
 #include "DataAsset/AgentFrameworkDataAssetActions.h"
-#include "AgentFrameworkCoreModule.h"
-#include "AssetRegistry/AssetRegistryModule.h"
+#include "AgentFrameworkActionUtils.h"
 #include "AssetToolsModule.h"
 #include "IAssetTools.h"
 #include "Factories/DataAssetFactory.h"
@@ -12,6 +11,11 @@
 #include "Dom/JsonObject.h"
 #include "Serialization/JsonWriter.h"
 #include "Serialization/JsonSerializer.h"
+
+#if WITH_EDITOR
+#include "Editor.h"
+#include "Sound/SoundBase.h"
+#endif
 
 #define LOCTEXT_NAMESPACE "AgentFrameworkDataAssetActions"
 
@@ -40,17 +44,34 @@ FAgentFrameworkActionResult FAgentFrameworkDataAssetActions::ExecuteAction(const
 	Result.bSuccess = false;
 
 	FString Action;
-	if (!Params->TryGetStringField(TEXT("action"), Action) || Action.IsEmpty())
-		Params->TryGetStringField(TEXT("tool_name"), Action);
+	TArray<FString> TempErrors;
+	if (!UAgentFrameworkActionUtils::TryGetStringParam(Params, TEXT("action"), Action, TempErrors, false) || Action.IsEmpty())
+	{
+		UAgentFrameworkActionUtils::TryGetStringParam(Params, TEXT("tool_name"), Action, TempErrors, false);
+	}
 
 	if (Action == TEXT("create_data_asset"))
-		return ExecuteCreateDataAsset(Params, Result);
+	{
+		Result = ExecuteCreateDataAsset(Params, Result);
+	}
 	else if (Action == TEXT("set_data_asset_properties"))
-		return ExecuteSetDataAssetProperties(Params, Result);
+	{
+		Result = ExecuteSetDataAssetProperties(Params, Result);
+	}
 	else if (Action == TEXT("get_data_asset_info"))
-		return ExecuteGetDataAssetInfo(Params, Result);
+	{
+		Result = ExecuteGetDataAssetInfo(Params, Result);
+	}
+	else
+	{
+		Result.Errors.Add(TEXT("Could not determine DataAsset action."));
+	}
 
-	Result.Errors.Add(TEXT("Could not determine DataAsset action."));
+	if (Result.bSuccess)
+	{
+		PlaySuccessSound();
+	}
+
 	return Result;
 }
 
@@ -58,28 +79,26 @@ FAgentFrameworkActionResult FAgentFrameworkDataAssetActions::ExecuteCreateDataAs
 	const TSharedRef<FJsonObject>& Params, FAgentFrameworkActionResult& Result)
 {
 	FString AssetPath;
-	if (!Params->TryGetStringField(TEXT("asset_path"), AssetPath))
+	if (!UAgentFrameworkActionUtils::TryGetStringParam(Params, TEXT("asset_path"), AssetPath, Result.Errors, true))
 	{
-		Result.Errors.Add(TEXT("Missing required field: 'asset_path'"));
 		return Result;
 	}
 
 	FString ClassName;
-	if (!Params->TryGetStringField(TEXT("class_name"), ClassName))
+	if (!UAgentFrameworkActionUtils::TryGetStringParam(Params, TEXT("class_name"), ClassName, Result.Errors, true))
 	{
-		Result.Errors.Add(TEXT("Missing required field: 'class_name'"));
 		return Result;
 	}
 
 	// Try finding the class
 	UClass* TargetClass = FindFirstObject<UClass>(*ClassName, EFindFirstObjectOptions::NativeFirst);
-	if (!TargetClass)
+	if (!IsValid(TargetClass))
 	{
 		// Try loading class from path (e.g. Blueprint class ending in _C)
 		TargetClass = StaticLoadClass(UDataAsset::StaticClass(), nullptr, *ClassName);
 	}
 
-	if (!TargetClass)
+	if (!IsValid(TargetClass))
 	{
 		Result.Errors.Add(FString::Printf(TEXT("DataAsset class '%s' not found. If this is a Blueprint class, ensure the path ends with '_C'."), *ClassName));
 		return Result;
@@ -97,10 +116,15 @@ FAgentFrameworkActionResult FAgentFrameworkDataAssetActions::ExecuteCreateDataAs
 	IAssetTools& AssetTools = FModuleManager::LoadModuleChecked<FAssetToolsModule>("AssetTools").Get();
 
 	UDataAssetFactory* Factory = NewObject<UDataAssetFactory>();
+	if (!IsValid(Factory))
+	{
+		Result.Errors.Add(TEXT("Failed to create UDataAssetFactory."));
+		return Result;
+	}
 	Factory->DataAssetClass = TargetClass;
 
 	UObject* NewAsset = AssetTools.CreateAsset(AssetName, PackagePath, TargetClass, Factory);
-	if (!NewAsset)
+	if (!IsValid(NewAsset))
 	{
 		Result.Errors.Add(FString::Printf(TEXT("Failed to create Data Asset at '%s'."), *AssetPath));
 		return Result;
@@ -116,50 +140,52 @@ FAgentFrameworkActionResult FAgentFrameworkDataAssetActions::ExecuteSetDataAsset
 	const TSharedRef<FJsonObject>& Params, FAgentFrameworkActionResult& Result)
 {
 	FString AssetPath;
-	if (!Params->TryGetStringField(TEXT("asset_path"), AssetPath))
+	if (!UAgentFrameworkActionUtils::TryGetStringParam(Params, TEXT("asset_path"), AssetPath, Result.Errors, true))
 	{
-		Result.Errors.Add(TEXT("Missing required field: 'asset_path'"));
 		return Result;
 	}
 
 	UDataAsset* DataAsset = LoadObject<UDataAsset>(nullptr, *AssetPath);
-	if (!DataAsset)
+	if (!IsValid(DataAsset))
 	{
 		Result.Errors.Add(FString::Printf(TEXT("Data Asset not found at '%s'. Create it first with create_data_asset."), *AssetPath));
 		return Result;
 	}
 
 	const TSharedPtr<FJsonObject>* PropertiesObj = nullptr;
-	if (!Params->TryGetObjectField(TEXT("properties"), PropertiesObj) || !PropertiesObj)
+	if (!UAgentFrameworkActionUtils::TryGetObjectParam(Params, TEXT("properties"), PropertiesObj, Result.Errors, true))
 	{
-		Result.Errors.Add(TEXT("Missing required field: 'properties'"));
 		return Result;
 	}
 
 	DataAsset->Modify();
 
-	for (const auto& Pair : (*PropertiesObj)->Values)
+	UClass* DataAssetClass = DataAsset->GetClass();
+	if (IsValid(DataAssetClass))
 	{
-		FString PropName = FString(*Pair.Key);
-		FProperty* Prop = DataAsset->GetClass()->FindPropertyByName(FName(*PropName));
-		if (!Prop)
+		for (const auto& Pair : (*PropertiesObj)->Values)
 		{
-			Result.Warnings.Add(FString::Printf(TEXT("Property '%s' not found on class '%s'."), *PropName, *DataAsset->GetClass()->GetName()));
-			continue;
-		}
+			FString PropName = FString(*Pair.Key);
+			FProperty* Prop = DataAssetClass->FindPropertyByName(FName(*PropName));
+			if (!Prop)
+			{
+				Result.Warnings.Add(FString::Printf(TEXT("Property '%s' not found on class '%s'."), *PropName, *DataAssetClass->GetName()));
+				continue;
+			}
 
-		FString ValueStr;
-		if (Pair.Value->TryGetString(ValueStr))
-		{
-			void* PropAddr = Prop->ContainerPtrToValuePtr<void>(DataAsset);
-			Prop->ImportText_Direct(*ValueStr, PropAddr, DataAsset, PPF_None);
+			FString ValueStr;
+			if (Pair.Value->TryGetString(ValueStr))
+			{
+				void* PropAddr = Prop->ContainerPtrToValuePtr<void>(DataAsset);
+				Prop->ImportText_Direct(*ValueStr, PropAddr, DataAsset, PPF_None);
 
-			FPropertyChangedEvent ChangedEvent(Prop);
-			DataAsset->PostEditChangeProperty(ChangedEvent);
-		}
-		else
-		{
-			Result.Warnings.Add(FString::Printf(TEXT("Property '%s' value is not a string."), *PropName));
+				FPropertyChangedEvent ChangedEvent(Prop);
+				DataAsset->PostEditChangeProperty(ChangedEvent);
+			}
+			else
+			{
+				Result.Warnings.Add(FString::Printf(TEXT("Property '%s' value is not a string."), *PropName));
+			}
 		}
 	}
 
@@ -175,32 +201,38 @@ FAgentFrameworkActionResult FAgentFrameworkDataAssetActions::ExecuteGetDataAsset
 	const TSharedRef<FJsonObject>& Params, FAgentFrameworkActionResult& Result)
 {
 	FString AssetPath;
-	if (!Params->TryGetStringField(TEXT("asset_path"), AssetPath))
+	if (!UAgentFrameworkActionUtils::TryGetStringParam(Params, TEXT("asset_path"), AssetPath, Result.Errors, true))
 	{
-		Result.Errors.Add(TEXT("Missing required field: 'asset_path'"));
 		return Result;
 	}
 
 	UDataAsset* DataAsset = LoadObject<UDataAsset>(nullptr, *AssetPath);
-	if (!DataAsset)
+	if (!IsValid(DataAsset))
 	{
 		Result.Errors.Add(FString::Printf(TEXT("Data Asset not found at '%s'."), *AssetPath));
 		return Result;
 	}
 
+	UClass* DataAssetClass = DataAsset->GetClass();
+	if (!IsValid(DataAssetClass))
+	{
+		Result.Errors.Add(TEXT("Data Asset has an invalid class."));
+		return Result;
+	}
+
 	TSharedPtr<FJsonObject> ResponseObj = MakeShared<FJsonObject>();
 	ResponseObj->SetStringField(TEXT("asset_path"), AssetPath);
-	ResponseObj->SetStringField(TEXT("class_name"), DataAsset->GetClass()->GetName());
+	ResponseObj->SetStringField(TEXT("class_name"), DataAssetClass->GetName());
 
 	TSharedPtr<FJsonObject> PropertiesObj = MakeShared<FJsonObject>();
-	for (TFieldIterator<FProperty> It(DataAsset->GetClass()); It; ++It)
+	for (TFieldIterator<FProperty> It(DataAssetClass); It; ++It)
 	{
 		FProperty* Prop = *It;
 		if (Prop)
 		{
 			// Skip properties belonging to base UObject, UDataAsset, or UPrimaryDataAsset
 			UClass* OwnerClass = Prop->GetOwnerClass();
-			if (OwnerClass == UObject::StaticClass() || OwnerClass == UDataAsset::StaticClass() || OwnerClass == UPrimaryDataAsset::StaticClass())
+			if (IsValid(OwnerClass) && (OwnerClass == UObject::StaticClass() || OwnerClass == UDataAsset::StaticClass() || OwnerClass == UPrimaryDataAsset::StaticClass()))
 			{
 				continue;
 			}
@@ -220,6 +252,20 @@ FAgentFrameworkActionResult FAgentFrameworkDataAssetActions::ExecuteGetDataAsset
 	Result.bSuccess = true;
 	Result.ResultMessage = ResponseString;
 	return Result;
+}
+
+void FAgentFrameworkDataAssetActions::PlaySuccessSound()
+{
+#if WITH_EDITOR
+	if (IsValid(GEditor))
+	{
+		USoundBase* SuccessSound = LoadObject<USoundBase>(nullptr, TEXT("/Engine/EditorSounds/Notifications/CompileSuccess.CompileSuccess"));
+		if (IsValid(SuccessSound))
+		{
+			GEditor->PlayEditorSound(SuccessSound);
+		}
+	}
+#endif
 }
 
 #undef LOCTEXT_NAMESPACE

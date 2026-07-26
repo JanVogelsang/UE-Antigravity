@@ -42,21 +42,43 @@ Once the Python script succeeds, it will print the absolute paths of the downloa
 
 **For 3D Models:**
 1. Use the `import_mesh` MCP tool for the `.fbx` model.
-2. Use the `import_assets_batch` MCP tool for the texture `.png` files.
-3. Destination path: `/Game/GenAI/Meshes/` (or similar logical path).
+2. Use the `import_assets_batch` MCP tool for the texture `.png` files (`base_color`, `normal`, `roughness`, `metallic`, `ao`).
+3. Destination paths: `/Game/GenAI/Meshes/` for models, `/Game/GenAI/Textures/` for texture maps.
 
 **For Audio (.wav):**
 1. Use the `import_assets_batch` MCP tool.
 2. Destination path: `/Game/GenAI/Audio/`.
 
-## Step 3: Material Setup (3D Models Only)
+## Step 3: One-Shot PBR Material Setup (3D Models Only)
 
-Since AI-generated meshes require material assignments, build the material dynamically:
-1. Import all downloaded textures (`base_color`, `normal`, `roughness`, `metallic`) using `import_assets_batch`.
-2. Use the `create_material` MCP tool to create a new material at `/Game/GenAI/Materials/M_GenAI_{Name}`.
-3. Use the `add_material_expression` MCP tool to create `TextureSample` nodes for each texture.
-4. Use the `connect_material_expression` MCP tool to connect:
-   - BaseColor texture sample to the material's `BaseColor` input.
-   - Normal texture sample to the material's `Normal` input.
-   - Metallic and Roughness texture samples to their respective inputs.
-5. Use `assign_material` or equivalent material tools to set the material on the newly imported Static Mesh.
+After importing the mesh and texture maps, build and assign the material using the native one-shot PBR material action:
+
+1. **Create PBR Material Graph**: Use `create_pbr_material_from_textures` to instantiate texture samples and wire `BaseColor`, `Normal`, `Roughness`, `Metallic`, and `AO` pins in a single atomic tool call:
+   ```json
+   {
+     "MaterialPath": "/Game/GenAI/Materials/M_GenAI_{Name}",
+     "BaseColorTexturePath": "/Game/GenAI/Textures/T_{Name}_BaseColor",
+     "NormalTexturePath": "/Game/GenAI/Textures/T_{Name}_Normal",
+     "RoughnessTexturePath": "/Game/GenAI/Textures/T_{Name}_Roughness",
+     "MetallicTexturePath": "/Game/GenAI/Textures/T_{Name}_Metallic",
+     "BlendMode": "Opaque",
+     "ShadingModel": "DefaultLit"
+   }
+   ```
+2. **Assign Material**: Use `configure_static_mesh` or `set_component_properties` to assign `/Game/GenAI/Materials/M_GenAI_{Name}` to the static mesh material slot.
+
+## Step 4: Sound Wave & Cue Setup (Audio Assets Only)
+
+After importing raw `.wav` audio files into `/Game/GenAI/Audio/`:
+
+1. **Configure Sound Wave & Sound Cue**: Use `configure_sound_wave_cue` to set playback parameters (`bLooping`, `VolumeMultiplier`, `PitchMultiplier`) and optionally generate a `USoundCue` asset with 3D spatial attenuation:
+   ```json
+   {
+     "SoundWaveAsset": "/Game/GenAI/Audio/SW_GenAI_{Name}",
+     "CueAssetPath": "/Game/GenAI/Audio/SC_GenAI_{Name}",
+     "bLooping": false,
+     "VolumeMultiplier": 1.0,
+     "PitchMultiplier": 1.0,
+     "AttenuationAssetPath": "/Game/Audio/ATT_Default3D"
+   }
+   ```

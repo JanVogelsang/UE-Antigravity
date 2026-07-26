@@ -146,8 +146,10 @@ The script will:
 1. Ask for your target project root directory.
 2. Compile the bridge if needed.
 3. Copy the plugin files to `.agents/plugins/UnrealEngine/`.
-4. Let you select your AI assistant (Antigravity 2.0, Kilo Code, Claude Code, or OpenAI Codex).
-5. Link skills to the appropriate location and generate the necessary MCP configuration (`mcp_config.json`, `kilo.jsonc`, `.mcp.json`, or `.codex/config.toml`).
+4. Let you select one or more AI assistants (Antigravity 2.0, Kilo Code, Claude Code, and/or OpenAI Codex) — enter a comma-separated list such as `0,2`, or `all`.
+5. Link skills to the appropriate locations and generate the necessary MCP configuration for each selected assistant (`mcp_config.json`, `kilo.jsonc`, `.mcp.json`, and/or `.codex/config.toml`).
+
+Re-running the script later lets you add additional assistants; existing configurations are left untouched.
 
 ### Manual Installation
 
@@ -175,7 +177,7 @@ Once the plugin is installed and your Unreal Editor is running:
    ```
    Run project setup and index the project
    ```
-3. The assistant will trigger the `unreal-setup` skill, generate the machine-specific `unreal-env` skill, perform a full scan of the C++ codebase, project settings, and active editor assets, and write a permanent OKF project-indexing skill at `.agents/skills/project-index/SKILL.md`.
+3. The assistant will trigger the `unreal-setup` skill, update the machine-specific local environment configuration in the `unreal-instructions` skill, perform a full scan of the C++ codebase, project settings, and active editor assets, and write a permanent OKF project-indexing skill at `.agents/skills/project-index/SKILL.md`.
 4. **Restart the assistant session** or reload the window to ensure the new `project-index` skill is registered. This is required because the assistant platform only scans and loads workspace skills during conversation startup. Every subsequent session will benefit from this sophisticated, token-efficient architectural and asset map.
 
 ## Compilation

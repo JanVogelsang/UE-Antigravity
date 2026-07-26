@@ -9,6 +9,9 @@
 
 DECLARE_DELEGATE_TwoParams(FAIAssistantResponseDelegate, const FString&, bool);
 
+DECLARE_MULTICAST_DELEGATE_TwoParams(FAIAssistantQueryCompletedSignature, const FString&, bool);
+DECLARE_DYNAMIC_MULTICAST_DELEGATE_TwoParams(FAIAssistantQueryCompletedDynamicSignature, const FString&, Response, bool, bSuccess);
+
 UCLASS(BlueprintType)
 class AGENTFRAMEWORKACTIONS_API UAIAssistantBridge : public UObject
 {
@@ -30,6 +33,16 @@ public:
 	void SetActiveQueryPrompt(const FString& InPrompt) { ActiveQueryPrompt = InPrompt; }
 	FString GetActiveQueryPrompt() const { return ActiveQueryPrompt; }
 
+	/** Native C++ delegate for query completion */
+	FAIAssistantQueryCompletedSignature OnQueryCompleted;
+
+	/** Blueprint delegate for query completion */
+	UPROPERTY(BlueprintAssignable, Category = "AgentFramework|AIAssistant")
+	FAIAssistantQueryCompletedDynamicSignature OnQueryCompletedDynamic;
+
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "AgentFramework|AIAssistant")
+	class USoundBase* QueryCompletedSound;
+
 private:
 	TSharedPtr<SWebBrowser> FindWebBrowserWidget();
 	TSharedPtr<SWidget> FindWidgetOfClass(TSharedPtr<SWidget> StartWidget, const FName& ClassName);
@@ -38,3 +51,4 @@ private:
 	TWeakPtr<SWebBrowser> BoundWebBrowser;
 	FString ActiveQueryPrompt;
 };
+

@@ -10,7 +10,7 @@ import json
 from mock_client import MockAgentClient
 
 UNREAL_PATH = None
-PROJECT_PATH = os.path.expandvars(r"%USERPROFILE%\Documents\Unreal Projects\tau-game\Tau.uproject")
+PROJECT_PATH = os.path.expandvars(r"%USERPROFILE%\Documents\Unreal Projects\AgentFrameworkTest\AgentFrameworkTest.uproject")
 PORT = 18777
 
 def is_port_open(port):
@@ -58,32 +58,39 @@ def unreal_process():
                     installed_dir, _ = winreg.QueryValueEx(key, "InstalledDirectory")
             except Exception:
                 pass
+            
+            if installed_dir:
+                for name in ["UnrealEditor.exe", "UnrealEditor-Cmd.exe"]:
+                    p = os.path.join(installed_dir, "Engine", "Binaries", "Win64", name)
+                    if os.path.exists(p):
+                        unreal_exe = p
+                        break
         
         # Check custom builds registry path if launcher query failed
-        if not installed_dir:
+        if not unreal_exe:
             try:
                 with winreg.OpenKey(winreg.HKEY_CURRENT_USER, r"Software\Epic Games\Unreal Engine\Builds") as key:
                     installed_dir, _ = winreg.QueryValueEx(key, engine_association)
             except Exception:
                 pass
 
-        if installed_dir:
-            for name in ["UnrealEditor-Cmd.exe", "UnrealEditor.exe"]:
-                p = os.path.join(installed_dir, "Engine", "Binaries", "Win64", name)
-                if os.path.exists(p):
-                    unreal_exe = p
-                    break
+            if installed_dir:
+                for name in ["UnrealEditor.exe", "UnrealEditor-Cmd.exe"]:
+                    p = os.path.join(installed_dir, "Engine", "Binaries", "Win64", name)
+                    if os.path.exists(p):
+                        unreal_exe = p
+                        break
     except Exception:
         pass
 
     if not unreal_exe:
         fallbacks = [
-            rf"C:\Program Files\Epic Games\UE_{engine_association}\Engine\Binaries\Win64\UnrealEditor-Cmd.exe",
             rf"C:\Program Files\Epic Games\UE_{engine_association}\Engine\Binaries\Win64\UnrealEditor.exe",
-            r"C:\Program Files\Epic Games\UE_5.8\Engine\Binaries\Win64\UnrealEditor-Cmd.exe",
+            rf"C:\Program Files\Epic Games\UE_{engine_association}\Engine\Binaries\Win64\UnrealEditor-Cmd.exe",
             r"C:\Program Files\Epic Games\UE_5.8\Engine\Binaries\Win64\UnrealEditor.exe",
-            r"C:\Program Files\Epic Games\UE_5.7\Engine\Binaries\Win64\UnrealEditor-Cmd.exe",
+            r"C:\Program Files\Epic Games\UE_5.8\Engine\Binaries\Win64\UnrealEditor-Cmd.exe",
             r"C:\Program Files\Epic Games\UE_5.7\Engine\Binaries\Win64\UnrealEditor.exe",
+            r"C:\Program Files\Epic Games\UE_5.7\Engine\Binaries\Win64\UnrealEditor-Cmd.exe",
         ]
         for p in fallbacks:
             if os.path.exists(p):
@@ -207,3 +214,65 @@ def mock_agent_client(unreal_port_wait, python_server_process):
         cpp_url=f"http://127.0.0.1:{PORT}"
     )
     yield client
+
+@pytest.fixture(scope="session", autouse=True)
+def setup_test_blueprint(mock_agent_client):
+    """
+    Ensures that the required test Blueprint /Game/Blueprint/Player/BP_RoundPawn
+    and test Input assets (/Game/Input/IA_TestChallenger, /Game/Input/IMC_TestChallenger)
+    exist in the active editor workspace.
+    """
+    if is_port_open(PORT):
+        print("\n[INFO] Setting up BP_RoundPawn in the live editor...")
+        try:
+            res = mock_agent_client.call_cpp_tool(
+                "get_blueprint_info",
+                {"asset_path": "/Game/Blueprint/Player/BP_RoundPawn"}
+            )
+            if res.get("bSuccess") is True:
+                print("[INFO] BP_RoundPawn already exists.")
+            else:
+                res = mock_agent_client.call_cpp_tool(
+                    "create_blueprint_actor",
+                    {
+                        "asset_path": "/Game/Blueprint/Player/BP_RoundPawn",
+                        "parent_class": "Pawn",
+                        "variables": [
+                            {"name": "Health", "type": "float"},
+                            {"name": "Speed", "type": "float"},
+                            {"name": "bIsActive", "type": "bool"}
+                        ]
+                    }
+                )
+                if res.get("bSuccess") is True:
+                    print("[INFO] Successfully created BP_RoundPawn.")
+                else:
+                    print(f"[WARNING] Failed to create BP_RoundPawn: {res.get('Errors')}")
+        except Exception as e:
+            print(f"[WARNING] Exception creating BP_RoundPawn: {e}")
+
+        print("\n[INFO] Setting up input test assets in the live editor...")
+        try:
+            mock_agent_client.call_cpp_tool(
+                "create_input_action",
+                {
+                    "asset_path": "/Game/Input/IA_TestChallenger",
+                    "value_type": "Axis2D"
+                }
+            )
+            mock_agent_client.call_cpp_tool(
+                "create_input_mapping_context",
+                {
+                    "asset_path": "/Game/Input/IMC_TestChallenger"
+                }
+            )
+            mock_agent_client.call_cpp_tool(
+                "add_input_mapping",
+                {
+                    "ContextAsset": "/Game/Input/IMC_TestChallenger",
+                    "InputActionAsset": "/Game/Input/IA_TestChallenger",
+                    "Key": "W"
+                }
+            )
+        except Exception as e:
+            print(f"[WARNING] Exception creating input test assets: {e}")

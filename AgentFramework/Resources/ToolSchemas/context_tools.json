@@ -1,5 +1,5 @@
 {
-  "schema_version": "1.0.0",
+  "schema_version": "1.1.0",
   "domain": "context_tools",
   "min_plugin_version": "1.0.0",
   "tools": [
@@ -89,6 +89,151 @@
             "description": "Alternative array of skill names to activate"
           }
         }
+      }
+    },
+    {
+      "name": "enforce_naming_conventions",
+      "description": "Scan a content directory and enforce UE5 standard asset naming conventions (e.g. BP_ for Blueprints, SM_ for Static Meshes, M_ for Materials, T_ for Textures, WBP_ for Widgets). Renames non-conforming assets automatically or previews proposed renames when dry_run=true. Accepts parameter keys in both snake_case and PascalCase.",
+      "input_schema": {
+        "type": "object",
+        "properties": {
+          "folder_path": {
+            "type": "string",
+            "description": "Package directory path to scan for naming convention enforcement (e.g. '/Game/Blueprints', '/Game/UI', or '/Game/'). Accepts 'folder_path', 'directory_path', 'target_folder', or 'FolderPath'."
+          },
+          "directory_path": {
+            "type": "string",
+            "description": "Alias for folder_path."
+          },
+          "target_folder": {
+            "type": "string",
+            "description": "Alias for folder_path."
+          },
+          "FolderPath": {
+            "type": "string",
+            "description": "PascalCase alias for folder_path."
+          },
+          "recursive": {
+            "type": "boolean",
+            "default": true,
+            "description": "If true, recursively scan subdirectories. Default: true. Accepts 'recursive' or 'Recursive'."
+          },
+          "Recursive": {
+            "type": "boolean",
+            "default": true,
+            "description": "PascalCase alias for recursive."
+          },
+          "dry_run": {
+            "type": "boolean",
+            "default": false,
+            "description": "If true, evaluate naming conventions and return proposed renames without mutating assets. Default: false. Accepts 'dry_run', 'dry_run_mode', or 'DryRun'."
+          },
+          "dry_run_mode": {
+            "type": "boolean",
+            "default": false,
+            "description": "Alias for dry_run."
+          },
+          "DryRun": {
+            "type": "boolean",
+            "default": false,
+            "description": "PascalCase alias for dry_run."
+          },
+          "custom_rules": {
+            "type": "object",
+            "description": "Optional mapping of asset class names to custom prefix strings (e.g. {\"Blueprint\": \"BP_\", \"Texture2D\": \"T_\"}). Accepts 'custom_rules' or 'CustomRules'."
+          },
+          "CustomRules": {
+            "type": "object",
+            "description": "PascalCase alias for custom_rules."
+          }
+        },
+        "required": [
+          "folder_path"
+        ]
+      }
+    },
+    {
+      "name": "organize_assets_by_type",
+      "description": "Automatically reorganize mixed assets in a content folder into type-specific subdirectories (e.g., Blueprints/, Materials/, Textures/, Meshes/, Audio/, Effects/, UI/, Maps/). Supports preview mode via dry_run=true. Accepts parameter keys in both snake_case and PascalCase.",
+      "input_schema": {
+        "type": "object",
+        "properties": {
+          "folder_path": {
+            "type": "string",
+            "description": "Target content folder path to organize by asset class (e.g. '/Game/', '/Game/Imports'). Accepts 'folder_path', 'directory_path', 'source_path', or 'FolderPath'."
+          },
+          "directory_path": {
+            "type": "string",
+            "description": "Alias for folder_path."
+          },
+          "source_path": {
+            "type": "string",
+            "description": "Alias for folder_path."
+          },
+          "FolderPath": {
+            "type": "string",
+            "description": "PascalCase alias for folder_path."
+          },
+          "recursive": {
+            "type": "boolean",
+            "default": true,
+            "description": "If true, recursively organize assets in subdirectories. Default: true. Accepts 'recursive' or 'Recursive'."
+          },
+          "Recursive": {
+            "type": "boolean",
+            "default": true,
+            "description": "PascalCase alias for recursive."
+          },
+          "dry_run": {
+            "type": "boolean",
+            "default": false,
+            "description": "If true, calculate proposed organization moves without executing asset relocations. Default: false. Accepts 'dry_run', 'dry_run_mode', or 'DryRun'."
+          },
+          "dry_run_mode": {
+            "type": "boolean",
+            "default": false,
+            "description": "Alias for dry_run."
+          },
+          "DryRun": {
+            "type": "boolean",
+            "default": false,
+            "description": "PascalCase alias for dry_run."
+          },
+          "create_subfolders": {
+            "type": "boolean",
+            "default": true,
+            "description": "If true, automatically create missing type subfolders. Default: true. Accepts 'create_subfolders' or 'CreateSubfolders'."
+          },
+          "CreateSubfolders": {
+            "type": "boolean",
+            "default": true,
+            "description": "PascalCase alias for create_subfolders."
+          }
+        },
+        "required": [
+          "folder_path"
+        ]
+      }
+    },
+    {
+      "name": "consolidate_asset_references",
+      "description": "Consolidate all references from a source asset to a target asset across the project and delete the source asset. Useful for merging duplicate assets or replacing deprecated references.",
+      "input_schema": {
+        "type": "object",
+        "properties": {
+          "source_asset_path": {
+            "type": "string",
+            "description": "Package path or object path of the source asset to replace and delete (e.g. '/Game/Materials/M_OldRock')"
+          },
+          "target_asset_path": {
+            "type": "string",
+            "description": "Package path or object path of the target asset to replace references with (e.g. '/Game/Materials/M_Rock')"
+          }
+        },
+        "required": [
+          "source_asset_path",
+          "target_asset_path"
+        ]
       }
     }
   ]

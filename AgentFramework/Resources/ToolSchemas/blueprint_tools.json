@@ -73,24 +73,32 @@
       "input_schema": {
         "type": "object",
         "properties": {
+          "blueprint_path": {
+            "type": "string",
+            "description": "Object path of target Blueprint asset, e.g. /Game/Blueprints/BP_Enemy"
+          },
           "asset_path": {
             "type": "string",
-            "description": "Content path of the Blueprint to modify"
+            "description": "Alias for blueprint_path: Content path of the Blueprint to modify"
           },
           "component_class": {
             "type": "string",
-            "description": "Component class name (without U prefix): StaticMeshComponent, SkeletalMeshComponent, BoxComponent, SphereComponent, CapsuleComponent, SpringArmComponent, CameraComponent, ProjectileMovementComponent, etc."
+            "description": "Component class name (with or without U prefix): StaticMeshComponent, SkeletalMeshComponent, BoxComponent, SphereComponent, CapsuleComponent, SpringArmComponent, CameraComponent, ProjectileMovementComponent, etc."
           },
           "component_name": {
             "type": "string",
             "description": "Variable name for the new component in the Blueprint, e.g. CameraBoom, HealthBar, TriggerBox"
           },
+          "parent_component_name": {
+            "type": "string",
+            "description": "Optional: Parent SCS component node name to attach under. Use get_blueprint_info to find existing component names."
+          },
           "attach_to": {
             "type": "string",
-            "description": "Variable name of the parent component to attach to. Use get_blueprint_info to find existing component names."
+            "description": "Alias for parent_component_name: Variable name of the parent component to attach to."
           }
         },
-        "required": ["asset_path", "component_class", "component_name"]
+        "required": ["component_class", "component_name"]
       }
     },
 
@@ -614,6 +622,163 @@
           }
         },
         "required": ["asset_path"]
+      }
+    },
+    {
+      "name": "disconnect_blueprint_pins",
+      "description": "Disconnect pins or break pin links on a Blueprint graph node. Can break specific pin-to-pin connections or clear all connections on a pin.",
+      "input_schema": {
+        "type": "object",
+        "properties": {
+          "TargetAsset": {
+            "type": "string",
+            "description": "Object path of the target Blueprint (e.g. '/Game/Blueprints/BP_Player')"
+          },
+          "NodeGuid": {
+            "type": "string",
+            "description": "32-character hex GUID of the target node"
+          },
+          "PinName": {
+            "type": "string",
+            "description": "Name of the pin to disconnect (e.g. 'Execute', 'Target', 'Output')"
+          },
+          "TargetNodeGuid": {
+            "type": "string",
+            "description": "Optional: Specific target node GUID to break connection to"
+          },
+          "TargetPinName": {
+            "type": "string",
+            "description": "Optional: Specific target pin name to break connection to"
+          },
+          "bDisconnectAll": {
+            "type": "boolean",
+            "default": false,
+            "description": "If true, breaks all links on the specified pin"
+          }
+        },
+        "required": [
+          "TargetAsset",
+          "NodeGuid",
+          "PinName"
+        ]
+      }
+    },
+    {
+      "name": "modify_blueprint_subobject",
+      "description": "Modify design-time properties of nested sub-objects or UMG widget tree children inside a Blueprint asset.",
+      "input_schema": {
+        "type": "object",
+        "properties": {
+          "AssetPath": {
+            "type": "string",
+            "description": "Long package path to Blueprint asset (e.g. '/Game/UI/W_MainMenu')"
+          },
+          "SubObjectPath": {
+            "type": "string",
+            "description": "Relative sub-object path using colon/dot notation (e.g. 'WidgetTree.Btn_Start')"
+          },
+          "Properties": {
+            "type": "object",
+            "additionalProperties": true,
+            "description": "Key-value map of property names to serialized values"
+          }
+        },
+        "required": [
+          "AssetPath",
+          "SubObjectPath",
+          "Properties"
+        ]
+      }
+    },
+    {
+      "name": "configure_actor_replication",
+      "description": "Configure network replication defaults (bReplicates, bReplicateMovement, NetDormancy, NetUpdateFrequency, NetPriority) on a Blueprint Actor's Class Default Object (CDO).",
+      "input_schema": {
+        "type": "object",
+        "properties": {
+          "TargetAsset": {
+            "type": "string",
+            "description": "Object path of the Blueprint actor (e.g. '/Game/Blueprints/BP_NetworkPawn')"
+          },
+          "bReplicates": {
+            "type": "boolean",
+            "default": true
+          },
+          "bReplicateMovement": {
+            "type": "boolean",
+            "default": true
+          },
+          "NetDormancy": {
+            "type": "string",
+            "enum": [
+              "DORM_Never",
+              "DORM_Awake",
+              "DORM_DormantAll",
+              "DORM_DormantPartial",
+              "DORM_Initial"
+            ],
+            "default": "DORM_Never"
+          },
+          "NetUpdateFrequency": {
+            "type": "number",
+            "default": 100.0
+          },
+          "NetPriority": {
+            "type": "number",
+            "default": 1.0
+          }
+        },
+        "required": [
+          "TargetAsset"
+        ]
+      }
+    },
+    {
+      "name": "set_variable_replication",
+      "description": "Set replication mode (Replicated vs RepNotify), RepNotify callback function, and replication conditions on member variables in a Blueprint.",
+      "input_schema": {
+        "type": "object",
+        "properties": {
+          "TargetAsset": {
+            "type": "string",
+            "description": "Object path of the Blueprint asset"
+          },
+          "VariableName": {
+            "type": "string",
+            "description": "Name of the target member variable"
+          },
+          "ReplicationType": {
+            "type": "string",
+            "enum": [
+              "None",
+              "Replicated",
+              "RepNotify"
+            ],
+            "default": "Replicated"
+          },
+          "RepNotifyFunc": {
+            "type": "string",
+            "description": "Optional: Custom RepNotify callback function name (e.g. 'OnRep_Health')"
+          },
+          "ReplicationCondition": {
+            "type": "string",
+            "enum": [
+              "COND_None",
+              "COND_InitialOnly",
+              "COND_OwnerOnly",
+              "COND_SkipOwner",
+              "COND_SimulatedOnly",
+              "COND_AutonomousOnly",
+              "COND_Custom"
+            ],
+            "default": "COND_None"
+          }
+        },
+        "required": [
+          "TargetAsset",
+          "VariableName",
+          "ReplicationType"
+        ]
       }
     }
   ]

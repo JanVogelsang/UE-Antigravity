@@ -38,4 +38,7 @@ private:
 
 	/** Import JSON data into an existing or new DataTable. */
 	FAgentFrameworkActionResult ExecuteImportJsonToDataTable(const TSharedRef<FJsonObject>& Params, FAgentFrameworkActionResult& Result);
+
+	/** Play success editor sound when DataTable action completes successfully. */
+	void PlaySuccessSound();
 };

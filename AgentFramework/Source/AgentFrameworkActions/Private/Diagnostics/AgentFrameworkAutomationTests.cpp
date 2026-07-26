@@ -1,10 +1,14 @@
 // Copyright 2026 AgentFramework. All Rights Reserved.
 
 #include "Misc/AutomationTest.h"
+#include "AgentFrameworkActionRouter.h"
 #include "Blueprint/AgentFrameworkBlueprintActions.h"
 #include "Cpp/AgentFrameworkCppActions.h"
 #include "Widget/AgentFrameworkWidgetActions.h"
+#include "Diagnostics/AgentFrameworkDiagnosticsActions.h"
 #include "Dom/JsonObject.h"
+#include "AgentFrameworkActionUtils.h"
+#include "AIAssistant/AIAssistantBridge.h"
 #include "Dom/JsonValue.h"
 #include "Serialization/JsonSerializer.h"
 #include "Serialization/JsonReader.h"
@@ -516,4 +520,239 @@ bool FAgentFrameworkSentinelTest::RunTest(const FString& Parameters)
 
 	return true;
 }
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FAgentFrameworkAIAssistantTests, "AgentFramework.AIAssistant", EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
+
+bool FAgentFrameworkAIAssistantTests::RunTest(const FString& Parameters)
+{
+	// Test UAgentFrameworkActionUtils
+	{
+		TSharedPtr<FJsonObject> TestParams = MakeShared<FJsonObject>();
+		TestParams->SetStringField(TEXT("test_str"), TEXT("HelloValue"));
+		TestParams->SetBoolField(TEXT("test_bool"), true);
+		TestParams->SetNumberField(TEXT("test_double"), 123.45);
+
+		FString OutStr;
+		bool OutBool = false;
+		double OutDouble = 0.0;
+		TArray<FString> Errors;
+
+		// Test success cases
+		bool bStrOk = UAgentFrameworkActionUtils::TryGetStringParam(TestParams, TEXT("test_str"), OutStr, Errors, true);
+		TestTrue(TEXT("TryGetStringParam should succeed"), bStrOk);
+		TestEqual(TEXT("TryGetStringParam value matches"), OutStr, TEXT("HelloValue"));
+
+		bool bBoolOk = UAgentFrameworkActionUtils::TryGetBoolParam(TestParams, TEXT("test_bool"), OutBool, Errors, true);
+		TestTrue(TEXT("TryGetBoolParam should succeed"), bBoolOk);
+		TestTrue(TEXT("TryGetBoolParam value matches"), OutBool);
+
+		bool bDoubleOk = UAgentFrameworkActionUtils::TryGetDoubleParam(TestParams, TEXT("test_double"), OutDouble, Errors, true);
+		TestTrue(TEXT("TryGetDoubleParam should succeed"), bDoubleOk);
+		TestEqual(TEXT("TryGetDoubleParam value matches"), OutDouble, 123.45);
+
+		// Test failure case: missing required parameter
+		TArray<FString> ValidationErrors;
+		FString MissingStr;
+		bool bMissingOk = UAgentFrameworkActionUtils::TryGetStringParam(TestParams, TEXT("missing_str"), MissingStr, ValidationErrors, true);
+		TestFalse(TEXT("TryGetStringParam should fail for missing required parameter"), bMissingOk);
+		TestTrue(TEXT("ValidationErrors should contain error message"), ValidationErrors.Num() > 0);
+	}
+
+	// Test UAIAssistantBridge Multicast Delegate Hook
+	{
+		UAIAssistantBridge* TestBridge = NewObject<UAIAssistantBridge>();
+		TestNotNull(TEXT("Should create UAIAssistantBridge"), TestBridge);
+		if (IsValid(TestBridge))
+		{
+			bool bDelegateFired = false;
+			FString ReceivedResponse;
+			bool bReceivedSuccess = false;
+
+			TestBridge->OnQueryCompleted.AddLambda([&bDelegateFired, &ReceivedResponse, &bReceivedSuccess](const FString& Response, bool bSuccess)
+			{
+				bDelegateFired = true;
+				ReceivedResponse = Response;
+				bReceivedSuccess = bSuccess;
+			});
+
+			TestBridge->OnResponseReceived(TEXT("Test AI Response"), true);
+
+			TestTrue(TEXT("OnQueryCompleted delegate should fire when response received"), bDelegateFired);
+			TestEqual(TEXT("Response message should match"), ReceivedResponse, TEXT("Test AI Response"));
+			TestTrue(TEXT("Success boolean should match"), bReceivedSuccess);
+		}
+	}
+
+	return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FAgentFrameworkDiagnosticsActionsTest, "AgentFramework.DiagnosticsActions", EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
+
+bool FAgentFrameworkDiagnosticsActionsTest::RunTest(const FString& Parameters)
+{
+	FAgentFrameworkDiagnosticsActions DiagnosticsActions;
+	TSharedRef<FJsonObject> Params = MakeShared<FJsonObject>();
+	Params->SetStringField(TEXT("_tool_name"), TEXT("read_message_log"));
+	Params->SetNumberField(TEXT("max_lines"), 10);
+
+	FAgentFrameworkActionResult Result = DiagnosticsActions.ExecuteAction(Params);
+	TestTrue(TEXT("read_message_log should succeed"), Result.bSuccess);
+	TestTrue(TEXT("Result message should contain Output Log header"), Result.ResultMessage.Contains(TEXT("=== Output Log ===")));
+
+	return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FAgentFrameworkAsyncRouterTest, "AgentFramework.AsyncRouter", EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
+
+bool FAgentFrameworkAsyncRouterTest::RunTest(const FString& Parameters)
+{
+	TSharedRef<FAgentFrameworkActionRouter> Router = MakeShared<FAgentFrameworkActionRouter>();
+	Router->RegisterExecutor(MakeShared<FAgentFrameworkDiagnosticsActions>());
+
+	FAgentFrameworkToolCall ToolCall;
+	ToolCall.ToolCallId = FGuid::NewGuid().ToString();
+	ToolCall.ToolName = TEXT("read_message_log");
+	ToolCall.InputParams = MakeShared<FJsonObject>();
+	ToolCall.InputParams->SetNumberField(TEXT("max_lines"), 5);
+
+	bool bCallbackFired = false;
+	FAgentFrameworkActionResult AsyncResult;
+
+	FGuid TaskId = Router->RouteToolCallAsync(ToolCall, [&bCallbackFired, &AsyncResult](FAgentFrameworkActionResult Res) {
+		bCallbackFired = true;
+		AsyncResult = Res;
+	});
+
+	TestTrue(TEXT("TaskId should be valid"), TaskId.IsValid());
+
+	// Test cancellation functionality
+	FAgentFrameworkToolCall CancelToolCall;
+	CancelToolCall.ToolCallId = FGuid::NewGuid().ToString();
+	CancelToolCall.ToolName = TEXT("read_message_log");
+	CancelToolCall.InputParams = MakeShared<FJsonObject>();
+
+	bool bCancelledCallbackFired = false;
+	FGuid CancelTaskId = Router->RouteToolCallAsync(CancelToolCall, [this, &bCancelledCallbackFired](FAgentFrameworkActionResult Res) {
+		bCancelledCallbackFired = true;
+		TestFalse(TEXT("Cancelled task result should be false"), Res.bSuccess);
+	});
+
+	bool bCancelled = Router->CancelTask(CancelTaskId);
+	TestTrue(TEXT("CancelTask should return true for pending task"), bCancelled);
+	TestTrue(TEXT("Cancelled task callback should be invoked"), bCancelledCallbackFired);
+
+	return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FAgentFrameworkTelemetryTest, "AgentFramework.Telemetry", EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
+
+bool FAgentFrameworkTelemetryTest::RunTest(const FString& Parameters)
+{
+	// 1. Reset telemetry data to ensure clean state
+	UAgentFrameworkActionUtils::ClearTelemetryData();
+
+	// Verify initially empty
+	TArray<FAgentFrameworkToolMetrics> InitialMetrics = UAgentFrameworkActionUtils::GetToolTelemetry();
+	TestEqual(TEXT("Initial metrics should be empty after clear"), InitialMetrics.Num(), 0);
+
+	TArray<FAgentFrameworkErrorRecord> InitialErrors = UAgentFrameworkActionUtils::GetRecentErrors();
+	TestEqual(TEXT("Initial errors should be empty after clear"), InitialErrors.Num(), 0);
+
+	// 2. Simulate tool executions via ScopedTelemetry and direct RecordToolExecution
+	FString ToolA = TEXT("test_tool_alpha");
+	FString ToolB = TEXT("test_tool_beta");
+
+	// Record success execution for ToolA using ScopedTelemetry
+	{
+		FAgentFrameworkScopedTelemetry Scoped(ToolA);
+		FPlatformProcess::Sleep(0.002f); // Sleep ~2 milliseconds
+		TArray<FString> NoErrors;
+		Scoped.SetResult(true, NoErrors);
+	}
+
+	// Verify ToolA telemetry record
+	TArray<FAgentFrameworkToolMetrics> MetricsA = UAgentFrameworkActionUtils::GetToolTelemetry(ToolA);
+	TestEqual(TEXT("Should have 1 metrics record for ToolA"), MetricsA.Num(), 1);
+	if (MetricsA.Num() > 0)
+	{
+		TestEqual(TEXT("ToolA total executions should be 1"), MetricsA[0].TotalExecutions, (int64)1);
+		TestEqual(TEXT("ToolA success count should be 1"), MetricsA[0].SuccessCount, (int64)1);
+		TestEqual(TEXT("ToolA error count should be 0"), MetricsA[0].ErrorCount, (int64)0);
+		TestTrue(TEXT("ToolA duration should be > 500 microseconds"), MetricsA[0].TotalDurationMicros >= 500.0);
+		TestTrue(TEXT("ToolA last success should be true"), MetricsA[0].bLastSuccess);
+	}
+
+	// Record failing executions for ToolB
+	TArray<FString> ErrorsB;
+	ErrorsB.Add(TEXT("Failed to connect pin"));
+	ErrorsB.Add(TEXT("Invalid property target"));
+
+	UAgentFrameworkActionUtils::RecordToolExecution(ToolB, 500.0, false, ErrorsB, TEXT("Context info"));
+
+	// Record second identical error for ToolB to verify frequency deduplication
+	UAgentFrameworkActionUtils::RecordToolExecution(ToolB, 600.0, false, ErrorsB, TEXT("Context info 2"));
+
+	// Verify ToolB metrics
+	TArray<FAgentFrameworkToolMetrics> MetricsB = UAgentFrameworkActionUtils::GetToolTelemetry(ToolB);
+	TestEqual(TEXT("Should have 1 metrics record for ToolB"), MetricsB.Num(), 1);
+	if (MetricsB.Num() > 0)
+	{
+		TestEqual(TEXT("ToolB total executions should be 2"), MetricsB[0].TotalExecutions, (int64)2);
+		TestEqual(TEXT("ToolB success count should be 0"), MetricsB[0].SuccessCount, (int64)0);
+		TestEqual(TEXT("ToolB error count should be 2"), MetricsB[0].ErrorCount, (int64)2);
+		TestEqual(TEXT("ToolB min duration should be 500"), MetricsB[0].MinDurationMicros, 500.0);
+		TestEqual(TEXT("ToolB max duration should be 600"), MetricsB[0].MaxDurationMicros, 600.0);
+		TestEqual(TEXT("ToolB avg duration should be 550"), MetricsB[0].AvgDurationMicros, 550.0);
+		TestFalse(TEXT("ToolB last success should be false"), MetricsB[0].bLastSuccess);
+	}
+
+	// Verify Error Ring Buffer memory
+	TArray<FAgentFrameworkErrorRecord> RecentErrors = UAgentFrameworkActionUtils::GetRecentErrors(50, ToolB);
+	TestTrue(TEXT("Should have recorded errors for ToolB"), RecentErrors.Num() > 0);
+
+	// Check frequency increment for repeated error
+	bool bFoundFrequencyCheck = false;
+	for (const FAgentFrameworkErrorRecord& ErrRec : RecentErrors)
+	{
+		if (ErrRec.ToolName == ToolB && ErrRec.ErrorMessage == TEXT("Failed to connect pin"))
+		{
+			TestEqual(TEXT("Error frequency for repeated error should be 2"), ErrRec.Frequency, 2);
+			bFoundFrequencyCheck = true;
+		}
+	}
+	TestTrue(TEXT("Found frequency check for repeated error"), bFoundFrequencyCheck);
+
+	// Test GetTelemetryMetricsJson
+	FString JsonSummary = UAgentFrameworkActionUtils::GetTelemetryMetricsJson();
+	TestTrue(TEXT("JSON summary should contain test_tool_alpha"), JsonSummary.Contains(ToolA));
+	TestTrue(TEXT("JSON summary should contain test_tool_beta"), JsonSummary.Contains(ToolB));
+
+	// Test ActionRouter integration with automatic telemetry
+	{
+		TSharedRef<FAgentFrameworkActionRouter> Router = MakeShared<FAgentFrameworkActionRouter>();
+		Router->RegisterExecutor(MakeShared<FAgentFrameworkDiagnosticsActions>());
+
+		FAgentFrameworkToolCall ToolCall;
+		ToolCall.ToolCallId = FGuid::NewGuid().ToString();
+		ToolCall.ToolName = TEXT("read_message_log");
+		ToolCall.InputParams = MakeShared<FJsonObject>();
+		ToolCall.InputParams->SetNumberField(TEXT("max_lines"), 5);
+
+		FAgentFrameworkActionResult Result = Router->RouteToolCall(ToolCall);
+		TestTrue(TEXT("Routed tool call should succeed"), Result.bSuccess);
+
+		TArray<FAgentFrameworkToolMetrics> RouterMetrics = UAgentFrameworkActionUtils::GetToolTelemetry(TEXT("read_message_log"));
+		TestTrue(TEXT("Router tool call should automatically record telemetry for read_message_log"), RouterMetrics.Num() > 0);
+		if (RouterMetrics.Num() > 0)
+		{
+			TestTrue(TEXT("read_message_log execution count should be at least 1"), RouterMetrics[0].TotalExecutions >= 1);
+		}
+	}
+
+	// Clean up at the end
+	UAgentFrameworkActionUtils::ClearTelemetryData();
+	return true;
+}
+
+
 

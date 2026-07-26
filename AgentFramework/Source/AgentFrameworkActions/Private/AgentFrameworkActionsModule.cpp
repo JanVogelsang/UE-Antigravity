@@ -3,6 +3,8 @@
 #include "AgentFrameworkActionsModule.h"
 #include "AgentFrameworkCoreModule.h"
 #include "AgentFrameworkHttpServer.h"
+#include "AgentFrameworkActionUtils.h"
+#include "AgentFrameworkActionRouter.h"
 #include "Misc/CoreDelegates.h"
 #include "UObject/Package.h"
 
@@ -18,6 +20,9 @@ static FDelegateHandle ExtraTagsDelegateHandle;
 
 void FAgentFrameworkActionsModule::StartupModule() { 
 	UE_LOG(LogAgentFramework, Log, TEXT("AgentFrameworkActions module started.")); 
+
+	// Bind ActionRouter telemetry delegate to ActionUtils telemetry recorder
+	FAgentFrameworkActionRouter::OnToolExecutionRecorded.AddStatic(&UAgentFrameworkActionUtils::RecordToolExecution); 
 
 #if WITH_EDITOR
 	ExtraTagsDelegateHandle = UObject::FAssetRegistryTag::OnGetExtraObjectTagsWithContext.AddStatic(&FAgentFrameworkBlueprintActions::HandleGetExtraObjectTags);

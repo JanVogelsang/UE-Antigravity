@@ -39,15 +39,15 @@ DB_PATH = SERVER_DIR / "ast_cache.db"
 REPO_ROOT = SERVER_DIR.parent.parent
 
 # Resolve fallback paths dynamically relative to the repo root
-fallback_base = REPO_ROOT.parent / "tau-game"
+fallback_base = REPO_ROOT.parent / "AgentFrameworkTest"
 if not fallback_base.exists():
     user_profile = os.environ.get("USERPROFILE", "")
     if user_profile:
-        fallback_base = Path(user_profile) / "Documents" / "Unreal Projects" / "tau-game"
+        fallback_base = Path(user_profile) / "Documents" / "Unreal Projects" / "AgentFrameworkTest"
     else:
-        fallback_base = Path("c:/Users") / os.getlogin() / "Documents" / "Unreal Projects" / "tau-game"
+        fallback_base = Path("c:/Users") / os.getlogin() / "Documents" / "Unreal Projects" / "AgentFrameworkTest"
 
-PROJECT_UPROJECT = fallback_base / "Tau.uproject"
+PROJECT_UPROJECT = fallback_base / "AgentFrameworkTest.uproject"
 COMPILE_COMMANDS_PATH = fallback_base / "compile_commands.json"
 WATCH_DIR = fallback_base / "Source"
 
@@ -126,9 +126,9 @@ def resolve_project_paths():
                 logger.info(f"Dynamically discovered game project directory: {base_dir}")
                 break
         
-        # If not found, check if we are inside the UE-Antigravity/UE-AgentFramework repo and tau-game is next to it
+        # If not found, check if we are inside the UE-Antigravity/UE-AgentFramework repo and AgentFrameworkTest is next to it
         if not base_dir:
-            sibling_dir = REPO_ROOT.parent / "tau-game"
+            sibling_dir = REPO_ROOT.parent / "AgentFrameworkTest"
             if sibling_dir.exists():
                 base_dir = sibling_dir
                 logger.info(f"Using sibling game project directory: {base_dir}")
@@ -136,7 +136,7 @@ def resolve_project_paths():
     if base_dir:
         # Resolve target paths
         uprojects = list(base_dir.glob("*.uproject"))
-        PROJECT_UPROJECT = uprojects[0] if uprojects else base_dir / "Tau.uproject"
+        PROJECT_UPROJECT = uprojects[0] if uprojects else base_dir / "AgentFrameworkTest.uproject"
         COMPILE_COMMANDS_PATH = base_dir / "compile_commands.json"
         WATCH_DIR = base_dir / "Source"
         logger.info("Resolved paths:")
@@ -255,7 +255,27 @@ def resolve_and_load_libclang():
     except WindowsError:
         pass
 
-    # 4. Typical Windows Directories (Hardcoded Fallbacks)
+    # 4. vswhere Lookup: Visual Studio "C++ Clang tools for Windows" component
+    # Covers every edition (Community/Professional/Enterprise) and Build Tools-only
+    # installs, since vswhere enumerates all registered VS instances regardless of SKU.
+    try:
+        program_files_x86 = os.environ.get("ProgramFiles(x86)", r"C:\Program Files (x86)")
+        vswhere_path = Path(program_files_x86) / "Microsoft Visual Studio" / "Installer" / "vswhere.exe"
+        if vswhere_path.is_file():
+            import subprocess
+            result = subprocess.run(
+                [str(vswhere_path), "-products", "*", "-property", "installationPath", "-utf8"],
+                capture_output=True, text=True, encoding="utf-8", timeout=10
+            )
+            for line in result.stdout.splitlines():
+                vs_dir = line.strip()
+                if vs_dir:
+                    candidates.append(Path(vs_dir) / "VC" / "Tools" / "Llvm" / "x64" / "bin" / "libclang.dll")
+                    candidates.append(Path(vs_dir) / "VC" / "Tools" / "Llvm" / "bin" / "libclang.dll")
+    except Exception:
+        pass
+
+    # 5. Typical Windows Directories (Hardcoded Fallbacks)
     fallbacks = [
         Path(r"C:\Program Files\LLVM\bin\libclang.dll"),
         Path(r"C:\Program Files (x86)\LLVM\bin\libclang.dll"),
@@ -263,7 +283,7 @@ def resolve_and_load_libclang():
     ]
     candidates.extend(fallbacks)
 
-    # 5. Environment PATH Parsing
+    # 6. Environment PATH Parsing
     path_env = os.environ.get("PATH", "")
     for part in path_env.split(os.pathsep):
         if part:
@@ -447,6 +467,22 @@ def init_db():
     );
     """)
     
+    # 7. Macros Table
+    cursor.execute("""
+    CREATE TABLE IF NOT EXISTS macros (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        file_id INTEGER NOT NULL,
+        name TEXT NOT NULL,
+        kind TEXT NOT NULL,
+        line INTEGER NOT NULL,
+        column INTEGER NOT NULL,
+        parameters TEXT,
+        definition_text TEXT,
+        raw_location TEXT,
+        FOREIGN KEY (file_id) REFERENCES files(id) ON DELETE CASCADE
+    );
+    """)
+    
     # Create indexes
     cursor.execute("CREATE INDEX IF NOT EXISTS idx_files_path ON files(file_path);")
     cursor.execute("CREATE INDEX IF NOT EXISTS idx_symbols_file_id ON symbols(file_id);")
@@ -462,6 +498,8 @@ def init_db():
     cursor.execute("CREATE INDEX IF NOT EXISTS idx_calls_callee ON function_calls(callee_symbol_id);")
     cursor.execute("CREATE INDEX IF NOT EXISTS idx_symbols_usr ON symbols(usr);")
     cursor.execute("CREATE INDEX IF NOT EXISTS idx_calls_callee_usr ON function_calls(callee_usr);")
+    cursor.execute("CREATE INDEX IF NOT EXISTS idx_macros_name ON macros(name);")
+    cursor.execute("CREATE INDEX IF NOT EXISTS idx_macros_file_id ON macros(file_id);")
     
     conn.commit()
     conn.close()
@@ -507,16 +545,66 @@ def serialized_write(func):
 # C++ File Parser - AST Extraction
 def extract_ast_from_file(file_path_abs, compile_args, file_lines):
     index = clang.cindex.Index.create()
-    translation_unit = index.parse(file_path_abs, args=compile_args)
+    options = clang.cindex.TranslationUnit.PARSE_DETAILED_PROCESSING_RECORD if hasattr(clang.cindex.TranslationUnit, 'PARSE_DETAILED_PROCESSING_RECORD') else 0x01
+    translation_unit = index.parse(file_path_abs, args=compile_args, options=options)
     
     symbols = []
     properties = []
     inheritance = []
     parameters = []
     calls = []
+    macros = []
+    seen_macros = set()
+    
+    # Pre-scan file_lines for preprocessor definitions and Unreal Engine macros (UCLASS, GENERATED_BODY, UPROPERTY, etc.)
+    if file_lines:
+        for line_idx, line in enumerate(file_lines):
+            line_num = line_idx + 1
+            line_str = line.strip()
+            if not line_str:
+                continue
+                
+            def_match = re.search(r'#\s*define\s+([A-Za-z_][A-Za-z0-9_]*)(?:\((.*?)\))?', line_str)
+            if def_match:
+                m_name = def_match.group(1)
+                raw_params = def_match.group(2)
+                params = [p.strip() for p in raw_params.split(',')] if raw_params else []
+                key = (m_name, "definition", line_num)
+                if key not in seen_macros:
+                    seen_macros.add(key)
+                    macros.append({
+                        "name": m_name,
+                        "kind": "definition",
+                        "line": line_num,
+                        "column": def_match.start() + 1,
+                        "parameters": json.dumps(params) if params else None,
+                        "definition_text": line_str,
+                        "raw_location": f"{file_path_abs}:{line_num}:{def_match.start()+1}"
+                    })
+
+            ue_matches = re.finditer(r'\b(UCLASS|GENERATED_BODY|GENERATED_UCLASS_BODY|UPROPERTY|UFUNCTION|UDESTRUCT|USTRUCT|UENUM|UE_LOG|DECLARE_[A-Za-z0-9_]+)\b(?:\s*\((.*?)\))?', line_str)
+            for u_match in ue_matches:
+                m_name = u_match.group(1)
+                raw_args = u_match.group(2)
+                params = [p.strip() for p in re.split(r',\s*(?![^()]*\))', raw_args)] if raw_args else []
+                key = (m_name, "expansion", line_num)
+                if key not in seen_macros:
+                    seen_macros.add(key)
+                    macros.append({
+                        "name": m_name,
+                        "kind": "expansion",
+                        "line": line_num,
+                        "column": u_match.start() + 1,
+                        "parameters": json.dumps(params) if params else None,
+                        "definition_text": line_str,
+                        "raw_location": f"{file_path_abs}:{line_num}:{u_match.start()+1}"
+                    })
     
     next_temp_id = [0]
     
+    macro_def_kind = getattr(clang.cindex.CursorKind, 'MACRO_DEFINITION', None)
+    macro_exp_kind = getattr(clang.cindex.CursorKind, 'MACRO_INSTANTIATION', None) or getattr(clang.cindex.CursorKind, 'MACRO_EXPANSION', None)
+
     def traverse(node, parent_temp_id=None, current_function_temp_id=None):
         if node.kind != clang.cindex.CursorKind.TRANSLATION_UNIT:
             if not node.location.file or os.path.normcase(os.path.abspath(node.location.file.name)) != file_path_abs:
@@ -540,8 +628,57 @@ def extract_ast_from_file(file_path_abs, compile_args, file_lines):
             usr = node.get_usr()
         except Exception:
             pass
+
+        if macro_def_kind and node_kind == macro_def_kind:
+            m_name = node.spelling
+            if m_name:
+                line_n = node.location.line or 1
+                col_n = node.location.column or 1
+                key = (m_name, "definition", line_n)
+                if key not in seen_macros:
+                    seen_macros.add(key)
+                    def_text = file_lines[line_n - 1].strip() if (file_lines and line_n <= len(file_lines)) else f"#define {m_name}"
+                    params = []
+                    try:
+                        tokens = [t.spelling for t in node.get_tokens()]
+                        if len(tokens) > 3 and tokens[2] == '(':
+                            idx = 3
+                            while idx < len(tokens) and tokens[idx] != ')':
+                                if tokens[idx] != ',':
+                                    params.append(tokens[idx])
+                                idx += 1
+                    except Exception:
+                        pass
+                    macros.append({
+                        "name": m_name,
+                        "kind": "definition",
+                        "line": line_n,
+                        "column": col_n,
+                        "parameters": json.dumps(params) if params else None,
+                        "definition_text": def_text,
+                        "raw_location": f"{file_path_abs}:{line_n}:{col_n}"
+                    })
+
+        elif macro_exp_kind and node_kind == macro_exp_kind:
+            m_name = node.spelling
+            if m_name:
+                line_n = node.location.line or 1
+                col_n = node.location.column or 1
+                key = (m_name, "expansion", line_n)
+                if key not in seen_macros:
+                    seen_macros.add(key)
+                    def_text = file_lines[line_n - 1].strip() if (file_lines and line_n <= len(file_lines)) else m_name
+                    macros.append({
+                        "name": m_name,
+                        "kind": "expansion",
+                        "line": line_n,
+                        "column": col_n,
+                        "parameters": None,
+                        "definition_text": def_text,
+                        "raw_location": f"{file_path_abs}:{line_n}:{col_n}"
+                    })
             
-        if node_kind in (clang.cindex.CursorKind.CLASS_DECL,
+        elif node_kind in (clang.cindex.CursorKind.CLASS_DECL,
                          clang.cindex.CursorKind.STRUCT_DECL,
                          clang.cindex.CursorKind.ENUM_DECL,
                          clang.cindex.CursorKind.NAMESPACE,
@@ -694,7 +831,8 @@ def extract_ast_from_file(file_path_abs, compile_args, file_lines):
         "properties": properties,
         "inheritance": inheritance,
         "parameters": parameters,
-        "calls": calls
+        "calls": calls,
+        "macros": macros
     }
 
 # C++ File Parser - DB Writer
@@ -712,6 +850,7 @@ def write_ast_data_to_db(file_path_abs, mtime, ast_data):
             file_id = row["id"]
             cursor.execute("DELETE FROM symbols WHERE file_id = ?", (file_id,))
             cursor.execute("DELETE FROM properties WHERE file_id = ?", (file_id,))
+            cursor.execute("DELETE FROM macros WHERE file_id = ?", (file_id,))
             cursor.execute("UPDATE files SET last_parsed_mtime = ?, status = 'parsed' WHERE id = ?", (mtime, file_id))
         else:
             cursor.execute("INSERT INTO files (file_path, last_parsed_mtime, status) VALUES (?, ?, 'parsed')", (file_path_abs, mtime))
@@ -792,6 +931,15 @@ def write_ast_data_to_db(file_path_abs, mtime, ast_data):
                     INSERT INTO function_calls (caller_symbol_id, callee_name, callee_symbol_id, line, callee_usr)
                     VALUES (?, ?, ?, ?, ?)
                 """, (caller_db_id, call["callee_name"], None, call["line"], call["callee_usr"]))
+
+        for mac in ast_data.get("macros", []):
+            cursor.execute("""
+                INSERT INTO macros (file_id, name, kind, line, column, parameters, definition_text, raw_location)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+            """, (
+                file_id, mac["name"], mac["kind"], mac["line"], mac["column"],
+                mac["parameters"], mac["definition_text"], mac["raw_location"]
+            ))
                 
         cursor.execute("""
             UPDATE function_calls
@@ -830,6 +978,95 @@ def write_ast_data_to_db(file_path_abs, mtime, ast_data):
     finally:
         conn.close()
 
+# Helper to recursively parse UBT response (.rsp) files
+def parse_rsp_file(rsp_path, base_dir):
+    args = []
+    if not os.path.exists(rsp_path):
+        return args
+    try:
+        with open(rsp_path, "r", encoding="utf-8", errors="ignore") as f:
+            content = f.read()
+    except Exception:
+        return args
+        
+    import shlex
+    try:
+        lexer = shlex.shlex(content, posix=True)
+        lexer.whitespace_split = True
+        raw_args = list(lexer)
+    except Exception:
+        raw_args = content.split()
+        
+    for arg in raw_args:
+        arg = arg.strip()
+        if not arg:
+            continue
+        if arg.startswith("@"):
+            nested_path = arg[1:].strip('"')
+            if not os.path.isabs(nested_path):
+                nested_path = os.path.normpath(os.path.join(base_dir, nested_path))
+            args.extend(parse_rsp_file(nested_path, base_dir))
+        else:
+            args.append(arg)
+    return args
+
+# Helper to convert MSVC-style flags in response files to Clang format for libclang
+def convert_msvc_to_clang(msvc_args, base_dir):
+    clang_args = []
+    i = 0
+    while i < len(msvc_args):
+        arg = msvc_args[i]
+        # Includes
+        if arg in ("/I", "-I") and i + 1 < len(msvc_args):
+            path = msvc_args[i + 1].strip('"')
+            if not os.path.isabs(path):
+                path = os.path.normpath(os.path.join(base_dir, path))
+            clang_args.append(f"-I{path}")
+            i += 2
+        elif arg.startswith("/I") or arg.startswith("-I"):
+            path = arg[2:].strip('"')
+            if not os.path.isabs(path):
+                path = os.path.normpath(os.path.join(base_dir, path))
+            clang_args.append(f"-I{path}")
+            i += 1
+        # Preprocessor definitions
+        elif arg in ("/D", "-D") and i + 1 < len(msvc_args):
+            macro = msvc_args[i + 1].strip('"')
+            clang_args.append(f"-D{macro}")
+            i += 2
+        elif arg.startswith("/D") or arg.startswith("-D"):
+            macro = arg[2:].strip('"')
+            clang_args.append(f"-D{macro}")
+            i += 1
+        # Forced include files
+        elif arg in ("/FI", "-FI") and i + 1 < len(msvc_args):
+            path = msvc_args[i + 1].strip('"')
+            if not os.path.isabs(path):
+                path = os.path.normpath(os.path.join(base_dir, path))
+            clang_args.append("-include")
+            clang_args.append(path)
+            i += 2
+        elif arg.startswith("/FI") or arg.startswith("-FI"):
+            path = arg[3:].strip('"')
+            if not os.path.isabs(path):
+                path = os.path.normpath(os.path.join(base_dir, path))
+            clang_args.append("-include")
+            clang_args.append(path)
+            i += 1
+        # C++ language standards
+        elif arg.startswith("/std:"):
+            std_val = arg[5:]
+            if std_val == "c++20":
+                clang_args.append("-std=c++20")
+            elif std_val == "c++17":
+                clang_args.append("-std=c++17")
+            elif std_val == "c++latest":
+                clang_args.append("-std=c++20")
+            i += 1
+        else:
+            i += 1
+    return clang_args
+
 # C++ File Parser - Process Worker entry point
 def worker_parse_file(file_path):
     file_path_abs = os.path.normcase(os.path.abspath(file_path))
@@ -843,29 +1080,72 @@ def worker_parse_file(file_path):
         try:
             with open(COMPILE_COMMANDS_PATH, "r") as f:
                 commands = json.load(f)
+                
+            # If the target file is a header, build fallback target files (direct cpp sibling, then directory siblings)
+            target_search_files = [file_path_abs]
+            ext = os.path.splitext(file_path_abs)[1].lower()
+            if ext in ('.h', '.hpp', '.inl'):
+                # 1. Direct sibling (same name, .cpp extension)
+                direct_cpp = os.path.splitext(file_path_abs)[0] + '.cpp'
+                target_search_files.append(direct_cpp)
+                
+                # 2. Sibling .cpp files in same directory
+                h_dir = os.path.dirname(file_path_abs)
+                try:
+                    sibling_cpps = [os.path.normcase(os.path.abspath(os.path.join(h_dir, f))) 
+                                    for f in os.listdir(h_dir) if f.lower().endswith('.cpp')]
+                    target_search_files.extend(sibling_cpps)
+                except Exception:
+                    pass
+            
+            # Find the first matching command entry
+            found_entry = None
+            for search_file in target_search_files:
                 for cmd in commands:
                     cmd_file = cmd.get("file", "")
-                    if cmd_file and os.path.normcase(os.path.abspath(cmd_file)) == file_path_abs:
-                        arguments = cmd.get("arguments", [])
-                        if not arguments and "command" in cmd:
-                            import shlex
-                            arguments = shlex.split(cmd["command"])
-                        if arguments:
-                            filtered = []
-                            skip = False
-                            for arg in arguments[1:]:
-                                if skip:
-                                    skip = False
-                                    continue
-                                if arg in ('-o', '--output'):
-                                    skip = True
-                                    continue
-                                if os.path.normcase(os.path.abspath(arg)) == file_path_abs:
-                                    continue
-                                filtered.append(arg)
-                            if filtered:
-                                compile_args = filtered
+                    if cmd_file and os.path.normcase(os.path.abspath(cmd_file)) == search_file:
+                        found_entry = cmd
                         break
+                if found_entry:
+                    break
+                    
+            # 3. Global fallback to any project source file command if still not found
+            if not found_entry and commands:
+                for cmd in commands:
+                    cmd_file = cmd.get("file", "")
+                    if cmd_file and "Source/" in cmd_file:
+                        found_entry = cmd
+                        break
+                if not found_entry:
+                    found_entry = commands[0]
+                    
+            if found_entry:
+                base_dir = found_entry.get("directory", "")
+                arguments = found_entry.get("arguments", [])
+                if not arguments and "command" in found_entry:
+                    import shlex
+                    arguments = shlex.split(found_entry["command"])
+                
+                if arguments:
+                    # Filter and expand response files
+                    raw_args = []
+                    for arg in arguments[1:]:
+                        if os.path.normcase(arg) == os.path.normcase(found_entry.get("file", "")):
+                            continue
+                        if arg.startswith("@"):
+                            rsp_path = arg[1:].strip('"')
+                            if not os.path.isabs(rsp_path):
+                                rsp_path = os.path.normpath(os.path.join(base_dir, rsp_path))
+                            raw_args.extend(parse_rsp_file(rsp_path, base_dir))
+                        else:
+                            raw_args.append(arg)
+                    
+                    # Convert MSVC flags to standard Clang flags
+                    converted = convert_msvc_to_clang(raw_args, base_dir)
+                    if converted:
+                        compile_args = converted
+                        # Ensure language and standard specifiers are present
+                        compile_args.extend(['-x', 'c++', '-std=c++20'])
         except Exception:
             pass
             
@@ -893,23 +1173,24 @@ def worker_parse_file(file_path):
 
 # C++ File Parser
 @serialized_write
-def parse_cpp_file(file_path: str):
+def parse_cpp_file(file_path: str, force: bool = False):
     file_path_abs = os.path.normcase(os.path.abspath(file_path))
     if not os.path.exists(file_path_abs):
         return
         
     mtime = os.path.getmtime(file_path_abs)
     
-    conn = get_db_connection()
-    cursor = conn.cursor()
-    try:
-        cursor.execute("SELECT id, last_parsed_mtime FROM files WHERE file_path = ?", (file_path_abs,))
-        row = cursor.fetchone()
-        if row and row["last_parsed_mtime"] >= mtime:
+    if not force:
+        conn = get_db_connection()
+        cursor = conn.cursor()
+        try:
+            cursor.execute("SELECT id, last_parsed_mtime FROM files WHERE file_path = ?", (file_path_abs,))
+            row = cursor.fetchone()
+            if row and row["last_parsed_mtime"] >= mtime:
+                conn.close()
+                return
+        finally:
             conn.close()
-            return
-    finally:
-        conn.close()
         
     logger.info(f"Parsing AST for C++ file: {file_path_abs}")
     res = worker_parse_file(file_path_abs)
@@ -1086,28 +1367,110 @@ class CppSourceHandler(FileSystemEventHandler):
             except Exception as e:
                 logger.error(f"Watchdog error in on_deleted for {file_path_abs}: {e}")
 
+class FallbackFileWatcher:
+    """
+    Fallback background observer thread monitoring header and source file modifications
+    when watchdog Observer is unavailable or fails.
+    """
+    def __init__(self, watch_dir: Path, interval: float = 2.0):
+        self.watch_dir = watch_dir
+        self.interval = interval
+        self._running = False
+        self._thread = None
+        self._file_mtimes = {}
+
+    def start(self):
+        if self._running:
+            return
+        self._running = True
+        self._thread = threading.Thread(target=self._poll_loop, daemon=True)
+        self._thread.start()
+        logger.info(f"FallbackFileWatcher thread started on {self.watch_dir}")
+
+    def stop(self):
+        self._running = False
+        if self._thread and self._thread.is_alive():
+            self._thread.join(timeout=3.0)
+        logger.info("FallbackFileWatcher stopped.")
+
+    def _poll_loop(self):
+        import time
+        while self._running:
+            try:
+                if self.watch_dir.exists():
+                    current_files = {}
+                    for ext in ('.h', '.hpp', '.inl', '.cpp'):
+                        for fp in self.watch_dir.rglob(f"*{ext}"):
+                            parts = fp.parts
+                            if any(x in parts for x in ('Intermediate', 'Binaries', 'Saved', '.git', '.agents')):
+                                continue
+                            abs_p = os.path.normcase(os.path.abspath(fp))
+                            try:
+                                mtime = os.path.getmtime(abs_p)
+                                current_files[abs_p] = mtime
+                            except Exception:
+                                pass
+                                
+                    for abs_p, mtime in current_files.items():
+                        if abs_p not in self._file_mtimes or mtime > self._file_mtimes[abs_p]:
+                            self._file_mtimes[abs_p] = mtime
+                            logger.info(f"FallbackWatcher: File changed/created: {abs_p}")
+                            try:
+                                parse_cpp_file(abs_p)
+                            except Exception as e:
+                                logger.error(f"FallbackWatcher error parsing {abs_p}: {e}")
+                                
+                    deleted = set(self._file_mtimes.keys()) - set(current_files.keys())
+                    for abs_p in deleted:
+                        del self._file_mtimes[abs_p]
+                        logger.info(f"FallbackWatcher: File deleted: {abs_p}")
+                        try:
+                            with parse_lock:
+                                conn = get_db_connection()
+                                conn.execute("DELETE FROM files WHERE file_path = ?", (abs_p,))
+                                conn.commit()
+                                conn.close()
+                        except Exception as e:
+                            logger.error(f"FallbackWatcher error handling deletion of {abs_p}: {e}")
+            except Exception as e:
+                logger.error(f"FallbackWatcher loop error: {e}")
+            time.sleep(self.interval)
+
+fallback_watcher = None
+
 def start_watcher(loop=None):
-    observer = Observer()
-    handler = CppSourceHandler()
-    if WATCH_DIR.exists():
-        observer.schedule(handler, path=str(WATCH_DIR), recursive=True)
-        logger.info(f"Watchdog observer scheduled on C++ source directory: {WATCH_DIR}")
-    else:
-        logger.warning(f"Watchdog directory does not exist: {WATCH_DIR}")
-        
+    global fallback_watcher
+    observer = None
     try:
-        content_dir = PROJECT_UPROJECT.parent / "Content"
-        if content_dir.exists():
-            uasset_handler = UAssetHandler()
-            observer.schedule(uasset_handler, path=str(content_dir), recursive=True)
-            logger.info(f"Watchdog observer scheduled on Content directory: {content_dir}")
+        observer = Observer()
+        handler = CppSourceHandler()
+        if WATCH_DIR.exists():
+            observer.schedule(handler, path=str(WATCH_DIR), recursive=True)
+            logger.info(f"Watchdog observer scheduled on C++ source directory: {WATCH_DIR}")
         else:
-            logger.warning(f"Content directory does not exist: {content_dir}")
+            logger.warning(f"Watchdog directory does not exist: {WATCH_DIR}")
+            
+        try:
+            content_dir = PROJECT_UPROJECT.parent / "Content"
+            if content_dir.exists():
+                uasset_handler = UAssetHandler()
+                observer.schedule(uasset_handler, path=str(content_dir), recursive=True)
+                logger.info(f"Watchdog observer scheduled on Content directory: {content_dir}")
+            else:
+                logger.warning(f"Content directory does not exist: {content_dir}")
+        except Exception as e:
+            logger.error(f"Failed to schedule Content directory observer: {e}")
+            
+        observer.start()
+        logger.info("Watchdog observers started.")
     except Exception as e:
-        logger.error(f"Failed to schedule Content directory observer: {e}")
-        
-    observer.start()
-    logger.info("Watchdog observers started.")
+        logger.warning(f"Watchdog Observer failed to start: {e}. Launching FallbackFileWatcher...")
+        observer = None
+
+    if observer is None or os.environ.get("USE_FALLBACK_WATCHER") == "1":
+        fallback_watcher = FallbackFileWatcher(WATCH_DIR)
+        fallback_watcher.start()
+
     return observer
 
 # 5. MCP Tool Implementations
@@ -1685,6 +2048,317 @@ def _search_vector_db_sync(query: str) -> str:
             "source": "SystemError"
         }], indent=2)
 
+def _inspect_macro_expansion_sync(macro_name: str, file_path: Optional[str] = None) -> str:
+    query_name = macro_name.strip() if macro_name else ""
+    
+    if file_path:
+        abs_fp = os.path.normcase(os.path.abspath(file_path))
+        if os.path.exists(abs_fp):
+            parse_cpp_file(abs_fp)
+            
+    conn = get_db_connection()
+    cursor = conn.cursor()
+    try:
+        sql = """
+            SELECT m.*, f.file_path 
+            FROM macros m
+            JOIN files f ON m.file_id = f.id
+            WHERE m.name = ?
+        """
+        params = [query_name]
+        if file_path:
+            sql += " AND f.file_path = ?"
+            params.append(os.path.normcase(os.path.abspath(file_path)))
+            
+        cursor.execute(sql, params)
+        rows = cursor.fetchall()
+        
+        if not rows and not file_path:
+            cursor.execute("""
+                SELECT m.*, f.file_path
+                FROM macros m
+                JOIN files f ON m.file_id = f.id
+                WHERE m.name LIKE ? OR m.definition_text LIKE ?
+            """, (f"%{query_name}%", f"%{query_name}%"))
+            rows = cursor.fetchall()
+            
+        if not rows:
+            defining = find_defining_file(query_name)
+            if defining:
+                parse_cpp_file(defining)
+                cursor.execute(sql, params)
+                rows = cursor.fetchall()
+                
+        definitions = []
+        expansions = []
+        
+        for r in rows:
+            params_parsed = json.loads(r["parameters"]) if r["parameters"] else []
+            item = {
+                "name": r["name"],
+                "kind": r["kind"],
+                "file_path": r["file_path"],
+                "line": r["line"],
+                "column": r["column"],
+                "parameters": params_parsed,
+                "text": r["definition_text"],
+                "raw_location": r["raw_location"]
+            }
+            if r["kind"] == "definition":
+                definitions.append(item)
+            else:
+                expansions.append(item)
+                
+        res = {
+            "query": query_name,
+            "macro_name": query_name,
+            "total_definitions": len(definitions),
+            "total_expansions": len(expansions),
+            "definitions": definitions,
+            "expansions": expansions
+        }
+        
+        conn.close()
+        return f"Result of inspect_macro_expansion for '{query_name}':\n" + json.dumps(res, indent=2)
+    except Exception as e:
+        if conn:
+            conn.close()
+        logger.error(f"Error executing inspect_macro_expansion: {e}")
+        return f"Result of inspect_macro_expansion for '{query_name}':\n" + json.dumps({"error": str(e)}, indent=2)
+
+@mcp.tool()
+async def inspect_macro_expansion(macro_name: str, file_path: Optional[str] = None) -> str:
+    """
+    Inspect macro definitions, locations, parameters, and macro expansions (including Unreal Engine macros like UCLASS, GENERATED_BODY, UPROPERTY, UFUNCTION).
+    """
+    return await asyncio.to_thread(_inspect_macro_expansion_sync, macro_name, file_path)
+
+@mcp.tool()
+async def query_macro_expansion(query: str, file_path: Optional[str] = None) -> str:
+    """
+    Query macro expansion representation, definition locations, and parameters for a macro or file.
+    """
+    return await asyncio.to_thread(_inspect_macro_expansion_sync, query, file_path)
+
+def _visualize_call_graph_sync(symbol_name: str, max_depth: int = 3, direction: str = "both") -> str:
+    clean_name = symbol_name.replace("class ", "").replace("struct ", "").strip() if symbol_name else ""
+    
+    conn = get_db_connection()
+    cursor = conn.cursor()
+    try:
+        if "::" in clean_name:
+            cursor.execute("""
+                SELECT s.id, s.name, s.fully_qualified_name, s.kind, f.file_path, s.line_start
+                FROM symbols s
+                JOIN files f ON s.file_id = f.id
+                WHERE s.fully_qualified_name = ? OR s.fully_qualified_name LIKE ?
+            """, (clean_name, "%::" + clean_name))
+        else:
+            cursor.execute("""
+                SELECT s.id, s.name, s.fully_qualified_name, s.kind, f.file_path, s.line_start
+                FROM symbols s
+                JOIN files f ON s.file_id = f.id
+                WHERE s.name = ? OR s.fully_qualified_name = ?
+            """, (clean_name, clean_name))
+            
+        root_rows = cursor.fetchall()
+        
+        if not root_rows:
+            defining = find_defining_file(clean_name)
+            if defining:
+                parse_cpp_file(defining)
+                if "::" in clean_name:
+                    cursor.execute("""
+                        SELECT s.id, s.name, s.fully_qualified_name, s.kind, f.file_path, s.line_start
+                        FROM symbols s
+                        JOIN files f ON s.file_id = f.id
+                        WHERE s.fully_qualified_name = ? OR s.fully_qualified_name LIKE ?
+                    """, (clean_name, "%::" + clean_name))
+                else:
+                    cursor.execute("""
+                        SELECT s.id, s.name, s.fully_qualified_name, s.kind, f.file_path, s.line_start
+                        FROM symbols s
+                        JOIN files f ON s.file_id = f.id
+                        WHERE s.name = ? OR s.fully_qualified_name = ?
+                    """, (clean_name, clean_name))
+                root_rows = cursor.fetchall()
+                
+        if not root_rows:
+            conn.close()
+            return f"Result of visualize_call_graph for '{symbol_name}':\n" + json.dumps({
+                "error": f"Symbol '{symbol_name}' not found in AST cache."
+            }, indent=2)
+
+        nodes_dict = {}
+        edges_list = []
+        visited_edges = set()
+        
+        def add_node(sym_id, fqn, name, file_path, line, kind):
+            key = fqn or name
+            if key not in nodes_dict:
+                nodes_dict[key] = {
+                    "symbol_id": sym_id,
+                    "name": name,
+                    "fully_qualified_name": key,
+                    "kind": kind or "function",
+                    "file_path": file_path or "",
+                    "line": line or 1
+                }
+            return key
+
+        root_keys = []
+        for r in root_rows:
+            rk = add_node(r["id"], r["fully_qualified_name"], r["name"], r["file_path"], r["line_start"], r["kind"])
+            root_keys.append(rk)
+
+        if direction.lower() in ("callees", "both"):
+            def traverse_callees(caller_sym_id, current_depth):
+                if current_depth > max_depth:
+                    return
+                cursor.execute("""
+                    SELECT fc.callee_name, fc.callee_symbol_id, fc.line,
+                           s.name as s_name, s.fully_qualified_name as s_fqn, s.kind as s_kind, s.line_start as s_line,
+                           f.file_path as s_file
+                    FROM function_calls fc
+                    LEFT JOIN symbols s ON fc.callee_symbol_id = s.id
+                    LEFT JOIN files f ON s.file_id = f.id
+                    WHERE fc.caller_symbol_id = ?
+                """, (caller_sym_id,))
+                calls = cursor.fetchall()
+                for c in calls:
+                    c_id = c["callee_symbol_id"]
+                    c_name = c["callee_name"]
+                    c_fqn = c["s_fqn"] if c["s_fqn"] else c_name
+                    c_file = c["s_file"] if c["s_file"] else "unknown"
+                    c_line = c["s_line"] if c["s_line"] else c["line"]
+                    c_kind = c["s_kind"] if c["s_kind"] else "function"
+                    
+                    callee_key = add_node(c_id, c_fqn, c_name, c_file, c_line, c_kind)
+                    
+                    cursor.execute("""
+                        SELECT s.fully_qualified_name, s.name, f.file_path, s.line_start
+                        FROM symbols s JOIN files f ON s.file_id = f.id WHERE s.id = ?
+                    """, (caller_sym_id,))
+                    caller_row = cursor.fetchone()
+                    if caller_row:
+                        caller_key = add_node(caller_sym_id, caller_row["fully_qualified_name"], caller_row["name"], caller_row["file_path"], caller_row["line_start"], "method")
+                        edge_tuple = (caller_key, callee_key, c["line"])
+                        if edge_tuple not in visited_edges:
+                            visited_edges.add(edge_tuple)
+                            edges_list.append({
+                                "caller": caller_key,
+                                "callee": callee_key,
+                                "line": c["line"]
+                            })
+                    if c_id:
+                        traverse_callees(c_id, current_depth + 1)
+                        
+            for r in root_rows:
+                traverse_callees(r["id"], 1)
+
+        if direction.lower() in ("callers", "both"):
+            def traverse_callers(target_sym_id, target_name, current_depth):
+                if current_depth > max_depth:
+                    return
+                if target_sym_id:
+                    cursor.execute("""
+                        SELECT fc.caller_symbol_id, fc.line,
+                               s.name as caller_name, s.fully_qualified_name as caller_fqn, s.kind as caller_kind, s.line_start as caller_line,
+                               f.file_path as caller_file
+                        FROM function_calls fc
+                        JOIN symbols s ON fc.caller_symbol_id = s.id
+                        JOIN files f ON s.file_id = f.id
+                        WHERE fc.callee_symbol_id = ?
+                    """, (target_sym_id,))
+                else:
+                    cursor.execute("""
+                        SELECT fc.caller_symbol_id, fc.line,
+                               s.name as caller_name, s.fully_qualified_name as caller_fqn, s.kind as caller_kind, s.line_start as caller_line,
+                               f.file_path as caller_file
+                        FROM function_calls fc
+                        JOIN symbols s ON fc.caller_symbol_id = s.id
+                        JOIN files f ON s.file_id = f.id
+                        WHERE fc.callee_name = ?
+                    """, (target_name,))
+                callers = cursor.fetchall()
+                for c in callers:
+                    clr_id = c["caller_symbol_id"]
+                    clr_name = c["caller_name"]
+                    clr_fqn = c["caller_fqn"]
+                    clr_file = c["caller_file"]
+                    clr_line = c["caller_line"]
+                    clr_kind = c["caller_kind"]
+                    
+                    caller_key = add_node(clr_id, clr_fqn, clr_name, clr_file, clr_line, clr_kind)
+                    callee_key = target_name
+                    if target_sym_id:
+                        cursor.execute("SELECT fully_qualified_name FROM symbols WHERE id = ?", (target_sym_id,))
+                        trg_row = cursor.fetchone()
+                        if trg_row:
+                            callee_key = trg_row["fully_qualified_name"]
+                            
+                    edge_tuple = (caller_key, callee_key, c["line"])
+                    if edge_tuple not in visited_edges:
+                        visited_edges.add(edge_tuple)
+                        edges_list.append({
+                            "caller": caller_key,
+                            "callee": callee_key,
+                            "line": c["line"]
+                        })
+                    traverse_callers(clr_id, clr_name, current_depth + 1)
+
+            for r in root_rows:
+                traverse_callers(r["id"], r["name"], 1)
+
+        mermaid_id_map = {}
+        mermaid_lines = ["graph TD"]
+        for idx, (k, node_data) in enumerate(nodes_dict.items(), start=1):
+            m_id = f"N{idx}"
+            mermaid_id_map[k] = m_id
+            fname = Path(node_data["file_path"]).name if node_data["file_path"] else ""
+            label = f"{node_data['fully_qualified_name']}<br/>({fname}:{node_data['line']})"
+            mermaid_lines.append(f'    {m_id}["{label}"]')
+            
+        for edge in edges_list:
+            c_mid = mermaid_id_map.get(edge["caller"])
+            e_mid = mermaid_id_map.get(edge["callee"])
+            if c_mid and e_mid:
+                mermaid_lines.append(f'    {c_mid} -->|line {edge["line"]}| {e_mid}')
+                
+        mermaid_syntax = "\n".join(mermaid_lines)
+        
+        result_payload = {
+            "symbol": symbol_name,
+            "direction": direction,
+            "max_depth": max_depth,
+            "root_symbols": root_keys,
+            "nodes": list(nodes_dict.values()),
+            "edges": edges_list,
+            "mermaid": mermaid_syntax
+        }
+        
+        conn.close()
+        return f"Result of visualize_call_graph for '{symbol_name}':\n" + json.dumps(result_payload, indent=2)
+    except Exception as e:
+        if conn:
+            conn.close()
+        logger.error(f"Error executing visualize_call_graph: {e}")
+        return f"Result of visualize_call_graph for '{symbol_name}':\n" + json.dumps({"error": str(e)}, indent=2)
+
+@mcp.tool()
+async def visualize_call_graph(symbol_name: str, max_depth: int = 3, direction: str = "both") -> str:
+    """
+    Generate multi-file call graph visualization (JSON hierarchy + Mermaid 'graph TD' syntax) for a function or method symbol.
+    """
+    return await asyncio.to_thread(_visualize_call_graph_sync, symbol_name, max_depth, direction)
+
+@mcp.tool()
+async def query_call_graph(query: str, max_depth: int = 3, direction: str = "both") -> str:
+    """
+    Query multi-file call graph data and Mermaid diagram syntax for a given function or method.
+    """
+    return await asyncio.to_thread(_visualize_call_graph_sync, query, max_depth, direction)
+
 async def execute_manual_tool(name: str, arguments: dict) -> str:
     if name == "query_cpp_ast":
         return await query_cpp_ast(**arguments)
@@ -1696,14 +2370,31 @@ async def execute_manual_tool(name: str, arguments: dict) -> str:
         return await search_similar_blueprints(**arguments)
     elif name == "index_all_blueprints":
         return await index_all_blueprints()
+    elif name in ("inspect_macro_expansion", "query_macro_expansion"):
+        macro_arg = arguments.get("macro_name") or arguments.get("query")
+        fp_arg = arguments.get("file_path")
+        return await inspect_macro_expansion(macro_name=macro_arg, file_path=fp_arg)
+    elif name in ("visualize_call_graph", "query_call_graph"):
+        sym_arg = arguments.get("symbol_name") or arguments.get("query")
+        depth_arg = arguments.get("max_depth", 3)
+        dir_arg = arguments.get("direction", "both")
+        return await visualize_call_graph(symbol_name=sym_arg, max_depth=depth_arg, direction=dir_arg)
     else:
         raise ValueError(f"Tool {name} not found.")
 
 observer = None
+fallback_watcher = None
 active_executor = None
 
 def cleanup_watcher():
-    global observer, active_executor
+    global observer, active_executor, fallback_watcher
+    if fallback_watcher:
+        logger.info("Stopping fallback file watcher...")
+        try:
+            fallback_watcher.stop()
+        except Exception as e:
+            logger.error(f"Error stopping fallback watcher: {e}")
+        fallback_watcher = None
     if active_executor:
         logger.info("Shutting down active ProcessPoolExecutor...")
         try:

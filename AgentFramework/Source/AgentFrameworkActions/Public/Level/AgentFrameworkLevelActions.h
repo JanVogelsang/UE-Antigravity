@@ -33,4 +33,7 @@ private:
     FAgentFrameworkActionResult ExecuteSetupCineCameraRigRail(const TSharedRef<FJsonObject>& Params, UWorld* World);
     FAgentFrameworkActionResult ExecuteSetupDMXPatch(const TSharedRef<FJsonObject>& Params, UWorld* World);
     FAgentFrameworkActionResult ExecuteSetupChaosVehicle(const TSharedRef<FJsonObject>& Params, UWorld* World);
+
+    void PlaySuccessSound();
 };
+

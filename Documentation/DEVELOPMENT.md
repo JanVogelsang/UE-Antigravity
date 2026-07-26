@@ -33,7 +33,7 @@ Run the build script from the repository root using the UAT mutex bypass environ
 $env:uebp_UATMutexNoWait = '1'
 powershell -ExecutionPolicy Bypass -File .\build_plugin.ps1 -NoZip
 ```
-This command compiles the C++ plugin, packages it, and copies the latest binaries back to the game project (`tau-game/Plugins/AgentFramework`).
+This command compiles the C++ plugin, packages it, and copies the latest binaries back to the game project (`AgentFrameworkTest/Plugins/AgentFramework`).
 
 ---
 

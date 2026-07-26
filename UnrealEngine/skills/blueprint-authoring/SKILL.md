@@ -14,29 +14,59 @@ When modifying or creating a Blueprint Graph, you MUST follow this sequence:
 2.  **Step 2: Batch Structural Changes**: Use `execute_batch_blueprint_operations` to batch multiple graph modifications (components, variables, functions) in a single transaction, compiling once at the end.
 3.  **Step 3: Draft and Format T3D Nodes**: Draft the T3D nodes. To avoid node overlaps, you **MUST** call the `format_t3d_layout` tool on the drafted T3D text to calculate clean coordinates. Then, use `inject_blueprint_nodes_t3d` with the formatted T3D text and the inline `connections` array parameter to import nodes and wire them to existing nodes in a single tool call.
     *   **CRITICAL**: When generating T3D (plain-text) representation for nodes (for `inject_blueprint_nodes_t3d` or copy-pasting), you **MUST** include a unique, valid `NodeGuid` parameter (a 32-character uppercase hexadecimal string, e.g., `NodeGuid=3E2A5D8446B84A29B52C2D812A2BD5F5`) for every single node. If omitted or duplicated, the imported nodes will lack a unique GUID, causing "missing NodeGuid" warnings during cooking.
-4.  **Step 4: Connect Isolated Pins**: If isolated wiring is needed later, use `connect_blueprint_pins`. Compile step runs automatically on modifications.
+4.  **Step 4: Connect & Disconnect Isolated Pins**: If isolated wiring or pin disconnection is needed later, use `connect_blueprint_pins` or `disconnect_blueprint_pins`. Compile step runs automatically on modifications.
 5.  **Step 5: Mandatory Post-Injection Audit**: After every injection, read the entire result message. If a `PINS REQUIRING ATTENTION` or `SANITISER` warning section is present, act on EVERY entry before considering the task done. Never leave asset references empty or numeric defaults at zero unless explicitly requested.
+
+### Pin Connection & Disconnection Tools
+* **Connect Pins (`connect_blueprint_pins`)**: Connect output pin on source node to input pin on target node.
+* **Disconnect Pins (`disconnect_blueprint_pins`)**: Disconnect specific pin links or break all connections on a pin:
+  ```json
+  {
+    "TargetAsset": "/Game/Blueprints/BP_Player",
+    "NodeGuid": "3E2A5D8446B84A29B52C2D812A2BD5F5",
+    "PinName": "Execute",
+    "bDisconnectAll": true
+  }
+  ```
 
 ## T3D Placeholder Substitution
 When replacing placeholders (e.g. `LINK_1`, `LINK_10`) in T3D node definitions, sort placeholders by length descending before replacement to prevent prefix collisions (e.g. replacing `LINK_10` with the value of `LINK_1` + `0`).
 
-## Python Sub-Object Bypassing (Design Time)
-In Unreal Python, internal blueprint sub-objects (like `WidgetTree` elements in UMG or added Components in a standard Blueprint) are often protected and cannot be accessed via standard property reflection (e.g., `bp.get_editor_property('WidgetTree')`).
-To modify these sub-objects via Python scripts in the editor, bypass this restriction by loading the sub-object directly from its path using colon notation (`AssetPath.AssetName:SubObjectName`):
-```python
-import unreal
-# Load the sub-object directly
-widget_obj = unreal.load_object(None, '/Game/UI/Path/W_MyWidget.W_MyWidget:WidgetTree.SubWidgetName')
-if widget_obj:
-    slot = widget_obj.slot  # Access the layout slot (e.g., CanvasPanelSlot)
-    slot.set_z_order(-1)
-    slot.set_anchors(unreal.Anchors(minimum=unreal.Vector2D(0,0), maximum=unreal.Vector2D(1,1)))
+## Design-Time Sub-Object & UMG Slot Property Modification (Native C++ Tools)
+
+To modify internal blueprint sub-objects (such as nested sub-components or UMG `WidgetTree` child elements) at design time, use native C++ action routes instead of Python script execution.
+
+### 1. General Sub-Object Mutation (`modify_blueprint_subobject`)
+Use `modify_blueprint_subobject` to mutate property values on nested sub-objects using colon or dot path notation (`WidgetTree.SubWidgetName` or `SCS_Node.ComponentName`):
+
+```json
+{
+  "AssetPath": "/Game/UI/W_MyWidget",
+  "SubObjectPath": "WidgetTree.SubWidgetName",
+  "Properties": {
+    "bIsEnabled": false,
+    "Visibility": "Collapsed"
+  }
+}
 ```
-Always follow this pattern instead of attempting complex reflection hacks.
 
-## Sub-Agent Workflow for Blueprint Authoring (Antigravity 4-Layer Context)
+### 2. UMG Widget Layout & Slot Properties (`set_widget_slot_properties`)
+To adjust slot layout properties (anchors, alignment, offsets, Z-order) on child widgets inside a UMG Widget Blueprint, call `set_widget_slot_properties`:
 
-When complex authoring is required, the Main Agent coordinates three specialized sub-agents:
+```json
+{
+  "widget_blueprint_path": "/Game/UI/W_MyWidget",
+  "widget_name": "SubWidgetName",
+  "anchors": { "min_x": 0.0, "min_y": 0.0, "max_x": 1.0, "max_y": 1.0 },
+  "alignment": { "x": 0.5, "y": 0.5 },
+  "offsets": { "left": 0.0, "top": 0.0, "right": 100.0, "bottom": 50.0 }
+}
+```
+
+
+## Sub-Agent Workflow for Blueprint Authoring (4-Layer Context)
+
+When complex authoring is required, the Main Agent coordinates three specialized sub-agents using the harness's sub-agent mechanism (`invoke_subagent` in Antigravity, the Agent/Task tool in Claude Code, or equivalent). If your harness has no sub-agent mechanism, perform the three roles yourself, sequentially and strictly in order:
 
 ### 1. Planner Sub-agent (Role: `Blueprint Architect`)
 *   **Responsibility**: Decomposes the user's high-level goal into step-by-step T3D graph injection actions.
@@ -60,4 +90,4 @@ When complex authoring is required, the Main Agent coordinates three specialized
 *   **Tools Allowed**: `compile_blueprint`, `run_automation_tests`.
 *   **Workflow**: Compiles the Blueprint. If it fails, instructs the Executor to fix it via another transaction or explicitly undo it. If successful, completes the task.
 
-**Routing Protocol**: The Main Agent MUST NOT execute complex Blueprint logic directly. It must delegate to the Architect, pass the plan to the Engineer, and then have the QA Auditor verify and commit.
+**Routing Protocol**: The Main Agent MUST NOT execute complex Blueprint logic directly. It must delegate to the Architect, pass the plan to the Engineer, and then have the QA Auditor verify and commit. (In harnesses without sub-agents, the Main Agent performs the Architect, Engineer, and QA Auditor phases itself, in that order, without skipping the gap analysis or verification phases.)

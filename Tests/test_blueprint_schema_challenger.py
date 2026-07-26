@@ -51,11 +51,11 @@ def test_get_blueprint_schema_widget_blueprint(mock_agent_client):
     """
     # Note: If running against mock server, it will just return bSuccess=True.
     # If running against the real editor, we test a widget blueprint.
-    # We can use an existing WidgetBlueprint in the content folder, e.g. one in tau-game if we have one.
+    # We can use an existing WidgetBlueprint in the content folder, e.g. one in AgentFrameworkTest if we have one.
     # Let's search for widget blueprints in the project if any, or just check.
     res = mock_agent_client.call_cpp_tool(
         'get_blueprint_schema',
-        {'asset_path': '/Game/UI/WBP_TestInstantiate'}  # Existing WidgetBlueprint in tau-game
+        {'asset_path': '/Game/UI/WBP_TestInstantiate'}  # Existing WidgetBlueprint in AgentFrameworkTest
     )
     assert res is not None
     # If mock server: success

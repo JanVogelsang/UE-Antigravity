@@ -2,10 +2,12 @@
 
 #include "Material/AgentFrameworkMaterialActions.h"
 #include "AgentFrameworkCoreModule.h"
+#include "AgentFrameworkActionUtils.h"
 
 #include "Materials/Material.h"
 #include "Materials/MaterialInstanceConstant.h"
 #include "Materials/MaterialExpressionTextureSample.h"
+#include "Materials/MaterialExpressionTextureSampleParameter2D.h"
 #include "Materials/MaterialExpressionConstant.h"
 #include "Materials/MaterialExpressionConstant3Vector.h"
 #include "Materials/MaterialExpressionMultiply.h"
@@ -26,6 +28,7 @@
 #include "Viewport/AgentFrameworkViewportActions.h"
 #include "Editor.h"
 #include "RenderingThread.h"
+#include "Sound/SoundBase.h"
 
 FAgentFrameworkMaterialActions::FAgentFrameworkMaterialActions() {}
 FAgentFrameworkMaterialActions::~FAgentFrameworkMaterialActions() {}
@@ -39,26 +42,63 @@ TArray<FString> FAgentFrameworkMaterialActions::GetSupportedToolNames() const
 		TEXT("create_material_instance"),
 		TEXT("add_material_expression"),
 		TEXT("connect_material_property"),
-		TEXT("capture_material")
+		TEXT("capture_material"),
+		TEXT("create_pbr_material_from_textures")
 	};
 }
 
 bool FAgentFrameworkMaterialActions::ValidateParams(const TSharedRef<FJsonObject>& Params, TArray<FString>& OutErrors) const
 {
-	if (!Params->HasField(TEXT("asset_path")))
+	FString ToolName;
+	UAgentFrameworkActionUtils::TryGetStringParam(Params, TEXT("_tool_name"), ToolName, OutErrors, false);
+
+	if (ToolName == TEXT("create_pbr_material_from_textures") || ToolName == TEXT("material/create_pbr_from_textures"))
 	{
-		OutErrors.Add(TEXT("Missing required field: asset_path"));
+		FString AssetPath;
+		if (!UAgentFrameworkActionUtils::TryGetStringParam(Params, TEXT("material_path"), AssetPath, OutErrors, false) &&
+			!UAgentFrameworkActionUtils::TryGetStringParam(Params, TEXT("MaterialPath"), AssetPath, OutErrors, false) &&
+			!UAgentFrameworkActionUtils::TryGetStringParam(Params, TEXT("asset_path"), AssetPath, OutErrors, false) &&
+			!UAgentFrameworkActionUtils::TryGetStringParam(Params, TEXT("AssetPath"), AssetPath, OutErrors, false) &&
+			!UAgentFrameworkActionUtils::TryGetStringParam(Params, TEXT("destination_path"), AssetPath, OutErrors, false) &&
+			!UAgentFrameworkActionUtils::TryGetStringParam(Params, TEXT("DestinationPath"), AssetPath, OutErrors, false))
+		{
+			OutErrors.Add(TEXT("Missing required parameter: material_path (or asset_path / destination_path)"));
+			return false;
+		}
+
+		FString BaseColorPath;
+		const TSharedPtr<FJsonObject>* TexMaps = nullptr;
+		bool bHasTexMaps = (Params->TryGetObjectField(TEXT("texture_maps"), TexMaps) || Params->TryGetObjectField(TEXT("TextureMaps"), TexMaps)) && TexMaps && (*TexMaps).IsValid();
+
+		if (!UAgentFrameworkActionUtils::TryGetStringParam(Params, TEXT("base_color_texture_path"), BaseColorPath, OutErrors, false) &&
+			!UAgentFrameworkActionUtils::TryGetStringParam(Params, TEXT("BaseColorTexturePath"), BaseColorPath, OutErrors, false) &&
+			!UAgentFrameworkActionUtils::TryGetStringParam(Params, TEXT("base_color"), BaseColorPath, OutErrors, false) &&
+			!UAgentFrameworkActionUtils::TryGetStringParam(Params, TEXT("BaseColor"), BaseColorPath, OutErrors, false) &&
+			!(bHasTexMaps && (
+				(*TexMaps)->TryGetStringField(TEXT("base_color_texture_path"), BaseColorPath) ||
+				(*TexMaps)->TryGetStringField(TEXT("BaseColorTexturePath"), BaseColorPath) ||
+				(*TexMaps)->TryGetStringField(TEXT("base_color"), BaseColorPath) ||
+				(*TexMaps)->TryGetStringField(TEXT("BaseColor"), BaseColorPath)
+			)))
+		{
+			OutErrors.Add(TEXT("Missing required parameter: base_color_texture_path (or base_color)"));
+			return false;
+		}
+
+		return true;
+	}
+
+	FString AssetPath;
+	if (!UAgentFrameworkActionUtils::TryGetStringParam(Params, TEXT("asset_path"), AssetPath, OutErrors, true))
+	{
 		return false;
 	}
 
-	FString ToolName;
-	Params->TryGetStringField(TEXT("_tool_name"), ToolName);
-
 	if (ToolName == TEXT("create_material_instance") || Params->HasField(TEXT("parent_material")))
 	{
-		if (!Params->HasField(TEXT("parent_material")))
+		FString ParentMaterial;
+		if (!UAgentFrameworkActionUtils::TryGetStringParam(Params, TEXT("parent_material"), ParentMaterial, OutErrors, true))
 		{
-			OutErrors.Add(TEXT("Missing required field for create_material_instance: parent_material"));
 			return false;
 		}
 	}
@@ -69,7 +109,8 @@ bool FAgentFrameworkMaterialActions::ValidateParams(const TSharedRef<FJsonObject
 FAgentFrameworkActionResult FAgentFrameworkMaterialActions::ExecuteAction(const TSharedRef<FJsonObject>& Params)
 {
 	FString ToolName;
-	Params->TryGetStringField(TEXT("_tool_name"), ToolName);
+	TArray<FString> TempErrors;
+	UAgentFrameworkActionUtils::TryGetStringParam(Params, TEXT("_tool_name"), ToolName, TempErrors, false);
 
 	bool bIsReadOnly = (ToolName == TEXT("capture_material"));
 
@@ -87,6 +128,7 @@ FAgentFrameworkActionResult FAgentFrameworkMaterialActions::ExecuteAction(const 
 	else if (ToolName == TEXT("add_material_expression")) Result = ExecuteAddMaterialExpression(Params, Result);
 	else if (ToolName == TEXT("connect_material_property")) Result = ExecuteConnectMaterialProperty(Params, Result);
 	else if (ToolName == TEXT("capture_material")) Result = ExecuteCaptureMaterial(Params, Result);
+	else if (ToolName == TEXT("create_pbr_material_from_textures") || ToolName == TEXT("material/create_pbr_from_textures")) Result = ExecuteCreatePBRMaterialFromTextures(Params, Result);
 	else if (Params->HasField(TEXT("parent_material")))
 	{
 		Result = ExecuteCreateMaterialInstance(Params, Result);
@@ -101,6 +143,11 @@ FAgentFrameworkActionResult FAgentFrameworkMaterialActions::ExecuteAction(const 
 		Result = ExecuteCreateMaterial(Params, Result);
 	}
 
+	if (Result.bSuccess)
+	{
+		PlaySuccessSound();
+	}
+
 	if (Transaction.IsSet() && !Result.bSuccess)
 	{
 		Transaction->Cancel();
@@ -111,17 +158,28 @@ FAgentFrameworkActionResult FAgentFrameworkMaterialActions::ExecuteAction(const 
 
 FAgentFrameworkActionResult FAgentFrameworkMaterialActions::ExecuteCreateMaterial(const TSharedRef<FJsonObject>& Params, FAgentFrameworkActionResult& Result)
 {
-	FString AssetPath = Params->GetStringField(TEXT("asset_path"));
+	FString AssetPath;
+	if (!UAgentFrameworkActionUtils::TryGetStringParam(Params, TEXT("asset_path"), AssetPath, Result.Errors, true))
+	{
+		return Result;
+	}
+
 	FString PackagePath = FPackageName::GetLongPackagePath(AssetPath);
 	FString AssetName = FPackageName::GetShortName(AssetPath);
 
-	IAssetTools& AssetTools = FModuleManager::LoadModuleChecked<FAssetToolsModule>("AssetTools").Get();
+	FAssetToolsModule& AssetToolsModule = FModuleManager::LoadModuleChecked<FAssetToolsModule>("AssetTools");
+	IAssetTools& AssetTools = AssetToolsModule.Get();
 	UMaterialFactoryNew* Factory = NewObject<UMaterialFactoryNew>();
+	if (!IsValid(Factory))
+	{
+		Result.Errors.Add(TEXT("Failed to create MaterialFactoryNew instance."));
+		return Result;
+	}
 
 	UObject* NewAsset = AssetTools.CreateAsset(AssetName, PackagePath, UMaterial::StaticClass(), Factory);
 	UMaterial* NewMaterial = Cast<UMaterial>(NewAsset);
 
-	if (!NewMaterial)
+	if (!IsValid(NewMaterial))
 	{
 		Result.Errors.Add(FString::Printf(TEXT("Failed to create Material at %s"), *AssetPath));
 		return Result;
@@ -132,17 +190,21 @@ FAgentFrameworkActionResult FAgentFrameworkMaterialActions::ExecuteCreateMateria
 
 	// Process expressions if provided
 	const TArray<TSharedPtr<FJsonValue>>* ExpressionsArray = nullptr;
-	if (Params->TryGetArrayField(TEXT("expressions"), ExpressionsArray))
+	if (UAgentFrameworkActionUtils::TryGetArrayParam(Params, TEXT("expressions"), ExpressionsArray, Result.Errors, false) && ExpressionsArray)
 	{
 		for (const TSharedPtr<FJsonValue>& ExprValue : *ExpressionsArray)
 		{
+			if (!ExprValue.IsValid()) continue;
 			const TSharedPtr<FJsonObject>& ExprObj = ExprValue->AsObject();
 			if (!ExprObj.IsValid()) continue;
 
-			FString ExprType = ExprObj->GetStringField(TEXT("type"));
-			int32 PosX = 0, PosY = 0;
-			ExprObj->TryGetNumberField(TEXT("x"), PosX);
-			ExprObj->TryGetNumberField(TEXT("y"), PosY);
+			FString ExprType;
+			UAgentFrameworkActionUtils::TryGetStringParam(ExprObj, TEXT("type"), ExprType, Result.Errors, false);
+
+			int32 PosX = 0;
+			int32 PosY = 0;
+			UAgentFrameworkActionUtils::TryGetIntParam(ExprObj, TEXT("x"), PosX, Result.Errors, false);
+			UAgentFrameworkActionUtils::TryGetIntParam(ExprObj, TEXT("y"), PosY, Result.Errors, false);
 
 			UMaterialExpression* Expression = nullptr;
 
@@ -153,12 +215,13 @@ FAgentFrameworkActionResult FAgentFrameworkMaterialActions::ExecuteCreateMateria
 			else if (ExprType == TEXT("Constant"))
 			{
 				Expression = UMaterialEditingLibrary::CreateMaterialExpression(NewMaterial, UMaterialExpressionConstant::StaticClass(), PosX, PosY);
-				if (Expression)
+				if (IsValid(Expression))
 				{
-					double Value = 0;
-					if (ExprObj->TryGetNumberField(TEXT("value"), Value))
+					float Value = 0.0f;
+					UAgentFrameworkActionUtils::TryGetFloatParam(ExprObj, TEXT("value"), Value, Result.Errors, false);
+					if (UMaterialExpressionConstant* ConstExpr = Cast<UMaterialExpressionConstant>(Expression))
 					{
-						Cast<UMaterialExpressionConstant>(Expression)->R = Value;
+						ConstExpr->R = Value;
 					}
 				}
 			}
@@ -177,24 +240,30 @@ FAgentFrameworkActionResult FAgentFrameworkMaterialActions::ExecuteCreateMateria
 			else if (ExprType == TEXT("ScalarParameter"))
 			{
 				Expression = UMaterialEditingLibrary::CreateMaterialExpression(NewMaterial, UMaterialExpressionScalarParameter::StaticClass(), PosX, PosY);
-				if (Expression)
+				if (IsValid(Expression))
 				{
 					FString ParamName;
-					if (ExprObj->TryGetStringField(TEXT("parameter_name"), ParamName))
+					if (UAgentFrameworkActionUtils::TryGetStringParam(ExprObj, TEXT("parameter_name"), ParamName, Result.Errors, false) && !ParamName.IsEmpty())
 					{
-						Cast<UMaterialExpressionScalarParameter>(Expression)->ParameterName = FName(*ParamName);
+						if (UMaterialExpressionScalarParameter* ScalarParamExpr = Cast<UMaterialExpressionScalarParameter>(Expression))
+						{
+							ScalarParamExpr->ParameterName = FName(*ParamName);
+						}
 					}
 				}
 			}
 			else if (ExprType == TEXT("VectorParameter"))
 			{
 				Expression = UMaterialEditingLibrary::CreateMaterialExpression(NewMaterial, UMaterialExpressionVectorParameter::StaticClass(), PosX, PosY);
-				if (Expression)
+				if (IsValid(Expression))
 				{
 					FString ParamName;
-					if (ExprObj->TryGetStringField(TEXT("parameter_name"), ParamName))
+					if (UAgentFrameworkActionUtils::TryGetStringParam(ExprObj, TEXT("parameter_name"), ParamName, Result.Errors, false) && !ParamName.IsEmpty())
 					{
-						Cast<UMaterialExpressionVectorParameter>(Expression)->ParameterName = FName(*ParamName);
+						if (UMaterialExpressionVectorParameter* VectorParamExpr = Cast<UMaterialExpressionVectorParameter>(Expression))
+						{
+							VectorParamExpr->ParameterName = FName(*ParamName);
+						}
 					}
 				}
 			}
@@ -203,10 +272,10 @@ FAgentFrameworkActionResult FAgentFrameworkMaterialActions::ExecuteCreateMateria
 				Expression = UMaterialEditingLibrary::CreateMaterialExpression(NewMaterial, UMaterialExpressionTextureCoordinate::StaticClass(), PosX, PosY);
 			}
 
-			if (Expression)
+			if (IsValid(Expression))
 			{
 				FString ConnectTo;
-				if (ExprObj->TryGetStringField(TEXT("connect_to"), ConnectTo))
+				if (UAgentFrameworkActionUtils::TryGetStringParam(ExprObj, TEXT("connect_to"), ConnectTo, Result.Errors, false) && !ConnectTo.IsEmpty())
 				{
 					EMaterialProperty MatProp = MP_BaseColor;
 					if (ConnectTo == TEXT("BaseColor")) MatProp = MP_BaseColor;
@@ -225,7 +294,7 @@ FAgentFrameworkActionResult FAgentFrameworkMaterialActions::ExecuteCreateMateria
 			}
 			else
 			{
-				Result.Warnings.Add(FString::Printf(TEXT("Unknown expression type: %s"), *ExprType));
+				Result.Warnings.Add(FString::Printf(TEXT("Unknown or failed expression type: %s"), *ExprType));
 			}
 		}
 	}
@@ -233,13 +302,16 @@ FAgentFrameworkActionResult FAgentFrameworkMaterialActions::ExecuteCreateMateria
 	UMaterialEditingLibrary::RecompileMaterial(NewMaterial);
 
 	UPackage* Package = NewMaterial->GetOutermost();
-	Package->MarkPackageDirty();
-	FString PackageFilename;
-	if (FPackageName::TryConvertLongPackageNameToFilename(Package->GetName(), PackageFilename, FPackageName::GetAssetPackageExtension()))
+	if (IsValid(Package))
 	{
-		FSavePackageArgs SaveArgs;
-		SaveArgs.TopLevelFlags = RF_Standalone;
-		UPackage::SavePackage(Package, NewMaterial, *PackageFilename, SaveArgs);
+		Package->MarkPackageDirty();
+		FString PackageFilename;
+		if (FPackageName::TryConvertLongPackageNameToFilename(Package->GetName(), PackageFilename, FPackageName::GetAssetPackageExtension()))
+		{
+			FSavePackageArgs SaveArgs;
+			SaveArgs.TopLevelFlags = RF_Standalone;
+			UPackage::SavePackage(Package, NewMaterial, *PackageFilename, SaveArgs);
+		}
 	}
 	FAssetRegistryModule::AssetCreated(NewMaterial);
 
@@ -251,26 +323,42 @@ FAgentFrameworkActionResult FAgentFrameworkMaterialActions::ExecuteCreateMateria
 
 FAgentFrameworkActionResult FAgentFrameworkMaterialActions::ExecuteCreateMaterialInstance(const TSharedRef<FJsonObject>& Params, FAgentFrameworkActionResult& Result)
 {
-	FString AssetPath = Params->GetStringField(TEXT("asset_path"));
-	FString ParentPath = Params->GetStringField(TEXT("parent_material"));
+	FString AssetPath;
+	if (!UAgentFrameworkActionUtils::TryGetStringParam(Params, TEXT("asset_path"), AssetPath, Result.Errors, true))
+	{
+		return Result;
+	}
+
+	FString ParentPath;
+	if (!UAgentFrameworkActionUtils::TryGetStringParam(Params, TEXT("parent_material"), ParentPath, Result.Errors, true))
+	{
+		return Result;
+	}
+
 	FString PackagePath = FPackageName::GetLongPackagePath(AssetPath);
 	FString AssetName = FPackageName::GetShortName(AssetPath);
 
 	UMaterial* ParentMaterial = LoadObject<UMaterial>(nullptr, *ParentPath);
-	if (!ParentMaterial)
+	if (!IsValid(ParentMaterial))
 	{
-		Result.Errors.Add(FString::Printf(TEXT("Parent material not found: %s"), *ParentPath));
+		Result.Errors.Add(FString::Printf(TEXT("Parent material not found or invalid: %s"), *ParentPath));
 		return Result;
 	}
 
-	IAssetTools& AssetTools = FModuleManager::LoadModuleChecked<FAssetToolsModule>("AssetTools").Get();
+	FAssetToolsModule& AssetToolsModule = FModuleManager::LoadModuleChecked<FAssetToolsModule>("AssetTools");
+	IAssetTools& AssetTools = AssetToolsModule.Get();
 	UMaterialInstanceConstantFactoryNew* Factory = NewObject<UMaterialInstanceConstantFactoryNew>();
+	if (!IsValid(Factory))
+	{
+		Result.Errors.Add(TEXT("Failed to create MaterialInstanceConstantFactoryNew instance."));
+		return Result;
+	}
 	Factory->InitialParent = ParentMaterial;
 
 	UObject* NewAsset = AssetTools.CreateAsset(AssetName, PackagePath, UMaterialInstanceConstant::StaticClass(), Factory);
 	UMaterialInstanceConstant* NewMI = Cast<UMaterialInstanceConstant>(NewAsset);
 
-	if (!NewMI)
+	if (!IsValid(NewMI))
 	{
 		Result.Errors.Add(FString::Printf(TEXT("Failed to create Material Instance at %s"), *AssetPath));
 		return Result;
@@ -281,39 +369,48 @@ FAgentFrameworkActionResult FAgentFrameworkMaterialActions::ExecuteCreateMateria
 
 	// Set scalar parameters
 	const TSharedPtr<FJsonObject>* ScalarsObj = nullptr;
-	if (Params->TryGetObjectField(TEXT("scalar_parameters"), ScalarsObj))
+	if (UAgentFrameworkActionUtils::TryGetObjectParam(Params, TEXT("scalar_parameters"), ScalarsObj, Result.Errors, false) && ScalarsObj && (*ScalarsObj).IsValid())
 	{
 		for (const auto& Pair : (*ScalarsObj)->Values)
 		{
-			double Value = 0;
-			if (Pair.Value->TryGetNumber(Value))
+			if (Pair.Value.IsValid())
 			{
-				UMaterialEditingLibrary::SetMaterialInstanceScalarParameterValue(NewMI, FName(*Pair.Key), Value);
+				double Value = 0.0;
+				if (Pair.Value->TryGetNumber(Value))
+				{
+					UMaterialEditingLibrary::SetMaterialInstanceScalarParameterValue(NewMI, FName(*Pair.Key), static_cast<float>(Value));
+				}
 			}
 		}
 	}
 
 	// Set vector parameters
 	const TSharedPtr<FJsonObject>* VectorsObj = nullptr;
-	if (Params->TryGetObjectField(TEXT("vector_parameters"), VectorsObj))
+	if (UAgentFrameworkActionUtils::TryGetObjectParam(Params, TEXT("vector_parameters"), VectorsObj, Result.Errors, false) && VectorsObj && (*VectorsObj).IsValid())
 	{
 		for (const auto& Pair : (*VectorsObj)->Values)
 		{
+			if (!Pair.Value.IsValid()) continue;
 			const TSharedPtr<FJsonObject>* VecObj = nullptr;
-			if (Pair.Value->TryGetObject(VecObj))
+			if (Pair.Value->TryGetObject(VecObj) && VecObj && (*VecObj).IsValid())
 			{
-				double R = 0, G = 0, B = 0, A = 1;
-				(*VecObj)->TryGetNumberField(TEXT("r"), R);
-				(*VecObj)->TryGetNumberField(TEXT("g"), G);
-				(*VecObj)->TryGetNumberField(TEXT("b"), B);
-				(*VecObj)->TryGetNumberField(TEXT("a"), A);
+				float R = 0.0f, G = 0.0f, B = 0.0f, A = 1.0f;
+				UAgentFrameworkActionUtils::TryGetFloatParam(*VecObj, TEXT("r"), R, Result.Errors, false);
+				UAgentFrameworkActionUtils::TryGetFloatParam(*VecObj, TEXT("g"), G, Result.Errors, false);
+				UAgentFrameworkActionUtils::TryGetFloatParam(*VecObj, TEXT("b"), B, Result.Errors, false);
+				UAgentFrameworkActionUtils::TryGetFloatParam(*VecObj, TEXT("a"), A, Result.Errors, false);
+
 				FLinearColor Color(R, G, B, A);
 				UMaterialEditingLibrary::SetMaterialInstanceVectorParameterValue(NewMI, FName(*Pair.Key), Color);
 			}
 		}
 	}
 
-	NewMI->GetOutermost()->MarkPackageDirty();
+	UPackage* Package = NewMI->GetOutermost();
+	if (IsValid(Package))
+	{
+		Package->MarkPackageDirty();
+	}
 	FAssetRegistryModule::AssetCreated(NewMI);
 
 	Result.bSuccess = true;
@@ -336,29 +433,38 @@ FAgentFrameworkActionResult FAgentFrameworkMaterialActions::ExecuteConnectMateri
 
 FAgentFrameworkActionResult FAgentFrameworkMaterialActions::ExecuteCaptureMaterial(const TSharedRef<FJsonObject>& Params, FAgentFrameworkActionResult& Result)
 {
-	FString AssetPath = Params->GetStringField(TEXT("asset_path"));
+	FString AssetPath;
+	if (!UAgentFrameworkActionUtils::TryGetStringParam(Params, TEXT("asset_path"), AssetPath, Result.Errors, true))
+	{
+		return Result;
+	}
 
 	UMaterialInterface* Material = LoadObject<UMaterialInterface>(nullptr, *AssetPath);
-	if (!Material)
+	if (!IsValid(Material))
 	{
 		Result.Errors.Add(FString::Printf(TEXT("Material not found at %s"), *AssetPath));
 		return Result;
 	}
 
-	UWorld* World = GEditor ? GEditor->GetEditorWorldContext().World() : nullptr;
-	if (!World)
+	UWorld* World = IsValid(GEditor) ? GEditor->GetEditorWorldContext().World() : nullptr;
+	if (!IsValid(World))
 	{
 		Result.Errors.Add(TEXT("Could not find a valid World context to capture the material."));
 		return Result;
 	}
 
 	int32 MaxDimension = 512;
-	Params->TryGetNumberField(TEXT("max_dimension"), MaxDimension);
+	UAgentFrameworkActionUtils::TryGetIntParam(Params, TEXT("max_dimension"), MaxDimension, Result.Errors, false);
 
 	int32 Quality = 75;
-	Params->TryGetNumberField(TEXT("quality"), Quality);
+	UAgentFrameworkActionUtils::TryGetIntParam(Params, TEXT("quality"), Quality, Result.Errors, false);
 
 	UTextureRenderTarget2D* RenderTarget = NewObject<UTextureRenderTarget2D>();
+	if (!IsValid(RenderTarget))
+	{
+		Result.Errors.Add(TEXT("Failed to create UTextureRenderTarget2D instance."));
+		return Result;
+	}
 	RenderTarget->InitCustomFormat(MaxDimension, MaxDimension, PF_B8G8R8A8, false);
 	RenderTarget->ClearColor = FLinearColor(0.12f, 0.12f, 0.12f, 1.0f); // neutral dark gray
 
@@ -396,3 +502,280 @@ FAgentFrameworkActionResult FAgentFrameworkMaterialActions::ExecuteCaptureMateri
 
 	return Result;
 }
+
+void FAgentFrameworkMaterialActions::PlaySuccessSound()
+{
+#if WITH_EDITOR
+	if (IsValid(GEditor))
+	{
+		USoundBase* SuccessSound = LoadObject<USoundBase>(nullptr, TEXT("/Engine/EditorSounds/Notifications/CompileSuccess.CompileSuccess"));
+		if (IsValid(SuccessSound))
+		{
+			GEditor->PlayEditorSound(SuccessSound);
+		}
+	}
+#endif
+}
+
+FAgentFrameworkActionResult FAgentFrameworkMaterialActions::ExecuteCreatePBRMaterialFromTextures(const TSharedRef<FJsonObject>& Params, FAgentFrameworkActionResult& Result)
+{
+	// 1. Resolve asset path
+	FString AssetPath;
+	if (!Params->TryGetStringField(TEXT("material_path"), AssetPath) || AssetPath.IsEmpty())
+	{
+		if (!Params->TryGetStringField(TEXT("MaterialPath"), AssetPath) || AssetPath.IsEmpty())
+		{
+			if (!Params->TryGetStringField(TEXT("asset_path"), AssetPath) || AssetPath.IsEmpty())
+			{
+				if (!Params->TryGetStringField(TEXT("AssetPath"), AssetPath) || AssetPath.IsEmpty())
+				{
+					FString DestPath, MatName;
+					bool bHasDest = Params->TryGetStringField(TEXT("destination_path"), DestPath) || Params->TryGetStringField(TEXT("DestinationPath"), DestPath);
+					bool bHasName = Params->TryGetStringField(TEXT("material_name"), MatName) || Params->TryGetStringField(TEXT("MaterialName"), MatName);
+					if (bHasDest && bHasName)
+					{
+						DestPath.RemoveFromEnd(TEXT("/"));
+						AssetPath = FString::Printf(TEXT("%s/%s"), *DestPath, *MatName);
+					}
+					else if (bHasDest && !DestPath.IsEmpty())
+					{
+						AssetPath = DestPath;
+					}
+				}
+			}
+		}
+	}
+
+	if (AssetPath.IsEmpty())
+	{
+		Result.Errors.Add(TEXT("Missing required parameter: material_path (or asset_path / destination_path)."));
+		return Result;
+	}
+
+	// 2. Parse BlendMode
+	EBlendMode BlendMode = BLEND_Opaque;
+	FString BlendModeStr;
+	if (Params->TryGetStringField(TEXT("blend_mode"), BlendModeStr) || Params->TryGetStringField(TEXT("BlendMode"), BlendModeStr))
+	{
+		if (BlendModeStr.Equals(TEXT("Masked"), ESearchCase::IgnoreCase)) BlendMode = BLEND_Masked;
+		else if (BlendModeStr.Equals(TEXT("Translucent"), ESearchCase::IgnoreCase)) BlendMode = BLEND_Translucent;
+		else if (BlendModeStr.Equals(TEXT("Additive"), ESearchCase::IgnoreCase)) BlendMode = BLEND_Additive;
+		else if (BlendModeStr.Equals(TEXT("Modulate"), ESearchCase::IgnoreCase)) BlendMode = BLEND_Modulate;
+		else if (BlendModeStr.Equals(TEXT("AlphaComposite"), ESearchCase::IgnoreCase)) BlendMode = BLEND_AlphaComposite;
+		else if (BlendModeStr.Equals(TEXT("AlphaHoldout"), ESearchCase::IgnoreCase)) BlendMode = BLEND_AlphaHoldout;
+		else BlendMode = BLEND_Opaque;
+	}
+
+	// 3. Parse ShadingModel
+	EMaterialShadingModel ShadingModel = MSM_DefaultLit;
+	FString ShadingModelStr;
+	if (Params->TryGetStringField(TEXT("shading_model"), ShadingModelStr) || Params->TryGetStringField(TEXT("ShadingModel"), ShadingModelStr))
+	{
+		if (ShadingModelStr.Equals(TEXT("Unlit"), ESearchCase::IgnoreCase)) ShadingModel = MSM_Unlit;
+		else if (ShadingModelStr.Equals(TEXT("Subsurface"), ESearchCase::IgnoreCase)) ShadingModel = MSM_Subsurface;
+		else if (ShadingModelStr.Equals(TEXT("SubsurfaceProfile"), ESearchCase::IgnoreCase)) ShadingModel = MSM_SubsurfaceProfile;
+		else if (ShadingModelStr.Equals(TEXT("ClearCoat"), ESearchCase::IgnoreCase)) ShadingModel = MSM_ClearCoat;
+		else if (ShadingModelStr.Equals(TEXT("TwoSidedFoliage"), ESearchCase::IgnoreCase)) ShadingModel = MSM_TwoSidedFoliage;
+		else if (ShadingModelStr.Equals(TEXT("Hair"), ESearchCase::IgnoreCase)) ShadingModel = MSM_Hair;
+		else if (ShadingModelStr.Equals(TEXT("Cloth"), ESearchCase::IgnoreCase)) ShadingModel = MSM_Cloth;
+		else if (ShadingModelStr.Equals(TEXT("Eye"), ESearchCase::IgnoreCase)) ShadingModel = MSM_Eye;
+		else if (ShadingModelStr.Equals(TEXT("SingleLayerWater"), ESearchCase::IgnoreCase)) ShadingModel = MSM_SingleLayerWater;
+		else ShadingModel = MSM_DefaultLit;
+	}
+
+	// 4. Parse TwoSided
+	bool bTwoSided = false;
+	if (!Params->TryGetBoolField(TEXT("two_sided"), bTwoSided))
+	{
+		if (!Params->TryGetBoolField(TEXT("TwoSided"), bTwoSided))
+		{
+			Params->TryGetBoolField(TEXT("bTwoSided"), bTwoSided);
+		}
+	}
+
+	// 5. Helper lambda to retrieve texture paths from top level or texture_maps object
+	auto GetTexturePath = [&](const TArray<FString>& CandidateKeys) -> FString
+	{
+		for (const FString& Key : CandidateKeys)
+		{
+			FString Val;
+			if (Params->TryGetStringField(Key, Val) && !Val.IsEmpty())
+			{
+				return Val;
+			}
+		}
+		const TSharedPtr<FJsonObject>* TextureMapsObj = nullptr;
+		if ((Params->TryGetObjectField(TEXT("texture_maps"), TextureMapsObj) || Params->TryGetObjectField(TEXT("TextureMaps"), TextureMapsObj)) && TextureMapsObj && (*TextureMapsObj).IsValid())
+		{
+			for (const FString& Key : CandidateKeys)
+			{
+				FString Val;
+				if ((*TextureMapsObj)->TryGetStringField(Key, Val) && !Val.IsEmpty())
+				{
+					return Val;
+				}
+			}
+		}
+		return FString();
+	};
+
+	FString BaseColorPath = GetTexturePath({ TEXT("base_color_texture_path"), TEXT("BaseColorTexturePath"), TEXT("base_color"), TEXT("BaseColor"), TEXT("base_color_path"), TEXT("BaseColorPath"), TEXT("BC") });
+	FString NormalPath = GetTexturePath({ TEXT("normal_texture_path"), TEXT("NormalTexturePath"), TEXT("normal"), TEXT("Normal"), TEXT("normal_path"), TEXT("NormalPath"), TEXT("normal_map_texture_path"), TEXT("N") });
+	FString RoughnessPath = GetTexturePath({ TEXT("roughness_texture_path"), TEXT("RoughnessTexturePath"), TEXT("roughness"), TEXT("Roughness"), TEXT("roughness_path"), TEXT("RoughnessPath"), TEXT("R") });
+	FString MetallicPath = GetTexturePath({ TEXT("metallic_texture_path"), TEXT("MetallicTexturePath"), TEXT("metallic"), TEXT("Metallic"), TEXT("metallic_path"), TEXT("MetallicPath"), TEXT("M") });
+	FString AOPath = GetTexturePath({ TEXT("ao_texture_path"), TEXT("AOTexturePath"), TEXT("ao"), TEXT("AO"), TEXT("ambient_occlusion_texture_path"), TEXT("AmbientOcclusionTexturePath"), TEXT("ambient_occlusion"), TEXT("AmbientOcclusion") });
+	FString SpecularPath = GetTexturePath({ TEXT("specular_texture_path"), TEXT("SpecularTexturePath"), TEXT("specular"), TEXT("Specular"), TEXT("specular_path"), TEXT("SpecularPath"), TEXT("S") });
+	FString EmissivePath = GetTexturePath({ TEXT("emissive_texture_path"), TEXT("EmissiveTexturePath"), TEXT("emissive"), TEXT("Emissive"), TEXT("emissive_path"), TEXT("EmissivePath"), TEXT("E") });
+	FString OpacityPath = GetTexturePath({ TEXT("opacity_texture_path"), TEXT("OpacityTexturePath"), TEXT("opacity"), TEXT("Opacity"), TEXT("opacity_path"), TEXT("OpacityPath"), TEXT("O") });
+
+	if (BaseColorPath.IsEmpty())
+	{
+		Result.Errors.Add(TEXT("Missing required parameter: base_color_texture_path (or base_color)."));
+		return Result;
+	}
+
+	// 6. Create Material Asset
+	FString PackagePath = FPackageName::GetLongPackagePath(AssetPath);
+	FString AssetName = FPackageName::GetShortName(AssetPath);
+
+	FAssetToolsModule& AssetToolsModule = FModuleManager::LoadModuleChecked<FAssetToolsModule>("AssetTools");
+	IAssetTools& AssetTools = AssetToolsModule.Get();
+
+	UMaterial* NewMaterial = LoadObject<UMaterial>(nullptr, *AssetPath);
+	if (!IsValid(NewMaterial))
+	{
+		UMaterialFactoryNew* Factory = NewObject<UMaterialFactoryNew>();
+		if (!IsValid(Factory))
+		{
+			Result.Errors.Add(TEXT("Failed to create MaterialFactoryNew instance."));
+			return Result;
+		}
+
+		UObject* NewAsset = AssetTools.CreateAsset(AssetName, PackagePath, UMaterial::StaticClass(), Factory);
+		NewMaterial = Cast<UMaterial>(NewAsset);
+	}
+
+	if (!IsValid(NewMaterial))
+	{
+		Result.Errors.Add(FString::Printf(TEXT("Failed to create Material asset at %s"), *AssetPath));
+		return Result;
+	}
+
+	NewMaterial->Modify();
+	NewMaterial->BlendMode = BlendMode;
+	NewMaterial->SetShadingModel(ShadingModel);
+	NewMaterial->TwoSided = bTwoSided;
+
+	// 7. Define Texture Slots
+	struct FPBRSlotDef
+	{
+		FString SlotName;
+		FString TexturePath;
+		EMaterialSamplerType SamplerType;
+		EMaterialProperty MatProperty;
+		bool bRequired;
+	};
+
+	TArray<FPBRSlotDef> SlotsToProcess;
+	SlotsToProcess.Add({ TEXT("BaseColorMap"), BaseColorPath, SAMPLERTYPE_Color, MP_BaseColor, true });
+
+	if (!NormalPath.IsEmpty())
+	{
+		SlotsToProcess.Add({ TEXT("NormalMap"), NormalPath, SAMPLERTYPE_Normal, MP_Normal, false });
+	}
+	if (!RoughnessPath.IsEmpty())
+	{
+		SlotsToProcess.Add({ TEXT("RoughnessMap"), RoughnessPath, SAMPLERTYPE_LinearColor, MP_Roughness, false });
+	}
+	if (!MetallicPath.IsEmpty())
+	{
+		SlotsToProcess.Add({ TEXT("MetallicMap"), MetallicPath, SAMPLERTYPE_LinearColor, MP_Metallic, false });
+	}
+	if (!AOPath.IsEmpty())
+	{
+		SlotsToProcess.Add({ TEXT("AOMap"), AOPath, SAMPLERTYPE_LinearColor, MP_AmbientOcclusion, false });
+	}
+	if (!SpecularPath.IsEmpty())
+	{
+		SlotsToProcess.Add({ TEXT("SpecularMap"), SpecularPath, SAMPLERTYPE_LinearColor, MP_Specular, false });
+	}
+	if (!EmissivePath.IsEmpty())
+	{
+		SlotsToProcess.Add({ TEXT("EmissiveMap"), EmissivePath, SAMPLERTYPE_Color, MP_EmissiveColor, false });
+	}
+	if (!OpacityPath.IsEmpty())
+	{
+		EMaterialProperty OpacityProp = (BlendMode == BLEND_Masked) ? MP_OpacityMask : MP_Opacity;
+		SlotsToProcess.Add({ TEXT("OpacityMap"), OpacityPath, SAMPLERTYPE_LinearColor, OpacityProp, false });
+	}
+
+	// 8. Instantiate expressions and connect pins
+	int32 PosX = -400;
+	int32 PosY = 0;
+	int32 TexturesAssignedCount = 0;
+	TArray<FString> AssignedSlots;
+
+	for (const FPBRSlotDef& Slot : SlotsToProcess)
+	{
+		UTexture2D* TextureAsset = LoadObject<UTexture2D>(nullptr, *Slot.TexturePath);
+		if (!IsValid(TextureAsset))
+		{
+			if (Slot.bRequired)
+			{
+				Result.Errors.Add(FString::Printf(TEXT("Failed to load required BaseColor texture asset at '%s'"), *Slot.TexturePath));
+				return Result;
+			}
+			else
+			{
+				Result.Warnings.Add(FString::Printf(TEXT("Failed to load optional texture asset at '%s' for slot '%s'"), *Slot.TexturePath, *Slot.SlotName));
+				continue;
+			}
+		}
+
+		UMaterialExpressionTextureSampleParameter2D* TexExpr = Cast<UMaterialExpressionTextureSampleParameter2D>(
+			UMaterialEditingLibrary::CreateMaterialExpression(NewMaterial, UMaterialExpressionTextureSampleParameter2D::StaticClass(), PosX, PosY));
+
+		if (!IsValid(TexExpr))
+		{
+			Result.Warnings.Add(FString::Printf(TEXT("Failed to create material expression for slot '%s'"), *Slot.SlotName));
+			continue;
+		}
+
+		TexExpr->ParameterName = FName(*Slot.SlotName);
+		TexExpr->SamplerType = Slot.SamplerType;
+		TexExpr->Texture = TextureAsset;
+
+		UMaterialEditingLibrary::ConnectMaterialProperty(TexExpr, TEXT(""), Slot.MatProperty);
+
+		PosY += 220;
+		TexturesAssignedCount++;
+		AssignedSlots.Add(Slot.SlotName);
+	}
+
+	// 9. Recompile, Dirty & Save Package
+	UMaterialEditingLibrary::RecompileMaterial(NewMaterial);
+
+	UPackage* Package = NewMaterial->GetOutermost();
+	if (IsValid(Package))
+	{
+		Package->MarkPackageDirty();
+		FString PackageFilename;
+		if (FPackageName::TryConvertLongPackageNameToFilename(Package->GetName(), PackageFilename, FPackageName::GetAssetPackageExtension()))
+		{
+			FSavePackageArgs SaveArgs;
+			SaveArgs.TopLevelFlags = RF_Standalone;
+			UPackage::SavePackage(Package, NewMaterial, *PackageFilename, SaveArgs);
+		}
+	}
+	FAssetRegistryModule::AssetCreated(NewMaterial);
+
+	Result.bSuccess = true;
+	Result.ResultMessage = FString::Printf(TEXT("Created PBR Material '%s' with %d texture parameters connected (%s)."),
+		*AssetPath, TexturesAssignedCount, *FString::Join(AssignedSlots, TEXT(", ")));
+	Result.ModifiedAssets.Add(AssetPath);
+
+	UE_LOG(LogAgentFramework, Log, TEXT("MaterialActions: Created PBR Material '%s' with %d textures."), *AssetPath, TexturesAssignedCount);
+
+	return Result;
+}
+

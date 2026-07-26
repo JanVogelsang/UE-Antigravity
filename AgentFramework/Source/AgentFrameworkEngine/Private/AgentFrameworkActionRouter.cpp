@@ -2,11 +2,22 @@
 
 #include "AgentFrameworkActionRouter.h"
 #include "AgentFrameworkCoreModule.h"
+#include "AgentFrameworkLogCapture.h"
 #include "Misc/PackageName.h"
+#include "Misc/ScopeLock.h"
+#include "Async/Async.h"
 #include "Templates/UnrealTemplate.h"
+#include "Serialization/JsonSerializer.h"
+#include "Serialization/JsonWriter.h"
+
+FOnToolExecutionRecorded FAgentFrameworkActionRouter::OnToolExecutionRecorded;
 
 FAgentFrameworkActionRouter::FAgentFrameworkActionRouter() {}
-FAgentFrameworkActionRouter::~FAgentFrameworkActionRouter() {}
+
+FAgentFrameworkActionRouter::~FAgentFrameworkActionRouter()
+{
+	ClearPendingTasks();
+}
 
 void FAgentFrameworkActionRouter::RegisterExecutor(TSharedRef<IAgentFrameworkActionExecutor> Executor)
 {
@@ -139,13 +150,45 @@ FAgentFrameworkActionResult FAgentFrameworkActionRouter::RouteToolCall(const FAg
 {
 	TGuardValue<bool> UnattendedScriptGuard(GIsRunningUnattendedScript, true);
 
+	struct FScopedRouterTelemetry
+	{
+		FString ToolName;
+		TSharedPtr<FJsonObject> InputParams;
+		double StartTime;
+		FAgentFrameworkActionResult Result;
+
+		FScopedRouterTelemetry(const FString& InToolName, TSharedPtr<FJsonObject> InParams)
+			: ToolName(InToolName), InputParams(InParams), StartTime(FPlatformTime::Seconds()) {}
+
+		~FScopedRouterTelemetry()
+		{
+			double DurationMicros = (FPlatformTime::Seconds() - StartTime) * 1000000.0;
+			if (DurationMicros < 0.0)
+			{
+				DurationMicros = 0.0;
+			}
+
+			FString ContextSummary;
+			if (InputParams.IsValid())
+			{
+				TSharedRef<TJsonWriter<>> Writer = TJsonWriterFactory<>::Create(&ContextSummary);
+				FJsonSerializer::Serialize(InputParams.ToSharedRef(), Writer);
+				if (ContextSummary.Len() > 256)
+				{
+					ContextSummary = ContextSummary.Left(256) + TEXT("...");
+				}
+			}
+
+			FAgentFrameworkActionRouter::OnToolExecutionRecorded.Broadcast(ToolName, DurationMicros, Result.bSuccess, Result.Errors, ContextSummary);
+		}
+	} ScopedTelemetry(ToolCall.ToolName, ToolCall.InputParams);
+
 	TSharedPtr<IAgentFrameworkActionExecutor> Executor = FindExecutorForTool(ToolCall.ToolName);
 	if (!Executor.IsValid())
 	{
-		FAgentFrameworkActionResult Result;
-		Result.bSuccess = false;
-		Result.Errors.Add(FString::Printf(TEXT("No executor registered for tool: %s"), *ToolCall.ToolName));
-		return Result;
+		ScopedTelemetry.Result.bSuccess = false;
+		ScopedTelemetry.Result.Errors.Add(FString::Printf(TEXT("No executor registered for tool: %s"), *ToolCall.ToolName));
+		return ScopedTelemetry.Result;
 	}
 
 	// CRITICAL: Validate asset_path before dispatching to prevent UE modal dialog freeze.
@@ -155,12 +198,11 @@ FAgentFrameworkActionResult FAgentFrameworkActionRouter::RouteToolCall(const FAg
 		FString ValidationError;
 		if (!ValidateAssetPathParam(ToolCall.InputParams, ValidationError))
 		{
-			FAgentFrameworkActionResult Result;
-			Result.bSuccess = false;
-			Result.Errors.Add(ValidationError);
-			UE_LOG(LogAgentFramework, Warning, TEXT("ActionRouter: Blocked tool '%s' â€” invalid asset_path: %s"),
+			ScopedTelemetry.Result.bSuccess = false;
+			ScopedTelemetry.Result.Errors.Add(ValidationError);
+			UE_LOG(LogAgentFramework, Warning, TEXT("ActionRouter: Blocked tool '%s' — invalid asset_path: %s"),
 				*ToolCall.ToolName, *ValidationError);
-			return Result;
+			return ScopedTelemetry.Result;
 		}
 	}
 
@@ -182,24 +224,50 @@ FAgentFrameworkActionResult FAgentFrameworkActionRouter::RouteToolCall(const FAg
 	TArray<FString> ValidationErrors;
 	if (!Executor->ValidateParams(ParamsWithToolName, ValidationErrors))
 	{
-		FAgentFrameworkActionResult Result;
-		Result.bSuccess = false;
-		Result.Errors = ValidationErrors;
+		ScopedTelemetry.Result.bSuccess = false;
+		ScopedTelemetry.Result.Errors = ValidationErrors;
 		UE_LOG(LogAgentFramework, Warning, TEXT("ActionRouter: Blocked tool '%s' due to parameter validation failure"), *ToolCall.ToolName);
-		return Result;
+		return ScopedTelemetry.Result;
 	}
 
-	FAgentFrameworkActionResult Result = Executor->ExecuteAction(ParamsWithToolName);
-
-	if (!Result.bSuccess || Result.Errors.Num() > 0)
+	uint64 BaselineLogIndex = 0;
+	TSharedPtr<FAgentFrameworkLogCapture> LogCapture = FAgentFrameworkLogCapture::Get();
+	if (LogCapture.IsValid())
 	{
-		for (FString& ErrorMsg : Result.Errors)
+		BaselineLogIndex = LogCapture->GetSnapshotIndex();
+	}
+
+	ScopedTelemetry.Result = Executor->ExecuteAction(ParamsWithToolName);
+
+	if (LogCapture.IsValid() && ToolCall.ToolName != TEXT("read_message_log"))
+	{
+		int32 ErrorCount = 0;
+		int32 WarningCount = 0;
+		FString LogDelta = LogCapture->GetLogDeltaFormatted(BaselineLogIndex, ErrorCount, WarningCount);
+
+		if (ErrorCount > 0)
+		{
+			ScopedTelemetry.Result.ResultMessage += FString::Printf(
+				TEXT("\n\n--- Diagnostics Log (%d Error(s) emitted during execution) ---\n%s"),
+				ErrorCount, *LogDelta);
+		}
+		else if (WarningCount >= 3)
+		{
+			ScopedTelemetry.Result.ResultMessage += FString::Printf(
+				TEXT("\n\n[Diagnostics Log: %d warning(s) emitted during tool execution]"),
+				WarningCount);
+		}
+	}
+
+	if (!ScopedTelemetry.Result.bSuccess || ScopedTelemetry.Result.Errors.Num() > 0)
+	{
+		for (FString& ErrorMsg : ScopedTelemetry.Result.Errors)
 		{
 			FAgentFrameworkDiagnostics::EnrichErrorString(ErrorMsg);
 		}
 	}
 
-	return Result;
+	return ScopedTelemetry.Result;
 }
 
 
@@ -209,3 +277,114 @@ TSharedPtr<IAgentFrameworkActionExecutor> FAgentFrameworkActionRouter::FindExecu
 	const TSharedRef<IAgentFrameworkActionExecutor>* Found = ExecutorMap.Find(ToolName);
 	return Found ? TSharedPtr<IAgentFrameworkActionExecutor>(*Found) : nullptr;
 }
+
+FGuid FAgentFrameworkActionRouter::RouteToolCallAsync(const FAgentFrameworkToolCall& ToolCall, TFunction<void(FAgentFrameworkActionResult)> OnComplete)
+{
+	FAgentFrameworkAsyncTaskHandle TaskHandle;
+	TaskHandle.TaskId = FGuid::NewGuid();
+	TaskHandle.ToolCall = ToolCall;
+	TaskHandle.OnComplete = MoveTemp(OnComplete);
+	TaskHandle.EnqueueTime = FPlatformTime::Seconds();
+
+	{
+		FScopeLock Lock(&TaskQueueCS);
+		PendingTasks.Add(TaskHandle);
+	}
+
+	UE_LOG(LogAgentFramework, Verbose, TEXT("ActionRouter: Enqueued async tool call '%s' (TaskId: %s)"),
+		*ToolCall.ToolName, *TaskHandle.TaskId.ToString());
+
+	TWeakPtr<FAgentFrameworkActionRouter> WeakSelf = AsShared();
+	AsyncTask(ENamedThreads::GameThread, [WeakSelf]()
+	{
+		if (TSharedPtr<FAgentFrameworkActionRouter> StrongSelf = WeakSelf.Pin())
+		{
+			StrongSelf->ProcessTaskQueue();
+		}
+	});
+
+	return TaskHandle.TaskId;
+}
+
+int32 FAgentFrameworkActionRouter::GetPendingTaskCount() const
+{
+	FScopeLock Lock(&TaskQueueCS);
+	return PendingTasks.Num();
+}
+
+bool FAgentFrameworkActionRouter::CancelTask(const FGuid& TaskId)
+{
+	FScopeLock Lock(&TaskQueueCS);
+	for (int32 Index = 0; Index < PendingTasks.Num(); ++Index)
+	{
+		if (PendingTasks[Index].TaskId == TaskId)
+		{
+			FAgentFrameworkAsyncTaskHandle CancelledTask = PendingTasks[Index];
+			PendingTasks.RemoveAt(Index);
+
+			if (CancelledTask.OnComplete)
+			{
+				FAgentFrameworkActionResult CancelledResult;
+				CancelledResult.bSuccess = false;
+				CancelledResult.Errors.Add(FString::Printf(TEXT("Tool call '%s' (TaskId: %s) was cancelled before execution"),
+					*CancelledTask.ToolCall.ToolName, *TaskId.ToString()));
+				CancelledTask.OnComplete(CancelledResult);
+			}
+			return true;
+		}
+	}
+	return false;
+}
+
+void FAgentFrameworkActionRouter::ClearPendingTasks()
+{
+	TArray<FAgentFrameworkAsyncTaskHandle> TasksToCancel;
+	{
+		FScopeLock Lock(&TaskQueueCS);
+		TasksToCancel = MoveTemp(PendingTasks);
+		PendingTasks.Empty();
+	}
+
+	for (auto& Task : TasksToCancel)
+	{
+		if (Task.OnComplete)
+		{
+			FAgentFrameworkActionResult CancelledResult;
+			CancelledResult.bSuccess = false;
+			CancelledResult.Errors.Add(TEXT("Task cancelled: ActionRouter is shutting down"));
+			Task.OnComplete(CancelledResult);
+		}
+	}
+}
+
+void FAgentFrameworkActionRouter::ProcessTaskQueue()
+{
+	check(IsInGameThread());
+
+	FAgentFrameworkAsyncTaskHandle CurrentTask;
+	bool bHasTask = false;
+
+	{
+		FScopeLock Lock(&TaskQueueCS);
+		if (PendingTasks.Num() > 0)
+		{
+			CurrentTask = PendingTasks[0];
+			PendingTasks.RemoveAt(0);
+			bHasTask = true;
+		}
+	}
+
+	if (bHasTask)
+	{
+		UE_LOG(LogAgentFramework, Verbose, TEXT("ActionRouter: Executing async tool call '%s' (TaskId: %s) on Game Thread"),
+			*CurrentTask.ToolCall.ToolName, *CurrentTask.TaskId.ToString());
+
+		FAgentFrameworkActionResult Result = RouteToolCall(CurrentTask.ToolCall);
+
+		if (CurrentTask.OnComplete)
+		{
+			CurrentTask.OnComplete(Result);
+		}
+	}
+}
+

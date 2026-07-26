@@ -2,14 +2,17 @@
 
 #include "Niagara/AgentFrameworkNiagaraActions.h"
 #include "AgentFrameworkCoreModule.h"
-#include "AgentFrameworkSettings.h"
+#include "AgentFrameworkActionUtils.h"
 
 // Niagara Runtime & Actor
 #include "NiagaraSystem.h"
 #include "NiagaraEmitter.h"
 #include "NiagaraComponent.h"
 #include "NiagaraActor.h"
-#include "NiagaraFunctionLibrary.h"
+#include "NiagaraUserRedirectionParameterStore.h"
+#include "NiagaraTypes.h"
+#include "Curves/CurveFloat.h"
+#include "Curves/CurveLinearColor.h"
 
 // Niagara Editor & Graph (WITH_EDITOR context)
 #if WITH_EDITOR
@@ -27,10 +30,10 @@
 #include "Engine/SceneCapture2D.h"
 #include "Components/SceneCaptureComponent2D.h"
 #include "Engine/TextureRenderTarget2D.h"
-#include "ImageUtils.h"
 #include "Viewport/AgentFrameworkViewportActions.h"
 #include "Misc/PackageName.h"
 #include "UObject/SavePackage.h"
+#include "Sound/SoundBase.h"
 
 FAgentFrameworkNiagaraActions::FAgentFrameworkNiagaraActions() {}
 FAgentFrameworkNiagaraActions::~FAgentFrameworkNiagaraActions() {}
@@ -45,54 +48,69 @@ TArray<FString> FAgentFrameworkNiagaraActions::GetSupportedToolNames() const
 		TEXT("add_niagara_module"),
 		TEXT("set_niagara_module_pin"),
 		TEXT("compile_niagara_system"),
-		TEXT("capture_niagara_system_isolated")
+		TEXT("capture_niagara_system_isolated"),
+		TEXT("set_niagara_parameter")
 	};
 }
 
 bool FAgentFrameworkNiagaraActions::ValidateParams(const TSharedRef<FJsonObject>& Params, TArray<FString>& OutErrors) const
 {
 	FString ToolName;
-	Params->TryGetStringField(TEXT("_tool_name"), ToolName);
+	UAgentFrameworkActionUtils::TryGetStringParam(Params, TEXT("_tool_name"), ToolName, OutErrors, false);
 
 	if (ToolName == TEXT("create_niagara_system"))
 	{
-		if (!Params->HasField(TEXT("asset_path")))
+		FString AssetPath;
+		if (!UAgentFrameworkActionUtils::TryGetStringParam(Params, TEXT("asset_path"), AssetPath, OutErrors, true))
 		{
-			OutErrors.Add(TEXT("Missing required field for create_niagara_system: asset_path"));
 			return false;
 		}
 	}
 	else
 	{
-		// All other tools require system_path (or asset_path as a fallback)
-		if (!Params->HasField(TEXT("system_path")) && !Params->HasField(TEXT("asset_path")))
+		// All other tools require system_path (or SystemAsset or asset_path as fallbacks)
+		if (!Params->HasField(TEXT("system_path")) && !Params->HasField(TEXT("SystemAsset")) && !Params->HasField(TEXT("asset_path")))
 		{
-			OutErrors.Add(TEXT("Missing required field: system_path"));
+			OutErrors.Add(TEXT("Missing required field: system_path or SystemAsset"));
 			return false;
 		}
 
 		if (ToolName == TEXT("add_niagara_emitter"))
 		{
-			if (!Params->HasField(TEXT("emitter_template")) || !Params->HasField(TEXT("emitter_name")))
+			FString EmitterTemplate, EmitterName;
+			if (!UAgentFrameworkActionUtils::TryGetStringParam(Params, TEXT("emitter_template"), EmitterTemplate, OutErrors, true) ||
+				!UAgentFrameworkActionUtils::TryGetStringParam(Params, TEXT("emitter_name"), EmitterName, OutErrors, true))
 			{
-				OutErrors.Add(TEXT("Missing required field(s) for add_niagara_emitter: emitter_template, emitter_name"));
 				return false;
 			}
 		}
 		else if (ToolName == TEXT("add_niagara_module"))
 		{
-			if (!Params->HasField(TEXT("emitter_name")) || !Params->HasField(TEXT("phase")) || !Params->HasField(TEXT("module_type")))
+			FString EmitterName, Phase, ModuleType;
+			if (!UAgentFrameworkActionUtils::TryGetStringParam(Params, TEXT("emitter_name"), EmitterName, OutErrors, true) ||
+				!UAgentFrameworkActionUtils::TryGetStringParam(Params, TEXT("phase"), Phase, OutErrors, true) ||
+				!UAgentFrameworkActionUtils::TryGetStringParam(Params, TEXT("module_type"), ModuleType, OutErrors, true))
 			{
-				OutErrors.Add(TEXT("Missing required field(s) for add_niagara_module: emitter_name, phase, module_type"));
 				return false;
 			}
 		}
 		else if (ToolName == TEXT("set_niagara_module_pin"))
 		{
-			if (!Params->HasField(TEXT("emitter_name")) || !Params->HasField(TEXT("phase")) ||
-				!Params->HasField(TEXT("module_type")) || !Params->HasField(TEXT("pin_name")) || !Params->HasField(TEXT("value")))
+			FString EmitterName, Phase, ModuleType, PinName, Value;
+			if (!UAgentFrameworkActionUtils::TryGetStringParam(Params, TEXT("emitter_name"), EmitterName, OutErrors, true) ||
+				!UAgentFrameworkActionUtils::TryGetStringParam(Params, TEXT("phase"), Phase, OutErrors, true) ||
+				!UAgentFrameworkActionUtils::TryGetStringParam(Params, TEXT("module_type"), ModuleType, OutErrors, true) ||
+				!UAgentFrameworkActionUtils::TryGetStringParam(Params, TEXT("pin_name"), PinName, OutErrors, true) ||
+				!UAgentFrameworkActionUtils::TryGetStringParam(Params, TEXT("value"), Value, OutErrors, true))
 			{
-				OutErrors.Add(TEXT("Missing required field(s) for set_niagara_module_pin: emitter_name, phase, module_type, pin_name, value"));
+				return false;
+			}
+		}
+		else if (ToolName == TEXT("set_niagara_parameter"))
+		{
+			if (!Params->HasField(TEXT("parameter_name")) && !Params->HasField(TEXT("ParameterName")))
+			{
+				OutErrors.Add(TEXT("Missing required field: parameter_name or ParameterName"));
 				return false;
 			}
 		}
@@ -103,8 +121,11 @@ bool FAgentFrameworkNiagaraActions::ValidateParams(const TSharedRef<FJsonObject>
 
 FAgentFrameworkActionResult FAgentFrameworkNiagaraActions::ExecuteAction(const TSharedRef<FJsonObject>& Params)
 {
+	FAgentFrameworkActionResult Result;
+	Result.bSuccess = false;
+
 	FString ToolName;
-	Params->TryGetStringField(TEXT("_tool_name"), ToolName);
+	UAgentFrameworkActionUtils::TryGetStringParam(Params, TEXT("_tool_name"), ToolName, Result.Errors, false);
 
 	bool bIsReadOnly = (ToolName == TEXT("capture_niagara_system_isolated"));
 
@@ -114,18 +135,21 @@ FAgentFrameworkActionResult FAgentFrameworkNiagaraActions::ExecuteAction(const T
 		Transaction.Emplace(FText::FromString(TEXT("AgentFramework Niagara Action")));
 	}
 
-	FAgentFrameworkActionResult Result;
-	Result.bSuccess = false;
-
 	if (ToolName == TEXT("create_niagara_system"))          Result = ExecuteCreateSystem(Params, Result);
 	else if (ToolName == TEXT("add_niagara_emitter"))        Result = ExecuteAddEmitter(Params, Result);
 	else if (ToolName == TEXT("add_niagara_module"))         Result = ExecuteAddModule(Params, Result);
 	else if (ToolName == TEXT("set_niagara_module_pin"))     Result = ExecuteSetModulePin(Params, Result);
 	else if (ToolName == TEXT("compile_niagara_system"))     Result = ExecuteCompileSystem(Params, Result);
 	else if (ToolName == TEXT("capture_niagara_system_isolated")) Result = ExecuteCaptureIsolated(Params, Result);
+	else if (ToolName == TEXT("set_niagara_parameter"))     Result = ExecuteSetNiagaraParameter(Params, Result);
 	else
 	{
 		Result.Errors.Add(FString::Printf(TEXT("Unknown Niagara tool: '%s'"), *ToolName));
+	}
+
+	if (Result.bSuccess)
+	{
+		PlaySuccessSound();
 	}
 
 	if (Transaction.IsSet() && !Result.bSuccess)
@@ -139,31 +163,45 @@ FAgentFrameworkActionResult FAgentFrameworkNiagaraActions::ExecuteAction(const T
 FAgentFrameworkActionResult FAgentFrameworkNiagaraActions::ExecuteCreateSystem(const TSharedRef<FJsonObject>& Params, FAgentFrameworkActionResult& Result)
 {
 #if WITH_EDITOR
-	FString AssetPath = Params->GetStringField(TEXT("asset_path"));
+	FString AssetPath;
+	if (!UAgentFrameworkActionUtils::TryGetStringParam(Params, TEXT("asset_path"), AssetPath, Result.Errors, true))
+	{
+		return Result;
+	}
 	FString PackagePath = FPackageName::GetLongPackagePath(AssetPath);
 	FString AssetName = FPackageName::GetShortName(AssetPath);
 
-	IAssetTools& AssetTools = FModuleManager::LoadModuleChecked<FAssetToolsModule>("AssetTools").Get();
+	FAssetToolsModule& AssetToolsModule = FModuleManager::LoadModuleChecked<FAssetToolsModule>("AssetTools");
+	IAssetTools& AssetTools = AssetToolsModule.Get();
 	UNiagaraSystemFactoryNew* Factory = NewObject<UNiagaraSystemFactoryNew>();
+	if (!IsValid(Factory))
+	{
+		Result.Errors.Add(TEXT("Failed to create UNiagaraSystemFactoryNew instance."));
+		return Result;
+	}
 
 	UObject* NewAsset = AssetTools.CreateAsset(AssetName, PackagePath, UNiagaraSystem::StaticClass(), Factory);
 	UNiagaraSystem* NewSystem = Cast<UNiagaraSystem>(NewAsset);
 
-	if (!NewSystem)
+	if (!IsValid(NewSystem))
 	{
 		Result.Errors.Add(FString::Printf(TEXT("Failed to create Niagara System at %s"), *AssetPath));
 		return Result;
 	}
 
 	NewSystem->Modify();
-	NewSystem->GetOutermost()->MarkPackageDirty();
-
-	FString PackageFilename;
-	if (FPackageName::TryConvertLongPackageNameToFilename(NewSystem->GetOutermost()->GetName(), PackageFilename, FPackageName::GetAssetPackageExtension()))
+	UPackage* Package = NewSystem->GetOutermost();
+	if (IsValid(Package))
 	{
-		FSavePackageArgs SaveArgs;
-		SaveArgs.TopLevelFlags = RF_Standalone;
-		UPackage::SavePackage(NewSystem->GetOutermost(), NewSystem, *PackageFilename, SaveArgs);
+		Package->MarkPackageDirty();
+
+		FString PackageFilename;
+		if (FPackageName::TryConvertLongPackageNameToFilename(Package->GetName(), PackageFilename, FPackageName::GetAssetPackageExtension()))
+		{
+			FSavePackageArgs SaveArgs;
+			SaveArgs.TopLevelFlags = RF_Standalone;
+			UPackage::SavePackage(Package, NewSystem, *PackageFilename, SaveArgs);
+		}
 	}
 
 	FAssetRegistryModule::AssetCreated(NewSystem);
@@ -180,12 +218,23 @@ FAgentFrameworkActionResult FAgentFrameworkNiagaraActions::ExecuteCreateSystem(c
 FAgentFrameworkActionResult FAgentFrameworkNiagaraActions::ExecuteAddEmitter(const TSharedRef<FJsonObject>& Params, FAgentFrameworkActionResult& Result)
 {
 #if WITH_EDITOR
-	FString SystemPath = Params->GetStringField(TEXT("system_path"));
-	FString EmitterTemplate = Params->GetStringField(TEXT("emitter_template"));
-	FString EmitterName = Params->GetStringField(TEXT("emitter_name"));
+	FString SystemPath;
+	if (!Params->TryGetStringField(TEXT("system_path"), SystemPath) || SystemPath.IsEmpty())
+	{
+		if (!UAgentFrameworkActionUtils::TryGetStringParam(Params, TEXT("asset_path"), SystemPath, Result.Errors, true))
+		{
+			return Result;
+		}
+	}
+	FString EmitterTemplate, EmitterName;
+	if (!UAgentFrameworkActionUtils::TryGetStringParam(Params, TEXT("emitter_template"), EmitterTemplate, Result.Errors, true) ||
+		!UAgentFrameworkActionUtils::TryGetStringParam(Params, TEXT("emitter_name"), EmitterName, Result.Errors, true))
+	{
+		return Result;
+	}
 
 	UNiagaraSystem* System = LoadObject<UNiagaraSystem>(nullptr, *SystemPath);
-	if (!System)
+	if (!IsValid(System))
 	{
 		Result.Errors.Add(FString::Printf(TEXT("Niagara System not found at %s"), *SystemPath));
 		return Result;
@@ -200,7 +249,7 @@ FAgentFrameworkActionResult FAgentFrameworkNiagaraActions::ExecuteAddEmitter(con
 	else                                              TemplatePath = TEXT("/Niagara/Templates/Emitters/SimpleSprite");
 
 	UNiagaraEmitter* TemplateEmitter = LoadObject<UNiagaraEmitter>(nullptr, *TemplatePath);
-	if (!TemplateEmitter)
+	if (!IsValid(TemplateEmitter))
 	{
 		// Fallback search in Common locations
 		TemplateEmitter = LoadObject<UNiagaraEmitter>(nullptr, TEXT("/Niagara/SimpleSprite.SimpleSprite"));
@@ -209,7 +258,7 @@ FAgentFrameworkActionResult FAgentFrameworkNiagaraActions::ExecuteAddEmitter(con
 	System->Modify();
 
 	UNiagaraEmitter* NewEmitter = nullptr;
-	if (TemplateEmitter)
+	if (IsValid(TemplateEmitter))
 	{
 		NewEmitter = Cast<UNiagaraEmitter>(StaticDuplicateObject(TemplateEmitter, System, *EmitterName));
 	}
@@ -219,7 +268,7 @@ FAgentFrameworkActionResult FAgentFrameworkNiagaraActions::ExecuteAddEmitter(con
 		NewEmitter = NewObject<UNiagaraEmitter>(System, *EmitterName, RF_Transactional);
 	}
 
-	if (!NewEmitter)
+	if (!IsValid(NewEmitter))
 	{
 		Result.Errors.Add(FString::Printf(TEXT("Failed to create emitter instance for %s"), *EmitterName));
 		return Result;
@@ -228,7 +277,11 @@ FAgentFrameworkActionResult FAgentFrameworkNiagaraActions::ExecuteAddEmitter(con
 	NewEmitter->Modify();
 	System->AddEmitterHandle(*NewEmitter, FName(*EmitterName), NewEmitter->GetExposedVersion().VersionGuid);
 
-	System->GetOutermost()->MarkPackageDirty();
+	UPackage* Package = System->GetOutermost();
+	if (IsValid(Package))
+	{
+		Package->MarkPackageDirty();
+	}
 	Result.bSuccess = WaitAndReportCompile(System, Result);
 	Result.ModifiedAssets.Add(SystemPath);
 #else
@@ -240,13 +293,24 @@ FAgentFrameworkActionResult FAgentFrameworkNiagaraActions::ExecuteAddEmitter(con
 FAgentFrameworkActionResult FAgentFrameworkNiagaraActions::ExecuteAddModule(const TSharedRef<FJsonObject>& Params, FAgentFrameworkActionResult& Result)
 {
 #if WITH_EDITOR
-	FString SystemPath = Params->GetStringField(TEXT("system_path"));
-	FString EmitterName = Params->GetStringField(TEXT("emitter_name"));
-	FString Phase = Params->GetStringField(TEXT("phase"));
-	FString ModuleType = Params->GetStringField(TEXT("module_type"));
+	FString SystemPath;
+	if (!Params->TryGetStringField(TEXT("system_path"), SystemPath) || SystemPath.IsEmpty())
+	{
+		if (!UAgentFrameworkActionUtils::TryGetStringParam(Params, TEXT("asset_path"), SystemPath, Result.Errors, true))
+		{
+			return Result;
+		}
+	}
+	FString EmitterName, Phase, ModuleType;
+	if (!UAgentFrameworkActionUtils::TryGetStringParam(Params, TEXT("emitter_name"), EmitterName, Result.Errors, true) ||
+		!UAgentFrameworkActionUtils::TryGetStringParam(Params, TEXT("phase"), Phase, Result.Errors, true) ||
+		!UAgentFrameworkActionUtils::TryGetStringParam(Params, TEXT("module_type"), ModuleType, Result.Errors, true))
+	{
+		return Result;
+	}
 
 	UNiagaraSystem* System = LoadObject<UNiagaraSystem>(nullptr, *SystemPath);
-	if (!System)
+	if (!IsValid(System))
 	{
 		Result.Errors.Add(FString::Printf(TEXT("Niagara System not found at %s"), *SystemPath));
 		return Result;
@@ -254,7 +318,7 @@ FAgentFrameworkActionResult FAgentFrameworkNiagaraActions::ExecuteAddModule(cons
 
 	FString FindError;
 	UNiagaraGraph* Graph = FindGraphForPhase(System, EmitterName, Phase, FindError);
-	if (!Graph)
+	if (!IsValid(Graph))
 	{
 		Result.Errors.Add(FindError);
 		return Result;
@@ -271,7 +335,7 @@ FAgentFrameworkActionResult FAgentFrameworkNiagaraActions::ExecuteAddModule(cons
 	else                                             ModulePath = FString::Printf(TEXT("/Niagara/Modules/Physics/%s.%s"), *ModuleType, *ModuleType);
 
 	UNiagaraScript* ModuleScript = LoadObject<UNiagaraScript>(nullptr, *ModulePath);
-	if (!ModuleScript)
+	if (!IsValid(ModuleScript))
 	{
 		Result.Errors.Add(FString::Printf(TEXT("Niagara Script Module not found at %s"), *ModulePath));
 		return Result;
@@ -281,6 +345,11 @@ FAgentFrameworkActionResult FAgentFrameworkNiagaraActions::ExecuteAddModule(cons
 	Graph->Modify();
 
 	UNiagaraNodeFunctionCall* NewNode = NewObject<UNiagaraNodeFunctionCall>(Graph, NAME_None, RF_Transactional);
+	if (!IsValid(NewNode))
+	{
+		Result.Errors.Add(FString::Printf(TEXT("Failed to create function call node for module %s"), *ModuleType));
+		return Result;
+	}
 	NewNode->FunctionScript = ModuleScript;
 	if (ModuleScript->IsVersioningEnabled())
 	{
@@ -291,7 +360,11 @@ FAgentFrameworkActionResult FAgentFrameworkNiagaraActions::ExecuteAddModule(cons
 	Graph->AddNode(NewNode, true, true);
 	Graph->NotifyGraphChanged();
 
-	System->GetOutermost()->MarkPackageDirty();
+	UPackage* Package = System->GetOutermost();
+	if (IsValid(Package))
+	{
+		Package->MarkPackageDirty();
+	}
 	Result.bSuccess = WaitAndReportCompile(System, Result);
 	Result.ModifiedAssets.Add(SystemPath);
 #else
@@ -303,15 +376,26 @@ FAgentFrameworkActionResult FAgentFrameworkNiagaraActions::ExecuteAddModule(cons
 FAgentFrameworkActionResult FAgentFrameworkNiagaraActions::ExecuteSetModulePin(const TSharedRef<FJsonObject>& Params, FAgentFrameworkActionResult& Result)
 {
 #if WITH_EDITOR
-	FString SystemPath = Params->GetStringField(TEXT("system_path"));
-	FString EmitterName = Params->GetStringField(TEXT("emitter_name"));
-	FString Phase = Params->GetStringField(TEXT("phase"));
-	FString ModuleType = Params->GetStringField(TEXT("module_type"));
-	FString PinName = Params->GetStringField(TEXT("pin_name"));
-	FString Value = Params->GetStringField(TEXT("value"));
+	FString SystemPath;
+	if (!Params->TryGetStringField(TEXT("system_path"), SystemPath) || SystemPath.IsEmpty())
+	{
+		if (!UAgentFrameworkActionUtils::TryGetStringParam(Params, TEXT("asset_path"), SystemPath, Result.Errors, true))
+		{
+			return Result;
+		}
+	}
+	FString EmitterName, Phase, ModuleType, PinName, Value;
+	if (!UAgentFrameworkActionUtils::TryGetStringParam(Params, TEXT("emitter_name"), EmitterName, Result.Errors, true) ||
+		!UAgentFrameworkActionUtils::TryGetStringParam(Params, TEXT("phase"), Phase, Result.Errors, true) ||
+		!UAgentFrameworkActionUtils::TryGetStringParam(Params, TEXT("module_type"), ModuleType, Result.Errors, true) ||
+		!UAgentFrameworkActionUtils::TryGetStringParam(Params, TEXT("pin_name"), PinName, Result.Errors, true) ||
+		!UAgentFrameworkActionUtils::TryGetStringParam(Params, TEXT("value"), Value, Result.Errors, true))
+	{
+		return Result;
+	}
 
 	UNiagaraSystem* System = LoadObject<UNiagaraSystem>(nullptr, *SystemPath);
-	if (!System)
+	if (!IsValid(System))
 	{
 		Result.Errors.Add(FString::Printf(TEXT("Niagara System not found at %s"), *SystemPath));
 		return Result;
@@ -319,7 +403,7 @@ FAgentFrameworkActionResult FAgentFrameworkNiagaraActions::ExecuteSetModulePin(c
 
 	FString FindError;
 	UNiagaraGraph* Graph = FindGraphForPhase(System, EmitterName, Phase, FindError);
-	if (!Graph)
+	if (!IsValid(Graph))
 	{
 		Result.Errors.Add(FindError);
 		return Result;
@@ -331,15 +415,16 @@ FAgentFrameworkActionResult FAgentFrameworkNiagaraActions::ExecuteSetModulePin(c
 	Graph->GetNodesOfClass<UNiagaraNode>(Nodes);
 	for (UNiagaraNode* Node : Nodes)
 	{
+		if (!IsValid(Node)) continue;
 		UNiagaraNodeFunctionCall* FnCall = Cast<UNiagaraNodeFunctionCall>(Node);
-		if (FnCall && FnCall->FunctionScript && FnCall->FunctionScript->GetName().Contains(ModuleType))
+		if (IsValid(FnCall) && IsValid(FnCall->FunctionScript) && FnCall->FunctionScript->GetName().Contains(ModuleType))
 		{
 			TargetNode = FnCall;
 			break;
 		}
 	}
 
-	if (!TargetNode)
+	if (!IsValid(TargetNode))
 	{
 		Result.Errors.Add(FString::Printf(TEXT("Module %s not found in phase %s on emitter %s"), *ModuleType, *Phase, *EmitterName));
 		return Result;
@@ -372,7 +457,11 @@ FAgentFrameworkActionResult FAgentFrameworkNiagaraActions::ExecuteSetModulePin(c
 	TargetPin->DefaultValue = Value;
 	Graph->NotifyGraphChanged();
 
-	System->GetOutermost()->MarkPackageDirty();
+	UPackage* Package = System->GetOutermost();
+	if (IsValid(Package))
+	{
+		Package->MarkPackageDirty();
+	}
 	Result.bSuccess = WaitAndReportCompile(System, Result);
 	Result.ModifiedAssets.Add(SystemPath);
 #else
@@ -383,9 +472,17 @@ FAgentFrameworkActionResult FAgentFrameworkNiagaraActions::ExecuteSetModulePin(c
 
 FAgentFrameworkActionResult FAgentFrameworkNiagaraActions::ExecuteCompileSystem(const TSharedRef<FJsonObject>& Params, FAgentFrameworkActionResult& Result)
 {
-	FString SystemPath = Params->GetStringField(TEXT("system_path"));
+	FString SystemPath;
+	if (!Params->TryGetStringField(TEXT("system_path"), SystemPath) || SystemPath.IsEmpty())
+	{
+		if (!UAgentFrameworkActionUtils::TryGetStringParam(Params, TEXT("asset_path"), SystemPath, Result.Errors, true))
+		{
+			return Result;
+		}
+	}
+
 	UNiagaraSystem* System = LoadObject<UNiagaraSystem>(nullptr, *SystemPath);
-	if (!System)
+	if (!IsValid(System))
 	{
 		Result.Errors.Add(FString::Printf(TEXT("Niagara System not found at %s"), *SystemPath));
 		return Result;
@@ -398,21 +495,32 @@ FAgentFrameworkActionResult FAgentFrameworkNiagaraActions::ExecuteCompileSystem(
 
 FAgentFrameworkActionResult FAgentFrameworkNiagaraActions::ExecuteCaptureIsolated(const TSharedRef<FJsonObject>& Params, FAgentFrameworkActionResult& Result)
 {
-	FString SystemPath = Params->GetStringField(TEXT("system_path"));
+	FString SystemPath;
+	if (!Params->TryGetStringField(TEXT("system_path"), SystemPath) || SystemPath.IsEmpty())
+	{
+		if (!UAgentFrameworkActionUtils::TryGetStringParam(Params, TEXT("asset_path"), SystemPath, Result.Errors, true))
+		{
+			return Result;
+		}
+	}
 	double DurationSeconds = 2.0;
-	Params->TryGetNumberField(TEXT("duration_seconds"), DurationSeconds);
+	UAgentFrameworkActionUtils::TryGetDoubleParam(Params, TEXT("duration_seconds"), DurationSeconds, Result.Errors, false);
 	int32 MaxDimension = 512;
-	Params->TryGetNumberField(TEXT("max_dimension"), MaxDimension);
+	UAgentFrameworkActionUtils::TryGetIntParam(Params, TEXT("max_dimension"), MaxDimension, Result.Errors, false);
 
 	UNiagaraSystem* System = LoadObject<UNiagaraSystem>(nullptr, *SystemPath);
-	if (!System)
+	if (!IsValid(System))
 	{
 		Result.Errors.Add(FString::Printf(TEXT("Niagara System not found at %s"), *SystemPath));
 		return Result;
 	}
 
-	UWorld* World = GEditor ? GEditor->GetEditorWorldContext().World() : nullptr;
-	if (!World)
+	UWorld* World = nullptr;
+	if (GEditor)
+	{
+		World = GEditor->GetEditorWorldContext().World();
+	}
+	if (!IsValid(World))
 	{
 		Result.Errors.Add(TEXT("Active Editor World Context not found."));
 		return Result;
@@ -422,7 +530,7 @@ FAgentFrameworkActionResult FAgentFrameworkNiagaraActions::ExecuteCaptureIsolate
 	FActorSpawnParameters SpawnParams;
 	SpawnParams.ObjectFlags = RF_Transient;
 	ANiagaraActor* NiagaraActor = World->SpawnActor<ANiagaraActor>(ANiagaraActor::StaticClass(), FVector::ZeroVector, FRotator::ZeroRotator, SpawnParams);
-	if (!NiagaraActor || !NiagaraActor->GetNiagaraComponent())
+	if (!IsValid(NiagaraActor) || !IsValid(NiagaraActor->GetNiagaraComponent()))
 	{
 		Result.Errors.Add(TEXT("Failed to spawn transient Niagara Actor."));
 		return Result;
@@ -437,16 +545,26 @@ FAgentFrameworkActionResult FAgentFrameworkNiagaraActions::ExecuteCaptureIsolate
 
 	// 2. Spawn Transient Scene Capture Actor and configure
 	ASceneCapture2D* CaptureActor = World->SpawnActor<ASceneCapture2D>(ASceneCapture2D::StaticClass(), FVector(0, -300, 100), FRotator(0, 90, 0), SpawnParams);
-	USceneCaptureComponent2D* CaptureComponent = CaptureActor ? CaptureActor->GetCaptureComponent2D() : nullptr;
-	if (!CaptureComponent)
+	USceneCaptureComponent2D* CaptureComponent = IsValid(CaptureActor) ? CaptureActor->GetCaptureComponent2D() : nullptr;
+	if (!IsValid(CaptureComponent))
 	{
-		World->DestroyActor(NiagaraActor);
+		if (IsValid(NiagaraActor))
+		{
+			World->DestroyActor(NiagaraActor);
+		}
 		Result.Errors.Add(TEXT("Failed to spawn transient Scene Capture 2D Actor."));
 		return Result;
 	}
 
 	// Create Transient Render Target
 	UTextureRenderTarget2D* RenderTarget = NewObject<UTextureRenderTarget2D>(World);
+	if (!IsValid(RenderTarget))
+	{
+		if (IsValid(NiagaraActor)) World->DestroyActor(NiagaraActor);
+		if (IsValid(CaptureActor)) World->DestroyActor(CaptureActor);
+		Result.Errors.Add(TEXT("Failed to create transient RenderTarget."));
+		return Result;
+	}
 	RenderTarget->InitAutoFormat(MaxDimension / 2, MaxDimension / 2); // each slice is half dimensions
 	RenderTarget->ClearColor = FLinearColor(0.12f, 0.12f, 0.12f, 1.0f); // neutral dark gray
 
@@ -490,25 +608,28 @@ FAgentFrameworkActionResult FAgentFrameworkNiagaraActions::ExecuteCaptureIsolate
 
 		// Read pixels from Render Target
 		FTextureRenderTargetResource* RTResource = RenderTarget->GameThread_GetRenderTargetResource();
-		TArray<FColor> OutColor;
-		RTResource->ReadPixels(OutColor);
-
-		if (OutColor.Num() == SliceWidth * SliceHeight)
+		if (RTResource)
 		{
-			// Copy quadrant pixels to stitched buffer
-			int32 QuadX = (i % 2) * SliceWidth;
-			int32 QuadY = (i / 2) * SliceHeight;
+			TArray<FColor> OutColor;
+			RTResource->ReadPixels(OutColor);
 
-			for (int32 y = 0; y < SliceHeight; ++y)
+			if (OutColor.Num() == SliceWidth * SliceHeight)
 			{
-				for (int32 x = 0; x < SliceWidth; ++x)
-				{
-					int32 DestX = QuadX + x;
-					int32 DestY = QuadY + y;
-					int32 DestIndex = DestY * MaxDimension + DestX;
-					int32 SrcIndex = y * SliceWidth + x;
+				// Copy quadrant pixels to stitched buffer
+				int32 QuadX = (i % 2) * SliceWidth;
+				int32 QuadY = (i / 2) * SliceHeight;
 
-					StitchedPixels[DestIndex] = OutColor[SrcIndex];
+				for (int32 y = 0; y < SliceHeight; ++y)
+				{
+					for (int32 x = 0; x < SliceWidth; ++x)
+					{
+						int32 DestX = QuadX + x;
+						int32 DestY = QuadY + y;
+						int32 DestIndex = DestY * MaxDimension + DestX;
+						int32 SrcIndex = y * SliceWidth + x;
+
+						StitchedPixels[DestIndex] = OutColor[SrcIndex];
+					}
 				}
 			}
 		}
@@ -544,8 +665,8 @@ FAgentFrameworkActionResult FAgentFrameworkNiagaraActions::ExecuteCaptureIsolate
 	FString FilePath = FAgentFrameworkViewportActions::SavePixelsToDisk(StitchedPixels, MaxDimension, MaxDimension, MaxDimension, 90);
 
 	// 6. Cleanup transient Actors
-	World->DestroyActor(NiagaraActor);
-	World->DestroyActor(CaptureActor);
+	if (IsValid(NiagaraActor)) World->DestroyActor(NiagaraActor);
+	if (IsValid(CaptureActor)) World->DestroyActor(CaptureActor);
 
 	// 7. Populate metadata response
 	TSharedPtr<FJsonObject> ResponseObj = MakeShared<FJsonObject>();
@@ -576,6 +697,12 @@ FAgentFrameworkActionResult FAgentFrameworkNiagaraActions::ExecuteCaptureIsolate
 UNiagaraGraph* FAgentFrameworkNiagaraActions::FindGraphForPhase(UNiagaraSystem* System, const FString& EmitterName, const FString& PhaseStr, FString& OutError) const
 {
 #if WITH_EDITOR
+	if (!IsValid(System))
+	{
+		OutError = TEXT("Niagara System pointer is invalid.");
+		return nullptr;
+	}
+
 	// Find emitter handle by name
 	FNiagaraEmitterHandle* TargetHandle = nullptr;
 	for (FNiagaraEmitterHandle& Handle : System->GetEmitterHandles())
@@ -594,9 +721,9 @@ UNiagaraGraph* FAgentFrameworkNiagaraActions::FindGraphForPhase(UNiagaraSystem* 
 	}
 
 	UNiagaraEmitter* Emitter = TargetHandle->GetInstance().Emitter;
-	if (!Emitter)
+	if (!IsValid(Emitter))
 	{
-		OutError = FString::Printf(TEXT("Underlying UNiagaraEmitter is null for emitter handle '%s'."), *EmitterName);
+		OutError = FString::Printf(TEXT("Underlying UNiagaraEmitter is null or invalid for emitter handle '%s'."), *EmitterName);
 		return nullptr;
 	}
 
@@ -626,14 +753,14 @@ UNiagaraGraph* FAgentFrameworkNiagaraActions::FindGraphForPhase(UNiagaraSystem* 
 		}
 	}
 
-	if (!TargetScript)
+	if (!IsValid(TargetScript))
 	{
 		OutError = FString::Printf(TEXT("Niagara script for phase %s not found on emitter %s."), *PhaseStr, *EmitterName);
 		return nullptr;
 	}
 
 	UNiagaraScriptSource* ScriptSource = Cast<UNiagaraScriptSource>(TargetScript->GetSource(TargetScript->GetExposedVersion().VersionGuid));
-	if (!ScriptSource || !ScriptSource->NodeGraph)
+	if (!IsValid(ScriptSource) || !IsValid(ScriptSource->NodeGraph))
 	{
 		OutError = FString::Printf(TEXT("Niagara graph source missing for phase %s script on emitter %s."), *PhaseStr, *EmitterName);
 		return nullptr;
@@ -648,6 +775,12 @@ UNiagaraGraph* FAgentFrameworkNiagaraActions::FindGraphForPhase(UNiagaraSystem* 
 
 bool FAgentFrameworkNiagaraActions::WaitAndReportCompile(UNiagaraSystem* System, FAgentFrameworkActionResult& Result) const
 {
+	if (!IsValid(System))
+	{
+		Result.Errors.Add(TEXT("Niagara System pointer is invalid for compilation check."));
+		return false;
+	}
+
 	// WaitForCompilationComplete blocks game thread until compilation completes.
 	System->WaitForCompilationComplete(true, false);
 
@@ -656,7 +789,7 @@ bool FAgentFrameworkNiagaraActions::WaitAndReportCompile(UNiagaraSystem* System,
 	for (const FNiagaraEmitterHandle& Handle : System->GetEmitterHandles())
 	{
 		UNiagaraEmitter* Emitter = Handle.GetInstance().Emitter;
-		if (!Emitter) continue;
+		if (!IsValid(Emitter)) continue;
 
 		FVersionedNiagaraEmitterData* EmitterData = Emitter->GetLatestEmitterData();
 		if (!EmitterData) continue;
@@ -671,7 +804,7 @@ bool FAgentFrameworkNiagaraActions::WaitAndReportCompile(UNiagaraSystem* System,
 
 		for (UNiagaraScript* Script : ActiveScripts)
 		{
-			if (!Script) continue;
+			if (!IsValid(Script)) continue;
 			
 #if WITH_EDITORONLY_DATA
 			const FNiagaraVMExecutableData& VMData = Script->GetVMExecutableData();
@@ -698,7 +831,7 @@ bool FAgentFrameworkNiagaraActions::WaitAndReportCompile(UNiagaraSystem* System,
 	for (const FNiagaraEmitterHandle& Handle : System->GetEmitterHandles())
 	{
 		UNiagaraEmitter* Emitter = Handle.GetInstance().Emitter;
-		if (!Emitter) continue;
+		if (!IsValid(Emitter)) continue;
 
 		FVersionedNiagaraEmitterData* EmitterData = Emitter->GetLatestEmitterData();
 		if (EmitterData && EmitterData->SimTarget == ENiagaraSimTarget::CPUSim)
@@ -716,3 +849,506 @@ bool FAgentFrameworkNiagaraActions::WaitAndReportCompile(UNiagaraSystem* System,
 
 	return bCompileSuccess;
 }
+
+void FAgentFrameworkNiagaraActions::PlaySuccessSound()
+{
+#if WITH_EDITOR
+	if (GEditor)
+	{
+		USoundBase* SuccessSound = LoadObject<USoundBase>(nullptr, TEXT("/Engine/EditorSounds/Notifications/CompileSuccess.CompileSuccess"));
+		if (IsValid(SuccessSound))
+		{
+			GEditor->PlayEditorSound(SuccessSound);
+		}
+	}
+#endif
+}
+
+FAgentFrameworkActionResult FAgentFrameworkNiagaraActions::ExecuteSetNiagaraParameter(const TSharedRef<FJsonObject>& Params, FAgentFrameworkActionResult& Result)
+{
+#if WITH_EDITOR
+	// 1. Extract system path (supporting system_path, SystemAsset, asset_path)
+	FString SystemPath;
+	if (!Params->TryGetStringField(TEXT("system_path"), SystemPath) || SystemPath.IsEmpty())
+	{
+		if (!Params->TryGetStringField(TEXT("SystemAsset"), SystemPath) || SystemPath.IsEmpty())
+		{
+			if (!UAgentFrameworkActionUtils::TryGetStringParam(Params, TEXT("asset_path"), SystemPath, Result.Errors, true))
+			{
+				return Result;
+			}
+		}
+	}
+
+	// 2. Extract ParameterScope (default "User")
+	FString Scope = TEXT("User");
+	if (Params->HasTypedField<EJson::String>(TEXT("parameter_scope")))
+	{
+		Scope = Params->GetStringField(TEXT("parameter_scope"));
+	}
+	else if (Params->HasTypedField<EJson::String>(TEXT("ParameterScope")))
+	{
+		Scope = Params->GetStringField(TEXT("ParameterScope"));
+	}
+
+	// 3. Extract ParameterName
+	FString ParamName;
+	if (Params->HasTypedField<EJson::String>(TEXT("parameter_name")))
+	{
+		ParamName = Params->GetStringField(TEXT("parameter_name"));
+	}
+	else if (Params->HasTypedField<EJson::String>(TEXT("ParameterName")))
+	{
+		ParamName = Params->GetStringField(TEXT("ParameterName"));
+	}
+
+	if (ParamName.IsEmpty())
+	{
+		Result.Errors.Add(TEXT("Parameter name is missing or empty."));
+		return Result;
+	}
+
+	// 4. Extract DataType (default "Float")
+	FString DataType = TEXT("Float");
+	if (Params->HasTypedField<EJson::String>(TEXT("data_type")))
+	{
+		DataType = Params->GetStringField(TEXT("data_type"));
+	}
+	else if (Params->HasTypedField<EJson::String>(TEXT("DataType")))
+	{
+		DataType = Params->GetStringField(TEXT("DataType"));
+	}
+
+	// 5. Load UNiagaraSystem asset
+	UNiagaraSystem* System = LoadObject<UNiagaraSystem>(nullptr, *SystemPath);
+	if (!IsValid(System))
+	{
+		Result.Errors.Add(FString::Printf(TEXT("Niagara System not found at %s"), *SystemPath));
+		return Result;
+	}
+
+	// 6. Format parameter variable name as Scope.ParamName
+	FString FullParamName;
+	if (ParamName.StartsWith(TEXT("User.")) || ParamName.StartsWith(TEXT("System.")) || ParamName.StartsWith(TEXT("Emitter.")))
+	{
+		FullParamName = ParamName;
+	}
+	else
+	{
+		FullParamName = FString::Printf(TEXT("%s.%s"), *Scope, *ParamName);
+	}
+
+	// 7. Get Exposed Parameter Store
+	FNiagaraUserRedirectionParameterStore& UserStore = System->GetExposedParameters();
+
+	System->Modify();
+
+	// 8. Handle Parameter Type
+	if (DataType.Equals(TEXT("Float"), ESearchCase::IgnoreCase))
+	{
+		float FloatVal = 0.0f;
+		const TSharedPtr<FJsonValue>* ValueField = nullptr;
+		if (Params->Values.Contains(TEXT("value"))) ValueField = &Params->Values[TEXT("value")];
+		else if (Params->Values.Contains(TEXT("Value"))) ValueField = &Params->Values[TEXT("Value")];
+
+		if (ValueField && ValueField->IsValid())
+		{
+			if ((*ValueField)->Type == EJson::Number) FloatVal = (float)(*ValueField)->AsNumber();
+			else if ((*ValueField)->Type == EJson::String) FloatVal = FCString::Atof(*(*ValueField)->AsString());
+			else if ((*ValueField)->Type == EJson::Boolean) FloatVal = (*ValueField)->AsBool() ? 1.0f : 0.0f;
+		}
+
+		FNiagaraTypeDefinition TypeDef = FNiagaraTypeDefinition::GetFloatDef();
+		FNiagaraVariable Var(TypeDef, FName(*FullParamName));
+		if (UserStore.IndexOf(Var) == INDEX_NONE)
+		{
+			UserStore.AddParameter(Var, true);
+		}
+		UserStore.SetParameterData((const uint8*)&FloatVal, Var);
+	}
+	else if (DataType.Equals(TEXT("Vector2"), ESearchCase::IgnoreCase))
+	{
+		FVector2f VecVal(0.0f, 0.0f);
+		const TSharedPtr<FJsonValue>* ValueField = nullptr;
+		if (Params->Values.Contains(TEXT("value"))) ValueField = &Params->Values[TEXT("value")];
+		else if (Params->Values.Contains(TEXT("Value"))) ValueField = &Params->Values[TEXT("Value")];
+
+		if (ValueField && ValueField->IsValid())
+		{
+			if ((*ValueField)->Type == EJson::Object)
+			{
+				TSharedPtr<FJsonObject> Obj = (*ValueField)->AsObject();
+				double X = 0.0, Y = 0.0;
+				if (Obj->HasField(TEXT("x"))) X = Obj->GetNumberField(TEXT("x"));
+				else if (Obj->HasField(TEXT("X"))) X = Obj->GetNumberField(TEXT("X"));
+				if (Obj->HasField(TEXT("y"))) Y = Obj->GetNumberField(TEXT("y"));
+				else if (Obj->HasField(TEXT("Y"))) Y = Obj->GetNumberField(TEXT("Y"));
+				VecVal = FVector2f((float)X, (float)Y);
+			}
+			else if ((*ValueField)->Type == EJson::Array)
+			{
+				TArray<TSharedPtr<FJsonValue>> Arr = (*ValueField)->AsArray();
+				float X = (Arr.Num() > 0) ? (float)Arr[0]->AsNumber() : 0.0f;
+				float Y = (Arr.Num() > 1) ? (float)Arr[1]->AsNumber() : 0.0f;
+				VecVal = FVector2f(X, Y);
+			}
+			else if ((*ValueField)->Type == EJson::String)
+			{
+				FString Str = (*ValueField)->AsString();
+				TArray<FString> Parts;
+				Str.ParseIntoArray(Parts, TEXT(","), true);
+				if (Parts.Num() >= 2)
+				{
+					VecVal.X = FCString::Atof(*Parts[0]);
+					VecVal.Y = FCString::Atof(*Parts[1]);
+				}
+				else
+				{
+					float Scalar = FCString::Atof(*Str);
+					VecVal = FVector2f(Scalar, Scalar);
+				}
+			}
+			else if ((*ValueField)->Type == EJson::Number)
+			{
+				float Scalar = (float)(*ValueField)->AsNumber();
+				VecVal = FVector2f(Scalar, Scalar);
+			}
+		}
+
+		FNiagaraTypeDefinition TypeDef = FNiagaraTypeDefinition::GetVec2Def();
+		FNiagaraVariable Var(TypeDef, FName(*FullParamName));
+		if (UserStore.IndexOf(Var) == INDEX_NONE)
+		{
+			UserStore.AddParameter(Var, true);
+		}
+		UserStore.SetParameterData((const uint8*)&VecVal, Var);
+	}
+	else if (DataType.Equals(TEXT("Vector3"), ESearchCase::IgnoreCase))
+	{
+		FVector3f VecVal(0.0f, 0.0f, 0.0f);
+		const TSharedPtr<FJsonValue>* ValueField = nullptr;
+		if (Params->Values.Contains(TEXT("value"))) ValueField = &Params->Values[TEXT("value")];
+		else if (Params->Values.Contains(TEXT("Value"))) ValueField = &Params->Values[TEXT("Value")];
+
+		if (ValueField && ValueField->IsValid())
+		{
+			if ((*ValueField)->Type == EJson::Object)
+			{
+				TSharedPtr<FJsonObject> Obj = (*ValueField)->AsObject();
+				double X = 0.0, Y = 0.0, Z = 0.0;
+				if (Obj->HasField(TEXT("x"))) X = Obj->GetNumberField(TEXT("x"));
+				else if (Obj->HasField(TEXT("X"))) X = Obj->GetNumberField(TEXT("X"));
+				if (Obj->HasField(TEXT("y"))) Y = Obj->GetNumberField(TEXT("y"));
+				else if (Obj->HasField(TEXT("Y"))) Y = Obj->GetNumberField(TEXT("Y"));
+				if (Obj->HasField(TEXT("z"))) Z = Obj->GetNumberField(TEXT("z"));
+				else if (Obj->HasField(TEXT("Z"))) Z = Obj->GetNumberField(TEXT("Z"));
+				VecVal = FVector3f((float)X, (float)Y, (float)Z);
+			}
+			else if ((*ValueField)->Type == EJson::Array)
+			{
+				TArray<TSharedPtr<FJsonValue>> Arr = (*ValueField)->AsArray();
+				float X = (Arr.Num() > 0) ? (float)Arr[0]->AsNumber() : 0.0f;
+				float Y = (Arr.Num() > 1) ? (float)Arr[1]->AsNumber() : 0.0f;
+				float Z = (Arr.Num() > 2) ? (float)Arr[2]->AsNumber() : 0.0f;
+				VecVal = FVector3f(X, Y, Z);
+			}
+			else if ((*ValueField)->Type == EJson::String)
+			{
+				FString Str = (*ValueField)->AsString();
+				TArray<FString> Parts;
+				Str.ParseIntoArray(Parts, TEXT(","), true);
+				if (Parts.Num() >= 3)
+				{
+					VecVal.X = FCString::Atof(*Parts[0]);
+					VecVal.Y = FCString::Atof(*Parts[1]);
+					VecVal.Z = FCString::Atof(*Parts[2]);
+				}
+				else
+				{
+					float Scalar = FCString::Atof(*Str);
+					VecVal = FVector3f(Scalar, Scalar, Scalar);
+				}
+			}
+			else if ((*ValueField)->Type == EJson::Number)
+			{
+				float Scalar = (float)(*ValueField)->AsNumber();
+				VecVal = FVector3f(Scalar, Scalar, Scalar);
+			}
+		}
+
+		FNiagaraTypeDefinition TypeDef = FNiagaraTypeDefinition::GetVec3Def();
+		FNiagaraVariable Var(TypeDef, FName(*FullParamName));
+		if (UserStore.IndexOf(Var) == INDEX_NONE)
+		{
+			UserStore.AddParameter(Var, true);
+		}
+		UserStore.SetParameterData((const uint8*)&VecVal, Var);
+	}
+	else if (DataType.Equals(TEXT("LinearColor"), ESearchCase::IgnoreCase))
+	{
+		FLinearColor ColorVal(0.0f, 0.0f, 0.0f, 1.0f);
+		const TSharedPtr<FJsonValue>* ValueField = nullptr;
+		if (Params->Values.Contains(TEXT("value"))) ValueField = &Params->Values[TEXT("value")];
+		else if (Params->Values.Contains(TEXT("Value"))) ValueField = &Params->Values[TEXT("Value")];
+
+		if (ValueField && ValueField->IsValid())
+		{
+			if ((*ValueField)->Type == EJson::Object)
+			{
+				TSharedPtr<FJsonObject> Obj = (*ValueField)->AsObject();
+				double R = 0.0, G = 0.0, B = 0.0, A = 1.0;
+				if (Obj->HasField(TEXT("r"))) R = Obj->GetNumberField(TEXT("r"));
+				else if (Obj->HasField(TEXT("R"))) R = Obj->GetNumberField(TEXT("R"));
+				if (Obj->HasField(TEXT("g"))) G = Obj->GetNumberField(TEXT("g"));
+				else if (Obj->HasField(TEXT("G"))) G = Obj->GetNumberField(TEXT("G"));
+				if (Obj->HasField(TEXT("b"))) B = Obj->GetNumberField(TEXT("b"));
+				else if (Obj->HasField(TEXT("B"))) B = Obj->GetNumberField(TEXT("B"));
+				if (Obj->HasField(TEXT("a"))) A = Obj->GetNumberField(TEXT("a"));
+				else if (Obj->HasField(TEXT("A"))) A = Obj->GetNumberField(TEXT("A"));
+				ColorVal = FLinearColor((float)R, (float)G, (float)B, (float)A);
+			}
+			else if ((*ValueField)->Type == EJson::Array)
+			{
+				TArray<TSharedPtr<FJsonValue>> Arr = (*ValueField)->AsArray();
+				float R = (Arr.Num() > 0) ? (float)Arr[0]->AsNumber() : 0.0f;
+				float G = (Arr.Num() > 1) ? (float)Arr[1]->AsNumber() : 0.0f;
+				float B = (Arr.Num() > 2) ? (float)Arr[2]->AsNumber() : 0.0f;
+				float A = (Arr.Num() > 3) ? (float)Arr[3]->AsNumber() : 1.0f;
+				ColorVal = FLinearColor(R, G, B, A);
+			}
+			else if ((*ValueField)->Type == EJson::String)
+			{
+				FString Str = (*ValueField)->AsString();
+				if (!ColorVal.InitFromString(Str))
+				{
+					TArray<FString> Parts;
+					Str.ParseIntoArray(Parts, TEXT(","), true);
+					if (Parts.Num() >= 3)
+					{
+						ColorVal.R = FCString::Atof(*Parts[0]);
+						ColorVal.G = FCString::Atof(*Parts[1]);
+						ColorVal.B = FCString::Atof(*Parts[2]);
+						if (Parts.Num() >= 4) ColorVal.A = FCString::Atof(*Parts[3]);
+					}
+				}
+			}
+		}
+
+		FNiagaraTypeDefinition TypeDef = FNiagaraTypeDefinition::GetColorDef();
+		FNiagaraVariable Var(TypeDef, FName(*FullParamName));
+		if (UserStore.IndexOf(Var) == INDEX_NONE)
+		{
+			UserStore.AddParameter(Var, true);
+		}
+		UserStore.SetParameterData((const uint8*)&ColorVal, Var);
+	}
+	else if (DataType.Equals(TEXT("Bool"), ESearchCase::IgnoreCase))
+	{
+		bool bBoolVal = false;
+		const TSharedPtr<FJsonValue>* ValueField = nullptr;
+		if (Params->Values.Contains(TEXT("value"))) ValueField = &Params->Values[TEXT("value")];
+		else if (Params->Values.Contains(TEXT("Value"))) ValueField = &Params->Values[TEXT("Value")];
+
+		if (ValueField && ValueField->IsValid())
+		{
+			if ((*ValueField)->Type == EJson::Boolean) bBoolVal = (*ValueField)->AsBool();
+			else if ((*ValueField)->Type == EJson::String) bBoolVal = (*ValueField)->AsString().ToBool() || (*ValueField)->AsString() == TEXT("1");
+			else if ((*ValueField)->Type == EJson::Number) bBoolVal = ((*ValueField)->AsNumber() != 0);
+		}
+
+		FNiagaraBool NiagaraBoolVal(bBoolVal);
+		FNiagaraTypeDefinition TypeDef = FNiagaraTypeDefinition::GetBoolDef();
+		FNiagaraVariable Var(TypeDef, FName(*FullParamName));
+		if (UserStore.IndexOf(Var) == INDEX_NONE)
+		{
+			UserStore.AddParameter(Var, true);
+		}
+		UserStore.SetParameterData((const uint8*)&NiagaraBoolVal, Var);
+	}
+	else if (DataType.Equals(TEXT("Int32"), ESearchCase::IgnoreCase) || DataType.Equals(TEXT("Int"), ESearchCase::IgnoreCase))
+	{
+		int32 IntVal = 0;
+		const TSharedPtr<FJsonValue>* ValueField = nullptr;
+		if (Params->Values.Contains(TEXT("value"))) ValueField = &Params->Values[TEXT("value")];
+		else if (Params->Values.Contains(TEXT("Value"))) ValueField = &Params->Values[TEXT("Value")];
+
+		if (ValueField && ValueField->IsValid())
+		{
+			if ((*ValueField)->Type == EJson::Number) IntVal = (int32)(*ValueField)->AsNumber();
+			else if ((*ValueField)->Type == EJson::String) IntVal = FCString::Atoi(*(*ValueField)->AsString());
+			else if ((*ValueField)->Type == EJson::Boolean) IntVal = (*ValueField)->AsBool() ? 1 : 0;
+		}
+
+		FNiagaraTypeDefinition TypeDef = FNiagaraTypeDefinition::GetIntDef();
+		FNiagaraVariable Var(TypeDef, FName(*FullParamName));
+		if (UserStore.IndexOf(Var) == INDEX_NONE)
+		{
+			UserStore.AddParameter(Var, true);
+		}
+		UserStore.SetParameterData((const uint8*)&IntVal, Var);
+	}
+	else if (DataType.Equals(TEXT("CurveFloat"), ESearchCase::IgnoreCase))
+	{
+		UCurveFloat* CurveFloatObj = NewObject<UCurveFloat>(System, NAME_None, RF_Transactional);
+		if (!IsValid(CurveFloatObj))
+		{
+			Result.Errors.Add(TEXT("Failed to create transient UCurveFloat object."));
+			return Result;
+		}
+
+		FRichCurve& RichCurve = CurveFloatObj->FloatCurve;
+		RichCurve.Reset();
+
+		const TArray<TSharedPtr<FJsonValue>>* CurveKeysArray = nullptr;
+		if (Params->HasTypedField<EJson::Array>(TEXT("curve_keys")))
+		{
+			CurveKeysArray = &Params->GetArrayField(TEXT("curve_keys"));
+		}
+		else if (Params->HasTypedField<EJson::Array>(TEXT("CurveKeys")))
+		{
+			CurveKeysArray = &Params->GetArrayField(TEXT("CurveKeys"));
+		}
+
+		if (CurveKeysArray)
+		{
+			for (const TSharedPtr<FJsonValue>& KeyVal : *CurveKeysArray)
+			{
+				if (!KeyVal.IsValid() || KeyVal->Type != EJson::Object) continue;
+				TSharedPtr<FJsonObject> KeyObj = KeyVal->AsObject();
+
+				float KeyTime = 0.0f;
+				if (KeyObj->HasField(TEXT("time"))) KeyTime = (float)KeyObj->GetNumberField(TEXT("time"));
+				else if (KeyObj->HasField(TEXT("Time"))) KeyTime = (float)KeyObj->GetNumberField(TEXT("Time"));
+
+				float KeyValue = 0.0f;
+				if (KeyObj->HasField(TEXT("value"))) KeyValue = (float)KeyObj->GetNumberField(TEXT("value"));
+				else if (KeyObj->HasField(TEXT("Value"))) KeyValue = (float)KeyObj->GetNumberField(TEXT("Value"));
+
+				RichCurve.AddKey(KeyTime, KeyValue);
+			}
+		}
+
+		FNiagaraTypeDefinition TypeDef(UCurveFloat::StaticClass());
+		FNiagaraVariable Var(TypeDef, FName(*FullParamName));
+		if (UserStore.IndexOf(Var) == INDEX_NONE)
+		{
+			UserStore.AddParameter(Var, true);
+		}
+		UserStore.SetUObject(CurveFloatObj, Var);
+	}
+	else if (DataType.Equals(TEXT("CurveLinearColor"), ESearchCase::IgnoreCase))
+	{
+		UCurveLinearColor* CurveColorObj = NewObject<UCurveLinearColor>(System, NAME_None, RF_Transactional);
+		if (!IsValid(CurveColorObj))
+		{
+			Result.Errors.Add(TEXT("Failed to create transient UCurveLinearColor object."));
+			return Result;
+		}
+
+		CurveColorObj->FloatCurves[0].Reset();
+		CurveColorObj->FloatCurves[1].Reset();
+		CurveColorObj->FloatCurves[2].Reset();
+		CurveColorObj->FloatCurves[3].Reset();
+
+		const TArray<TSharedPtr<FJsonValue>>* CurveKeysArray = nullptr;
+		if (Params->HasTypedField<EJson::Array>(TEXT("curve_keys")))
+		{
+			CurveKeysArray = &Params->GetArrayField(TEXT("curve_keys"));
+		}
+		else if (Params->HasTypedField<EJson::Array>(TEXT("CurveKeys")))
+		{
+			CurveKeysArray = &Params->GetArrayField(TEXT("CurveKeys"));
+		}
+
+		if (CurveKeysArray)
+		{
+			for (const TSharedPtr<FJsonValue>& KeyVal : *CurveKeysArray)
+			{
+				if (!KeyVal.IsValid() || KeyVal->Type != EJson::Object) continue;
+				TSharedPtr<FJsonObject> KeyObj = KeyVal->AsObject();
+
+				float KeyTime = 0.0f;
+				if (KeyObj->HasField(TEXT("time"))) KeyTime = (float)KeyObj->GetNumberField(TEXT("time"));
+				else if (KeyObj->HasField(TEXT("Time"))) KeyTime = (float)KeyObj->GetNumberField(TEXT("Time"));
+
+				FLinearColor KeyColor(0.0f, 0.0f, 0.0f, 1.0f);
+				if (KeyObj->HasField(TEXT("r")) || KeyObj->HasField(TEXT("R")))
+				{
+					if (KeyObj->HasField(TEXT("r"))) KeyColor.R = (float)KeyObj->GetNumberField(TEXT("r"));
+					else if (KeyObj->HasField(TEXT("R"))) KeyColor.R = (float)KeyObj->GetNumberField(TEXT("R"));
+					if (KeyObj->HasField(TEXT("g"))) KeyColor.G = (float)KeyObj->GetNumberField(TEXT("g"));
+					else if (KeyObj->HasField(TEXT("G"))) KeyColor.G = (float)KeyObj->GetNumberField(TEXT("G"));
+					if (KeyObj->HasField(TEXT("b"))) KeyColor.B = (float)KeyObj->GetNumberField(TEXT("b"));
+					else if (KeyObj->HasField(TEXT("B"))) KeyColor.B = (float)KeyObj->GetNumberField(TEXT("B"));
+					if (KeyObj->HasField(TEXT("a"))) KeyColor.A = (float)KeyObj->GetNumberField(TEXT("a"));
+					else if (KeyObj->HasField(TEXT("A"))) KeyColor.A = (float)KeyObj->GetNumberField(TEXT("A"));
+				}
+				else if (KeyObj->HasField(TEXT("value")) || KeyObj->HasField(TEXT("Value")))
+				{
+					const TSharedPtr<FJsonValue>* ValF = KeyObj->HasField(TEXT("value")) ? &KeyObj->Values[TEXT("value")] : &KeyObj->Values[TEXT("Value")];
+					if (ValF && ValF->IsValid())
+					{
+						if ((*ValF)->Type == EJson::Number)
+						{
+							float Scalar = (float)(*ValF)->AsNumber();
+							KeyColor = FLinearColor(Scalar, Scalar, Scalar, 1.0f);
+						}
+						else if ((*ValF)->Type == EJson::Array)
+						{
+							TArray<TSharedPtr<FJsonValue>> Arr = (*ValF)->AsArray();
+							KeyColor.R = (Arr.Num() > 0) ? (float)Arr[0]->AsNumber() : 0.0f;
+							KeyColor.G = (Arr.Num() > 1) ? (float)Arr[1]->AsNumber() : 0.0f;
+							KeyColor.B = (Arr.Num() > 2) ? (float)Arr[2]->AsNumber() : 0.0f;
+							KeyColor.A = (Arr.Num() > 3) ? (float)Arr[3]->AsNumber() : 1.0f;
+						}
+					}
+				}
+
+				CurveColorObj->FloatCurves[0].AddKey(KeyTime, KeyColor.R);
+				CurveColorObj->FloatCurves[1].AddKey(KeyTime, KeyColor.G);
+				CurveColorObj->FloatCurves[2].AddKey(KeyTime, KeyColor.B);
+				CurveColorObj->FloatCurves[3].AddKey(KeyTime, KeyColor.A);
+			}
+		}
+
+		FNiagaraTypeDefinition TypeDef(UCurveLinearColor::StaticClass());
+		FNiagaraVariable Var(TypeDef, FName(*FullParamName));
+		if (UserStore.IndexOf(Var) == INDEX_NONE)
+		{
+			UserStore.AddParameter(Var, true);
+		}
+		UserStore.SetUObject(CurveColorObj, Var);
+	}
+	else
+	{
+		Result.Errors.Add(FString::Printf(TEXT("Unsupported Niagara parameter data type: '%s'"), *DataType));
+		return Result;
+	}
+
+	// 9. Recompile system, mark dirty, save package
+	System->RequestCompile(false);
+
+	UPackage* Package = System->GetOutermost();
+	if (IsValid(Package))
+	{
+		Package->MarkPackageDirty();
+
+		FString PackageFilename;
+		if (FPackageName::TryConvertLongPackageNameToFilename(Package->GetName(), PackageFilename, FPackageName::GetAssetPackageExtension()))
+		{
+			FSavePackageArgs SaveArgs;
+			SaveArgs.TopLevelFlags = RF_Standalone;
+			UPackage::SavePackage(Package, System, *PackageFilename, SaveArgs);
+		}
+	}
+
+	Result.bSuccess = WaitAndReportCompile(System, Result);
+	Result.ResultMessage = FString::Printf(TEXT("Successfully set Niagara parameter '%s' (%s) on system '%s'"), *FullParamName, *DataType, *SystemPath);
+	Result.ModifiedAssets.Add(SystemPath);
+#else
+	Result.Errors.Add(TEXT("Parameter configuration is only supported in Editor builds."));
+#endif
+	return Result;
+}
+
+

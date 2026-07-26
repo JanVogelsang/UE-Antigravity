@@ -1,65 +1,44 @@
-import unreal
+import json
+import urllib.request
+import urllib.error
 
-def find_unreferenced_assets(folder_path):
+EDITOR_HTTP_URL = "http://127.0.0.1:18777/api/execute_tool"
+
+def find_unreferenced_assets(folder_path, include_soft_references=True):
     """
-    Scans the specified folder recursively and returns a list of assets
-    that have zero external referencers (dependencies pointing to them).
-    Does NOT delete assets; only reports them.
+    Scans folder_path for unreferenced assets via native C++ AssetRegistry queries.
     """
-    if not unreal.EditorAssetLibrary.does_directory_exist(folder_path):
-        unreal.log_error(f"Directory {folder_path} does not exist.")
-        return []
+    payload = {
+        "tool_name": "find_unreferenced_assets",
+        "parameters": {
+            "folder_path": folder_path,
+            "include_soft_references": include_soft_references
+        }
+    }
 
-    ar = unreal.AssetRegistryHelpers.get_asset_registry()
-    if ar.is_loading_assets():
-        unreal.log_warning("Asset Registry is still loading assets. Results might be incomplete.")
+    req = urllib.request.Request(
+        EDITOR_HTTP_URL,
+        data=json.dumps(payload).encode("utf-8"),
+        headers={"Content-Type": "application/json"}
+    )
 
-    assets = unreal.EditorAssetLibrary.list_assets(folder_path, recursive=True)
-    unreal.log(f"Scanning {len(assets)} assets in {folder_path} for referencers...")
-
-    unreferenced_assets = []
-
-    # Configure dependency query options to be as thorough as possible
-    options = None
     try:
-        options = unreal.AssetRegistryDependencyOptions(
-            include_soft_package_references=True,
-            include_hard_package_references=True,
-            include_searchable_names=True,
-            include_soft_management_references=True,
-            include_hard_management_references=True
-        )
-    except AttributeError:
-        # Fallback if AssetRegistryDependencyOptions is not available in this UE version
-        pass
-
-    for asset_path in assets:
-        asset_data = unreal.EditorAssetLibrary.find_asset_data(asset_path)
-        if not asset_data:
-            continue
-
-        package_name = asset_data.package_name
-
-        try:
-            if options:
-                referencers = ar.get_referencers(package_name, options)
+        with urllib.request.urlopen(req, timeout=60) as response:
+            res_data = json.loads(response.read().decode("utf-8"))
+            if res_data.get("bSuccess"):
+                unreferenced = res_data.get("unreferenced_assets", [])
+                print(f"Found {len(unreferenced)} unreferenced assets in {folder_path}:")
+                for asset in unreferenced:
+                    print(f"  - {asset}")
+                return unreferenced
             else:
-                referencers = ar.get_referencers(package_name)
-        except Exception as e:
-            unreal.log_error(f"Failed to query referencers for {package_name}: {e}")
-            continue
-
-        # Filter out self-references (if any)
-        external_referencers = [r for r in referencers if str(r) != str(package_name)]
-
-        if len(external_referencers) == 0:
-            unreferenced_assets.append(asset_path)
-            unreal.log(f"Unreferenced asset found: {asset_path}")
-
-    unreal.log(f"Scan complete. Found {len(unreferenced_assets)} unreferenced assets.")
-    return unreferenced_assets
+                print(f"Error: {res_data.get('Errors')}")
+                return []
+    except urllib.error.URLError as e:
+        print(f"Failed to connect to Editor HTTP server on port 18777: {e}")
+        return []
 
 if __name__ == "__main__":
     # Example usage:
-    # find_unreferenced_assets("/Game/PathToFolder")
+    # find_unreferenced_assets("/Game/TestFolder")
     pass

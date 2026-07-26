@@ -26,6 +26,7 @@ public class AgentFrameworkActions : ModuleRules
 		PrivateDependencyModuleNames.AddRange(new string[]
 		{
 			"UnrealEd",
+			"MessageLog",
 			"AssetTools",
 			"AssetRegistry",
 			"Kismet",
@@ -101,6 +102,7 @@ public class AgentFrameworkActions : ModuleRules
 			"MovieRenderPipelineCore",
 			"MetasoundEngine",
 			"MetasoundFrontend",
+			"MetasoundEditor",
 			"AudioModulation",
 			"Blutility",
 			"DisplayCluster",
@@ -124,7 +126,9 @@ public class AgentFrameworkActions : ModuleRules
 			"ChaosVehiclesEngine",
 			"GeometryCollectionEngine",
 			"Foliage",
-			"GeometryFramework"
+			"GeometryFramework",
+			"MediaAssets",
+			"AudioEditor"
 		});
 
 		// Conditionally add Python support

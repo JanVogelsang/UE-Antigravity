@@ -1,6 +1,7 @@
 // Copyright 2026 AgentFramework. All Rights Reserved.
 
 #include "PIE/AgentFrameworkPIEActions.h"
+#include "AgentFrameworkActionUtils.h"
 #include "AgentFrameworkCoreModule.h"
 #include "AgentFrameworkSettings.h"
 #include "Editor.h"
@@ -9,16 +10,23 @@
 #include "Settings/LevelEditorPlaySettings.h"
 #include "Engine/World.h"
 #include "GameFramework/PlayerController.h"
-#include "GameFramework/InputSettings.h"
 #include "Framework/Application/SlateApplication.h"
-#include "Misc/App.h"
 #include "Blueprint/UserWidget.h"
 #include "Blueprint/WidgetTree.h"
-#include "Components/Button.h"
 #include "Components/PanelWidget.h"
 #include "EngineUtils.h"
 #include "GameFramework/Pawn.h"
 #include "Widgets/Text/STextBlock.h"
+#include "Components/Button.h"
+#include "UObject/UnrealType.h"
+#include "Sound/SoundBase.h"
+
+#if WITH_EDITOR
+#include "MessageLogModule.h"
+#include "IMessageLogListing.h"
+#include "Logging/TokenizedMessage.h"
+#include "Modules/ModuleManager.h"
+#endif
 
 #define LOCTEXT_NAMESPACE "AgentFrameworkPIEActions"
 
@@ -43,7 +51,9 @@ TArray<FString> FAgentFrameworkPIEActions::GetSupportedToolNames() const
 		TEXT("stop_pie_session"),
 		TEXT("extract_ui_state"),
 		TEXT("trigger_ui_element"),
-		TEXT("query_world_state")
+		TEXT("query_world_state"),
+		TEXT("invoke_pie_widget_delegate"),
+		TEXT("get_active_runtime_widgets")
 	};
 }
 
@@ -59,31 +69,54 @@ FAgentFrameworkActionResult FAgentFrameworkPIEActions::ExecuteAction(const TShar
 
 	// Security gate: require Full Access mode
 	const UAgentFrameworkDeveloperSettings* Settings = UAgentFrameworkDeveloperSettings::Get();
-	if (!Settings || Settings->SecurityMode != EAgentFrameworkSecurityMode::FullAccess)
+	if (!IsValid(Settings) || Settings->SecurityMode != EAgentFrameworkSecurityMode::FullAccess)
 	{
 		Result.Errors.Add(TEXT("PIE automation requires Full Access security mode."));
 		return Result;
 	}
 
 	FString Action;
-	if (!Params->TryGetStringField(TEXT("action"), Action) || Action.IsEmpty())
-		Params->TryGetStringField(TEXT("tool_name"), Action);
+	TArray<FString> IgnoredErrors;
+	if (!UAgentFrameworkActionUtils::TryGetStringParam(Params, TEXT("action"), Action, IgnoredErrors, false) || Action.IsEmpty())
+	{
+		UAgentFrameworkActionUtils::TryGetStringParam(Params, TEXT("tool_name"), Action, IgnoredErrors, false);
+	}
 
+	FAgentFrameworkActionResult ExecutedResult;
 	if (Action == TEXT("start_pie_session"))
-		return ExecuteStartPIE(Params, Result);
+		ExecutedResult = ExecuteStartPIE(Params, Result);
 	else if (Action == TEXT("simulate_input"))
-		return ExecuteSimulateInput(Params, Result);
+		ExecutedResult = ExecuteSimulateInput(Params, Result);
 	else if (Action == TEXT("stop_pie_session"))
-		return ExecuteStopPIE(Params, Result);
+		ExecutedResult = ExecuteStopPIE(Params, Result);
 	else if (Action == TEXT("extract_ui_state"))
-		return ExecuteExtractUIState(Params, Result);
+		ExecutedResult = ExecuteExtractUIState(Params, Result);
 	else if (Action == TEXT("trigger_ui_element"))
-		return ExecuteTriggerUIElement(Params, Result);
+		ExecutedResult = ExecuteTriggerUIElement(Params, Result);
 	else if (Action == TEXT("query_world_state"))
-		return ExecuteQueryWorldState(Params, Result);
+		ExecutedResult = ExecuteQueryWorldState(Params, Result);
+	else if (Action == TEXT("invoke_pie_widget_delegate"))
+		ExecutedResult = ExecuteInvokePIEWidgetDelegate(Params, Result);
+	else if (Action == TEXT("get_active_runtime_widgets"))
+		ExecutedResult = ExecuteGetActiveRuntimeWidgets(Params, Result);
+	else
+	{
+		Result.Errors.Add(TEXT("Unknown PIE action. Use start_pie_session, simulate_input, stop_pie_session, extract_ui_state, trigger_ui_element, query_world_state, invoke_pie_widget_delegate, or get_active_runtime_widgets."));
+		return Result;
+	}
 
-	Result.Errors.Add(TEXT("Unknown PIE action. Use start_pie_session, simulate_input, stop_pie_session, extract_ui_state, trigger_ui_element, or query_world_state."));
-	return Result;
+#if WITH_EDITOR
+	if (ExecutedResult.bSuccess && GEditor)
+	{
+		USoundBase* SuccessSound = LoadObject<USoundBase>(nullptr, TEXT("/Engine/EditorSounds/Notifications/CompileSuccess.CompileSuccess"));
+		if (IsValid(SuccessSound))
+		{
+			GEditor->PlayEditorSound(SuccessSound);
+		}
+	}
+#endif
+
+	return ExecutedResult;
 }
 
 // ============================================================================
@@ -112,12 +145,17 @@ FAgentFrameworkActionResult FAgentFrameworkPIEActions::ExecuteStartPIE(
 
 	// Optional: set the start location
 	FString StartMode;
-	Params->TryGetStringField(TEXT("start_mode"), StartMode);
+	TArray<FString> OptionalErrors;
+	UAgentFrameworkActionUtils::TryGetStringParam(Params, TEXT("start_mode"), StartMode, OptionalErrors, false);
 
 	if (StartMode.Equals(TEXT("current_camera"), ESearchCase::IgnoreCase))
 	{
-		PlayParams.EditorPlaySettings = NewObject<ULevelEditorPlaySettings>();
-		PlayParams.EditorPlaySettings->LastExecutedPlayModeLocation = PlayLocation_CurrentCameraLocation;
+		ULevelEditorPlaySettings* PlaySettings = NewObject<ULevelEditorPlaySettings>();
+		if (IsValid(PlaySettings))
+		{
+			PlaySettings->LastExecutedPlayModeLocation = PlayLocation_CurrentCameraLocation;
+			PlayParams.EditorPlaySettings = PlaySettings;
+		}
 	}
 
 	// Request PIE session
@@ -147,21 +185,18 @@ FAgentFrameworkActionResult FAgentFrameworkPIEActions::ExecuteSimulateInput(
 	}
 
 	FString KeyName;
-	if (!Params->TryGetStringField(TEXT("key"), KeyName))
+	if (!UAgentFrameworkActionUtils::TryGetStringParam(Params, TEXT("key"), KeyName, Result.Errors, true))
 	{
-		Result.Errors.Add(TEXT("Missing required field: 'key' (e.g., 'W', 'SpaceBar', 'LeftMouseButton', 'Gamepad_FaceButton_Bottom')"));
 		return Result;
 	}
 
-	FString ActionType;
-	if (!Params->TryGetStringField(TEXT("action_type"), ActionType))
-	{
-		ActionType = TEXT("press"); // Default: press and release
-	}
+	FString ActionType = TEXT("press");
+	TArray<FString> OptionalErrors;
+	UAgentFrameworkActionUtils::TryGetStringParam(Params, TEXT("action_type"), ActionType, OptionalErrors, false);
 	ActionType = ActionType.ToLower();
 
 	float DurationSeconds = 0.0f;
-	Params->TryGetNumberField(TEXT("duration"), DurationSeconds);
+	UAgentFrameworkActionUtils::TryGetFloatParam(Params, TEXT("duration"), DurationSeconds, OptionalErrors, false);
 	DurationSeconds = FMath::Clamp(DurationSeconds, 0.0f, 10.0f);
 
 	// Resolve the FKey
@@ -244,8 +279,39 @@ FAgentFrameworkActionResult FAgentFrameworkPIEActions::ExecuteStopPIE(
 		UE_LOG(LogAgentFramework, Log, TEXT("PIEActions: Requested PIE session stop."));
 	}
 
+	FString PiePopupErrors;
+#if WITH_EDITOR
+	if (FModuleManager::Get().IsModuleLoaded("MessageLog"))
+	{
+		FMessageLogModule& MessageLogModule = FModuleManager::LoadModuleChecked<FMessageLogModule>("MessageLog");
+		if (MessageLogModule.IsRegisteredLogListing("PIE"))
+		{
+			TSharedPtr<IMessageLogListing> PieListing = MessageLogModule.GetLogListing("PIE");
+			if (PieListing.IsValid())
+			{
+				const TArray<TSharedRef<FTokenizedMessage>>& Messages = PieListing->GetFilteredMessages();
+				for (const TSharedRef<FTokenizedMessage>& Msg : Messages)
+				{
+					if (Msg->GetSeverity() == EMessageSeverity::Error)
+					{
+						FString MsgText = Msg->ToText().ToString();
+						PiePopupErrors += FString::Printf(TEXT("  - [PIE MessageLog] %s\n"), *MsgText);
+					}
+				}
+			}
+		}
+	}
+#endif
+
 	Result.bSuccess = true;
-	Result.ResultMessage = TEXT("PIE session stopped. Use read_message_log to check for any runtime errors that occurred during play.");
+	if (!PiePopupErrors.IsEmpty())
+	{
+		Result.ResultMessage = FString::Printf(TEXT("PIE session stopped.\n\n--- Editor PIE Message Log Errors ---\n%s"), *PiePopupErrors);
+	}
+	else
+	{
+		Result.ResultMessage = TEXT("PIE session stopped (no PIE Message Log errors).");
+	}
 	return Result;
 }
 
@@ -259,10 +325,9 @@ bool FAgentFrameworkPIEActions::IsPIERunning()
 	return GEditor->IsPlaySessionInProgress();
 }
 
-// Helpers
 static FString GetWidgetText(UWidget* Widget)
 {
-	if (!Widget) return TEXT("");
+	if (!IsValid(Widget)) return TEXT("");
 	
 	FProperty* TextProp = Widget->GetClass()->FindPropertyByName(TEXT("Text"));
 	if (TextProp)
@@ -287,16 +352,23 @@ static FString GetWidgetText(UWidget* Widget)
 
 static FString FindTextInWidget(UWidget* Widget)
 {
-	if (!Widget) return TEXT("");
+	if (!IsValid(Widget)) return TEXT("");
 	FString FoundText = GetWidgetText(Widget);
 	if (!FoundText.IsEmpty()) return FoundText;
 
 	if (UPanelWidget* Panel = Cast<UPanelWidget>(Widget))
 	{
-		for (int32 i = 0; i < Panel->GetChildrenCount(); ++i)
+		if (IsValid(Panel))
 		{
-			FoundText = FindTextInWidget(Panel->GetChildAt(i));
-			if (!FoundText.IsEmpty()) return FoundText;
+			for (int32 i = 0; i < Panel->GetChildrenCount(); ++i)
+			{
+				UWidget* Child = Panel->GetChildAt(i);
+				if (IsValid(Child))
+				{
+					FoundText = FindTextInWidget(Child);
+					if (!FoundText.IsEmpty()) return FoundText;
+				}
+			}
 		}
 	}
 	return TEXT("");
@@ -306,9 +378,12 @@ static void FindSlateWidgetsRecursive(const TSharedRef<SWidget>& Widget, TArray<
 {
 	OutWidgets.Add(Widget);
 	FChildren* Children = Widget->GetChildren();
-	for (int32 i = 0; i < Children->Num(); ++i)
+	if (Children)
 	{
-		FindSlateWidgetsRecursive(Children->GetChildAt(i), OutWidgets);
+		for (int32 i = 0; i < Children->Num(); ++i)
+		{
+			FindSlateWidgetsRecursive(Children->GetChildAt(i), OutWidgets);
+		}
 	}
 }
 
@@ -328,10 +403,13 @@ static FString GetSlateWidgetText(const TSharedRef<SWidget>& Widget)
 	}
 	
 	FChildren* Children = Widget->GetChildren();
-	for (int32 i = 0; i < Children->Num(); ++i)
+	if (Children)
 	{
-		FString ChildText = GetSlateWidgetText(Children->GetChildAt(i));
-		if (!ChildText.IsEmpty()) return ChildText;
+		for (int32 i = 0; i < Children->Num(); ++i)
+		{
+			FString ChildText = GetSlateWidgetText(Children->GetChildAt(i));
+			if (!ChildText.IsEmpty()) return ChildText;
+		}
 	}
 	return TEXT("");
 }
@@ -354,7 +432,7 @@ FAgentFrameworkActionResult FAgentFrameworkPIEActions::ExecuteExtractUIState(
 			World = PIEWorldContext->World();
 		}
 	}
-	if (!World)
+	if (!IsValid(World))
 	{
 		Result.Errors.Add(TEXT("Could not find active PIE world."));
 		return Result;
@@ -370,12 +448,12 @@ FAgentFrameworkActionResult FAgentFrameworkPIEActions::ExecuteExtractUIState(
 	for (TObjectIterator<UUserWidget> It; It; ++It)
 	{
 		UUserWidget* UserWidget = *It;
-		if (UserWidget->GetWorld() == World && UserWidget->IsInViewport() && UserWidget->WidgetTree)
+		if (IsValid(UserWidget) && UserWidget->GetWorld() == World && UserWidget->IsInViewport() && IsValid(UserWidget->WidgetTree))
 		{
 			FString WidgetName = UserWidget->GetName();
 			
 			UserWidget->WidgetTree->ForEachWidget([&](UWidget* ChildWidget) {
-				if (ChildWidget && ChildWidget->IsVisible())
+				if (IsValid(ChildWidget) && ChildWidget->IsVisible())
 				{
 					FString TypeName = ChildWidget->GetClass()->GetName();
 					
@@ -487,16 +565,15 @@ FAgentFrameworkActionResult FAgentFrameworkPIEActions::ExecuteTriggerUIElement(
 			World = PIEWorldContext->World();
 		}
 	}
-	if (!World)
+	if (!IsValid(World))
 	{
 		Result.Errors.Add(TEXT("Could not find active PIE world."));
 		return Result;
 	}
 
 	FString WidgetPath;
-	if (!Params->TryGetStringField(TEXT("widget_path"), WidgetPath) || WidgetPath.IsEmpty())
+	if (!UAgentFrameworkActionUtils::TryGetStringParam(Params, TEXT("widget_path"), WidgetPath, Result.Errors, true))
 	{
-		Result.Errors.Add(TEXT("Missing required parameter: widget_path"));
 		return Result;
 	}
 
@@ -528,21 +605,28 @@ FAgentFrameworkActionResult FAgentFrameworkPIEActions::ExecuteTriggerUIElement(
 		UUserWidget* TargetUserWidget = nullptr;
 		for (TObjectIterator<UUserWidget> It; It; ++It)
 		{
-			if (It->GetWorld() == World && It->IsInViewport() && It->GetName() == WidgetName)
+			UUserWidget* WidgetCandidate = *It;
+			if (IsValid(WidgetCandidate) && WidgetCandidate->GetWorld() == World && WidgetCandidate->IsInViewport() && WidgetCandidate->GetName() == WidgetName)
 			{
-				TargetUserWidget = *It;
+				TargetUserWidget = WidgetCandidate;
 				break;
 			}
 		}
 
-		if (!TargetUserWidget)
+		if (!IsValid(TargetUserWidget))
 		{
 			Result.Errors.Add(FString::Printf(TEXT("UserWidget '%s' not found or not in viewport."), *WidgetName));
 			return Result;
 		}
 
+		if (!IsValid(TargetUserWidget->WidgetTree))
+		{
+			Result.Errors.Add(FString::Printf(TEXT("WidgetTree for UserWidget '%s' is invalid."), *WidgetName));
+			return Result;
+		}
+
 		UWidget* TargetWidget = TargetUserWidget->WidgetTree->FindWidget(*ChildWidgetName);
-		if (!TargetWidget)
+		if (!IsValid(TargetWidget))
 		{
 			Result.Errors.Add(FString::Printf(TEXT("Child widget '%s' not found in '%s'."), *ChildWidgetName, *WidgetName));
 			return Result;
@@ -613,7 +697,7 @@ FAgentFrameworkActionResult FAgentFrameworkPIEActions::ExecuteQueryWorldState(
 			World = PIEWorldContext->World();
 		}
 	}
-	if (!World)
+	if (!IsValid(World))
 	{
 		Result.Errors.Add(TEXT("Could not find active PIE world."));
 		return Result;
@@ -622,18 +706,18 @@ FAgentFrameworkActionResult FAgentFrameworkPIEActions::ExecuteQueryWorldState(
 	TArray<AActor*> MatchingActors;
 	
 	TArray<UClass*> ClassFilters;
-	const TArray<TSharedPtr<FJsonValue>>* ClassNamesJson;
-	if (Params->TryGetArrayField(TEXT("classes"), ClassNamesJson))
+	TArray<FString> ClassNames;
+	TArray<FString> OptionalErrors;
+	if (UAgentFrameworkActionUtils::TryGetStringArrayParam(Params, TEXT("classes"), ClassNames, OptionalErrors, false))
 	{
-		for (const auto& Val : *ClassNamesJson)
+		for (const FString& ClassName : ClassNames)
 		{
-			FString ClassName = Val->AsString();
 			UClass* TargetClass = UClass::TryFindTypeSlow<UClass>(*ClassName);
-			if (!TargetClass)
+			if (!IsValid(TargetClass))
 			{
 				TargetClass = FindObject<UClass>(nullptr, *ClassName);
 			}
-			if (TargetClass)
+			if (IsValid(TargetClass))
 			{
 				ClassFilters.Add(TargetClass);
 			}
@@ -645,21 +729,14 @@ FAgentFrameworkActionResult FAgentFrameworkPIEActions::ExecuteQueryWorldState(
 	}
 	
 	TArray<FString> TagFilters;
-	const TArray<TSharedPtr<FJsonValue>>* TagsJson;
-	if (Params->TryGetArrayField(TEXT("tags"), TagsJson))
-	{
-		for (const auto& Val : *TagsJson)
-		{
-			TagFilters.Add(Val->AsString());
-		}
-	}
+	UAgentFrameworkActionUtils::TryGetStringArrayParam(Params, TEXT("tags"), TagFilters, OptionalErrors, false);
 	
 	APlayerController* PlayerController = World->GetFirstPlayerController();
-	APawn* PlayerPawn = PlayerController ? PlayerController->GetPawn() : nullptr;
-	FVector PlayerLoc = PlayerPawn ? PlayerPawn->GetActorLocation() : FVector::ZeroVector;
+	APawn* PlayerPawn = IsValid(PlayerController) ? PlayerController->GetPawn() : nullptr;
+	FVector PlayerLoc = IsValid(PlayerPawn) ? PlayerPawn->GetActorLocation() : FVector::ZeroVector;
 
 	float Radius = 0.0f;
-	Params->TryGetNumberField(TEXT("radius"), Radius);
+	UAgentFrameworkActionUtils::TryGetFloatParam(Params, TEXT("radius"), Radius, OptionalErrors, false);
 
 	for (TActorIterator<AActor> It(World); It; ++It)
 	{
@@ -671,7 +748,7 @@ FAgentFrameworkActionResult FAgentFrameworkPIEActions::ExecuteQueryWorldState(
 			bool bMatchesClass = false;
 			for (UClass* ClassFilter : ClassFilters)
 			{
-				if (Actor->IsA(ClassFilter))
+				if (IsValid(ClassFilter) && Actor->IsA(ClassFilter))
 				{
 					bMatchesClass = true;
 					break;
@@ -694,7 +771,7 @@ FAgentFrameworkActionResult FAgentFrameworkPIEActions::ExecuteQueryWorldState(
 			if (!bMatchesTag) continue;
 		}
 
-		if (Radius > 0.0f && PlayerPawn)
+		if (Radius > 0.0f && IsValid(PlayerPawn))
 		{
 			float Distance = FVector::Dist(PlayerLoc, Actor->GetActorLocation());
 			if (Distance > Radius) continue;
@@ -705,7 +782,7 @@ FAgentFrameworkActionResult FAgentFrameworkPIEActions::ExecuteQueryWorldState(
 	
 	TSharedRef<FJsonObject> ResponseObj = MakeShared<FJsonObject>();
 	
-	if (PlayerPawn)
+	if (IsValid(PlayerPawn))
 	{
 		TSharedRef<FJsonObject> PlayerJson = MakeShared<FJsonObject>();
 		PlayerJson->SetStringField(TEXT("class"), PlayerPawn->GetClass()->GetName());
@@ -723,7 +800,7 @@ FAgentFrameworkActionResult FAgentFrameworkPIEActions::ExecuteQueryWorldState(
 	TArray<TSharedPtr<FJsonValue>> ActorsArray;
 	for (AActor* Actor : MatchingActors)
 	{
-		if (Actor == PlayerPawn) continue;
+		if (!IsValid(Actor) || Actor == PlayerPawn) continue;
 		
 		TSharedRef<FJsonObject> ActorJson = MakeShared<FJsonObject>();
 		ActorJson->SetStringField(TEXT("name"), Actor->GetName());
@@ -746,6 +823,279 @@ FAgentFrameworkActionResult FAgentFrameworkPIEActions::ExecuteQueryWorldState(
 		ActorsArray.Add(MakeShared<FJsonValueObject>(ActorJson));
 	}
 	ResponseObj->SetArrayField(TEXT("actors"), ActorsArray);
+
+	FString ResponseString;
+	TSharedRef<TJsonWriter<>> Writer = TJsonWriterFactory<>::Create(&ResponseString);
+	FJsonSerializer::Serialize(ResponseObj, Writer);
+
+	Result.bSuccess = true;
+	Result.ResultMessage = ResponseString;
+	return Result;
+}
+
+FAgentFrameworkActionResult FAgentFrameworkPIEActions::ExecuteInvokePIEWidgetDelegate(
+	const TSharedRef<FJsonObject>& Params, FAgentFrameworkActionResult& Result)
+{
+	if (!IsPIERunning())
+	{
+		Result.Errors.Add(TEXT("PIE session is not running. Call start_pie_session first."));
+		return Result;
+	}
+
+	UWorld* World = nullptr;
+	if (GEditor && GEditor->GetPIEWorldContext())
+	{
+		World = GEditor->GetPIEWorldContext()->World();
+	}
+
+	if (!IsValid(World))
+	{
+		Result.Errors.Add(TEXT("Could not obtain active PIE world."));
+		return Result;
+	}
+
+	FString TargetWidgetClassOrName;
+	if (!UAgentFrameworkActionUtils::TryGetStringParam(Params, TEXT("widget_class_or_name"), TargetWidgetClassOrName, Result.Errors, true))
+	{
+		return Result;
+	}
+
+	FString WidgetPropertyName;
+	if (!UAgentFrameworkActionUtils::TryGetStringParam(Params, TEXT("widget_property_name"), WidgetPropertyName, Result.Errors, true))
+	{
+		return Result;
+	}
+
+	FString DelegateName = TEXT("OnClicked");
+	TArray<FString> OptionalErrors;
+	UAgentFrameworkActionUtils::TryGetStringParam(Params, TEXT("delegate_name"), DelegateName, OptionalErrors, false);
+	if (DelegateName.IsEmpty())
+	{
+		DelegateName = TEXT("OnClicked");
+	}
+
+	UUserWidget* TargetUserWidget = nullptr;
+
+	for (TObjectIterator<UUserWidget> It; It; ++It)
+	{
+		UUserWidget* Widget = *It;
+		if (IsValid(Widget) && Widget->GetWorld() == World)
+		{
+			FString InstanceName = Widget->GetName();
+			FString ClassName = Widget->GetClass()->GetName();
+
+			if (InstanceName.Equals(TargetWidgetClassOrName, ESearchCase::IgnoreCase) ||
+				ClassName.Equals(TargetWidgetClassOrName, ESearchCase::IgnoreCase) ||
+				InstanceName.Contains(TargetWidgetClassOrName) ||
+				ClassName.Contains(TargetWidgetClassOrName))
+			{
+				TargetUserWidget = Widget;
+				break;
+			}
+		}
+	}
+
+	if (!IsValid(TargetUserWidget))
+	{
+		Result.Errors.Add(FString::Printf(TEXT("Could not find active UUserWidget instance matching '%s' in PIE world."), *TargetWidgetClassOrName));
+		return Result;
+	}
+
+	UObject* TargetObject = nullptr;
+
+	if (IsValid(TargetUserWidget->WidgetTree))
+	{
+		UWidget* FoundChildWidget = TargetUserWidget->WidgetTree->FindWidget(*WidgetPropertyName);
+		if (IsValid(FoundChildWidget))
+		{
+			TargetObject = FoundChildWidget;
+		}
+	}
+
+	if (!IsValid(TargetObject))
+	{
+		FProperty* Prop = TargetUserWidget->GetClass()->FindPropertyByName(*WidgetPropertyName);
+		if (Prop)
+		{
+			if (FObjectPropertyBase* ObjProp = CastField<FObjectPropertyBase>(Prop))
+			{
+				TargetObject = ObjProp->GetObjectPropertyValue_InContainer(TargetUserWidget);
+			}
+		}
+	}
+
+	if (!IsValid(TargetObject))
+	{
+		TargetObject = TargetUserWidget;
+	}
+
+	bool bDelegateInvoked = false;
+
+	if (UButton* Button = Cast<UButton>(TargetObject))
+	{
+		if (DelegateName.Equals(TEXT("OnClicked"), ESearchCase::IgnoreCase) ||
+			DelegateName.Equals(TEXT("on_clicked"), ESearchCase::IgnoreCase))
+		{
+			Button->OnClicked.Broadcast();
+			bDelegateInvoked = true;
+		}
+	}
+
+	if (!bDelegateInvoked)
+	{
+		FProperty* DelegateProp = TargetObject->GetClass()->FindPropertyByName(*DelegateName);
+		if (!DelegateProp)
+		{
+			for (TFieldIterator<FProperty> PropIt(TargetObject->GetClass()); PropIt; ++PropIt)
+			{
+				if (PropIt->GetName().Equals(DelegateName, ESearchCase::IgnoreCase))
+				{
+					DelegateProp = *PropIt;
+					break;
+				}
+			}
+		}
+
+		if (DelegateProp)
+		{
+			if (FMulticastDelegateProperty* MulticastProp = CastField<FMulticastDelegateProperty>(DelegateProp))
+			{
+				const FMulticastScriptDelegate* ConstScriptDelegate = MulticastProp->GetMulticastDelegate(TargetObject);
+				FMulticastScriptDelegate* ScriptDelegate = const_cast<FMulticastScriptDelegate*>(ConstScriptDelegate);
+				if (ScriptDelegate)
+				{
+					ScriptDelegate->ProcessDelegate<UObject>(nullptr);
+					bDelegateInvoked = true;
+				}
+			}
+			else if (FDelegateProperty* SingleProp = CastField<FDelegateProperty>(DelegateProp))
+			{
+				FScriptDelegate* ScriptDelegate = SingleProp->GetPropertyValuePtr_InContainer(TargetObject);
+				if (ScriptDelegate)
+				{
+					ScriptDelegate->ProcessDelegate<UObject>(nullptr);
+					bDelegateInvoked = true;
+				}
+			}
+		}
+	}
+
+	if (!bDelegateInvoked)
+	{
+		Result.Errors.Add(FString::Printf(TEXT("Failed to invoke delegate '%s' on object '%s' (Widget: '%s'). Property not found or delegate call failed."),
+			*DelegateName, *TargetObject->GetName(), *TargetUserWidget->GetName()));
+		return Result;
+	}
+
+	Result.bSuccess = true;
+	Result.ResultMessage = FString::Printf(TEXT("Successfully invoked delegate '%s' on target '%s' within UUserWidget '%s'."),
+		*DelegateName, *TargetObject->GetName(), *TargetUserWidget->GetName());
+	return Result;
+}
+
+FAgentFrameworkActionResult FAgentFrameworkPIEActions::ExecuteGetActiveRuntimeWidgets(
+	const TSharedRef<FJsonObject>& Params, FAgentFrameworkActionResult& Result)
+{
+	if (!IsPIERunning())
+	{
+		Result.Errors.Add(TEXT("PIE session is not running. Call start_pie_session first."));
+		return Result;
+	}
+
+	UWorld* World = nullptr;
+	if (GEditor && GEditor->GetPIEWorldContext())
+	{
+		World = GEditor->GetPIEWorldContext()->World();
+	}
+
+	if (!IsValid(World))
+	{
+		Result.Errors.Add(TEXT("Could not obtain active PIE world."));
+		return Result;
+	}
+
+	FString ClassFilter;
+	TArray<FString> OptionalErrors;
+	UAgentFrameworkActionUtils::TryGetStringParam(Params, TEXT("widget_class_name"), ClassFilter, OptionalErrors, false);
+
+	bool bIncludeHidden = true;
+	UAgentFrameworkActionUtils::TryGetBoolParam(Params, TEXT("include_hidden"), bIncludeHidden, OptionalErrors, false);
+
+	TArray<TSharedPtr<FJsonValue>> WidgetJsonArray;
+
+	for (TObjectIterator<UUserWidget> It; It; ++It)
+	{
+		UUserWidget* UserWidget = *It;
+		if (IsValid(UserWidget) && UserWidget->GetWorld() == World)
+		{
+			FString ClassName = UserWidget->GetClass()->GetName();
+			FString InstanceName = UserWidget->GetName();
+
+			if (!ClassFilter.IsEmpty())
+			{
+				if (!ClassName.Contains(ClassFilter, ESearchCase::IgnoreCase) &&
+					!InstanceName.Contains(ClassFilter, ESearchCase::IgnoreCase))
+				{
+					continue;
+				}
+			}
+
+			bool bIsVisible = UserWidget->IsVisible();
+			if (!bIncludeHidden && !bIsVisible)
+			{
+				continue;
+			}
+
+			TSharedRef<FJsonObject> WidgetObj = MakeShared<FJsonObject>();
+			WidgetObj->SetStringField(TEXT("name"), InstanceName);
+			WidgetObj->SetStringField(TEXT("class_name"), ClassName);
+			WidgetObj->SetStringField(TEXT("class_path"), UserWidget->GetClass()->GetPathName());
+			WidgetObj->SetBoolField(TEXT("is_in_viewport"), UserWidget->IsInViewport());
+			WidgetObj->SetBoolField(TEXT("is_visible"), bIsVisible);
+
+			FString VisibilityStr;
+			switch (UserWidget->GetVisibility())
+			{
+			case ESlateVisibility::Visible: VisibilityStr = TEXT("Visible"); break;
+			case ESlateVisibility::Collapsed: VisibilityStr = TEXT("Collapsed"); break;
+			case ESlateVisibility::Hidden: VisibilityStr = TEXT("Hidden"); break;
+			case ESlateVisibility::HitTestInvisible: VisibilityStr = TEXT("HitTestInvisible"); break;
+			case ESlateVisibility::SelfHitTestInvisible: VisibilityStr = TEXT("SelfHitTestInvisible"); break;
+			default: VisibilityStr = TEXT("Unknown"); break;
+			}
+			WidgetObj->SetStringField(TEXT("visibility"), VisibilityStr);
+
+			TArray<TSharedPtr<FJsonValue>> ParentHierarchyArray;
+			UWidget* CurrentParent = UserWidget->GetParent();
+			while (IsValid(CurrentParent))
+			{
+				ParentHierarchyArray.Add(MakeShared<FJsonValueString>(
+					FString::Printf(TEXT("%s (%s)"), *CurrentParent->GetName(), *CurrentParent->GetClass()->GetName())
+				));
+				CurrentParent = CurrentParent->GetParent();
+			}
+			if (UserWidget->IsInViewport())
+			{
+				ParentHierarchyArray.Add(MakeShared<FJsonValueString>(TEXT("Viewport")));
+			}
+			WidgetObj->SetArrayField(TEXT("parent_hierarchy"), ParentHierarchyArray);
+
+			int32 ChildCount = 0;
+			if (IsValid(UserWidget->WidgetTree))
+			{
+				UserWidget->WidgetTree->ForEachWidget([&ChildCount](UWidget* Child) {
+					if (IsValid(Child)) { ChildCount++; }
+				});
+			}
+			WidgetObj->SetNumberField(TEXT("child_count"), ChildCount);
+
+			WidgetJsonArray.Add(MakeShared<FJsonValueObject>(WidgetObj));
+		}
+	}
+
+	TSharedRef<FJsonObject> ResponseObj = MakeShared<FJsonObject>();
+	ResponseObj->SetArrayField(TEXT("widgets"), WidgetJsonArray);
+	ResponseObj->SetNumberField(TEXT("total_count"), WidgetJsonArray.Num());
 
 	FString ResponseString;
 	TSharedRef<TJsonWriter<>> Writer = TJsonWriterFactory<>::Create(&ResponseString);

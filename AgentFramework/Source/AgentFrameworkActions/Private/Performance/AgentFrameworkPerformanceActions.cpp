@@ -2,6 +2,7 @@
 
 #include "Performance/AgentFrameworkPerformanceActions.h"
 #include "AgentFrameworkCoreModule.h"
+#include "AgentFrameworkActionUtils.h"
 #include "Editor.h"
 #include "Engine/Engine.h"
 #include "HAL/PlatformMemory.h"
@@ -18,6 +19,10 @@
 #include "Engine/PostProcessVolume.h"
 #include "GameFramework/WorldSettings.h"
 #include "EngineUtils.h"
+
+#if WITH_EDITOR
+#include "Sound/SoundBase.h"
+#endif
 
 FAgentFrameworkPerformanceActions::FAgentFrameworkPerformanceActions() {}
 FAgentFrameworkPerformanceActions::~FAgentFrameworkPerformanceActions() {}
@@ -59,7 +64,7 @@ bool FAgentFrameworkPerformanceActions::ValidateParams(const TSharedRef<FJsonObj
 // ---------------------------------------------------------------------------
 static UWorld* GetEditorWorld()
 {
-	if (GEditor)
+	if (GEditor && IsValid(GEditor))
 	{
 		return GEditor->GetEditorWorldContext().World();
 	}
@@ -83,17 +88,18 @@ FAgentFrameworkActionResult FAgentFrameworkPerformanceActions::ExecuteAction(con
 	Result.bSuccess = false;
 
 	FString ToolName;
-	if (!Params->TryGetStringField(TEXT("_tool_name"), ToolName))
+	TArray<FString> IgnoreErrors;
+	if (!UAgentFrameworkActionUtils::TryGetStringParam(Params, TEXT("_tool_name"), ToolName, IgnoreErrors, false) || ToolName.IsEmpty())
 	{
 		// Legacy compat: read 'tool_name' (without underscore) or 'action' field
-		if (!Params->TryGetStringField(TEXT("tool_name"), ToolName))
+		if (!UAgentFrameworkActionUtils::TryGetStringParam(Params, TEXT("tool_name"), ToolName, IgnoreErrors, false) || ToolName.IsEmpty())
 		{
-			Params->TryGetStringField(TEXT("action"), ToolName);
+			UAgentFrameworkActionUtils::TryGetStringParam(Params, TEXT("action"), ToolName, IgnoreErrors, false);
 		}
 	}
 
 	// -----------------------------------------------------------------------
-	// LEGACY: map old action values → new tool names
+	// LEGACY: map old action values -> new tool names
 	// -----------------------------------------------------------------------
 	if (ToolName == TEXT("memory_stats"))   ToolName = TEXT("get_memory_stats");
 	if (ToolName == TEXT("stat_command"))   ToolName = TEXT("run_stat_command");
@@ -111,20 +117,19 @@ FAgentFrameworkActionResult FAgentFrameworkPerformanceActions::ExecuteAction(con
 		Report += FString::Printf(TEXT("FPS: %.1f\n"), FPS);
 		Report += FString::Printf(TEXT("Frame Time: %.2f ms\n"), DeltaTime * 1000.0f);
 
-		if (GEngine)
+		if (GEngine && IsValid(GEngine))
 		{
 			Report += FString::Printf(TEXT("Fixed Tick Rate: %.1f\n"), GEngine->GetMaxFPS());
 		}
 
 		Result.bSuccess = true;
 		Result.ResultMessage = Report;
-		return Result;
 	}
 
 	// -----------------------------------------------------------------------
 	// 2. get_memory_stats — platform memory
 	// -----------------------------------------------------------------------
-	if (ToolName == TEXT("get_memory_stats"))
+	else if (ToolName == TEXT("get_memory_stats"))
 	{
 		FPlatformMemoryStats MemStats = FPlatformMemory::GetStats();
 		FString Report;
@@ -135,23 +140,21 @@ FAgentFrameworkActionResult FAgentFrameworkPerformanceActions::ExecuteAction(con
 
 		Result.bSuccess = true;
 		Result.ResultMessage = Report;
-		return Result;
 	}
 
 	// -----------------------------------------------------------------------
 	// 3. run_stat_command — toggle a stat overlay (stat fps, stat unit, etc.)
 	// -----------------------------------------------------------------------
-	if (ToolName == TEXT("run_stat_command"))
+	else if (ToolName == TEXT("run_stat_command"))
 	{
 		FString Command;
-		if (!Params->TryGetStringField(TEXT("command"), Command))
+		if (!UAgentFrameworkActionUtils::TryGetStringParam(Params, TEXT("command"), Command, Result.Errors, true))
 		{
-			Result.Errors.Add(TEXT("Missing 'command' field for run_stat_command."));
 			return Result;
 		}
 
 		UWorld* World = GetEditorWorld();
-		if (GEngine && World)
+		if (GEngine && IsValid(GEngine) && IsValid(World))
 		{
 			GEngine->Exec(World, *FString::Printf(TEXT("stat %s"), *Command));
 			Result.bSuccess = true;
@@ -161,19 +164,18 @@ FAgentFrameworkActionResult FAgentFrameworkPerformanceActions::ExecuteAction(con
 		{
 			Result.Errors.Add(TEXT("GEngine or editor world not available."));
 		}
-		return Result;
 	}
 
 	// -----------------------------------------------------------------------
 	// 4. analyze_asset_sizes — iterate asset registry, report largest assets
 	// -----------------------------------------------------------------------
-	if (ToolName == TEXT("analyze_asset_sizes"))
+	else if (ToolName == TEXT("analyze_asset_sizes"))
 	{
 		FString FilterPath;
-		Params->TryGetStringField(TEXT("path_filter"), FilterPath);
+		UAgentFrameworkActionUtils::TryGetStringParam(Params, TEXT("path_filter"), FilterPath, Result.Errors, false);
 
 		int32 TopN = 20;
-		Params->TryGetNumberField(TEXT("top_n"), TopN);
+		UAgentFrameworkActionUtils::TryGetIntParam(Params, TEXT("top_n"), TopN, Result.Errors, false);
 
 		FAssetRegistryModule& ARModule = FModuleManager::LoadModuleChecked<FAssetRegistryModule>("AssetRegistry");
 		IAssetRegistry& AR = ARModule.Get();
@@ -223,18 +225,16 @@ FAgentFrameworkActionResult FAgentFrameworkPerformanceActions::ExecuteAction(con
 
 		Result.bSuccess = true;
 		Result.ResultMessage = Report;
-		return Result;
 	}
 
 	// -----------------------------------------------------------------------
 	// 5. get_cvar — read a single console variable
 	// -----------------------------------------------------------------------
-	if (ToolName == TEXT("get_cvar"))
+	else if (ToolName == TEXT("get_cvar"))
 	{
 		FString CVarName;
-		if (!Params->TryGetStringField(TEXT("name"), CVarName))
+		if (!UAgentFrameworkActionUtils::TryGetStringParam(Params, TEXT("name"), CVarName, Result.Errors, true))
 		{
-			Result.Errors.Add(TEXT("Missing 'name' field for get_cvar."));
 			return Result;
 		}
 
@@ -252,19 +252,17 @@ FAgentFrameworkActionResult FAgentFrameworkPerformanceActions::ExecuteAction(con
 
 		Result.bSuccess = true;
 		Result.ResultMessage = Report;
-		return Result;
 	}
 
 	// -----------------------------------------------------------------------
 	// 6. set_cvar — set a console variable (transient, not saved to .ini)
 	// -----------------------------------------------------------------------
-	if (ToolName == TEXT("set_cvar"))
+	else if (ToolName == TEXT("set_cvar"))
 	{
 		FString CVarName, CVarValue;
-		if (!Params->TryGetStringField(TEXT("name"), CVarName) ||
-			!Params->TryGetStringField(TEXT("value"), CVarValue))
+		if (!UAgentFrameworkActionUtils::TryGetStringParam(Params, TEXT("name"), CVarName, Result.Errors, true) ||
+			!UAgentFrameworkActionUtils::TryGetStringParam(Params, TEXT("value"), CVarValue, Result.Errors, true))
 		{
-			Result.Errors.Add(TEXT("Missing 'name' or 'value' fields for set_cvar."));
 			return Result;
 		}
 
@@ -284,19 +282,18 @@ FAgentFrameworkActionResult FAgentFrameworkPerformanceActions::ExecuteAction(con
 		Result.ResultMessage = FString::Printf(
 			TEXT("Set %s = %s  (was: %s)\nNOTE: This is transient — use set_renderer_setting or write_config_value to make it persistent."),
 			*CVarName, *CVarValue, *OldValue);
-		return Result;
 	}
 
 	// -----------------------------------------------------------------------
 	// 7. discover_cvars — enumerate CVars by prefix
 	// -----------------------------------------------------------------------
-	if (ToolName == TEXT("discover_cvars"))
+	else if (ToolName == TEXT("discover_cvars"))
 	{
 		FString Prefix = TEXT("r.");
-		Params->TryGetStringField(TEXT("prefix"), Prefix);
+		UAgentFrameworkActionUtils::TryGetStringParam(Params, TEXT("prefix"), Prefix, Result.Errors, false);
 
 		int32 MaxResults = 50;
-		Params->TryGetNumberField(TEXT("max_results"), MaxResults);
+		UAgentFrameworkActionUtils::TryGetIntParam(Params, TEXT("max_results"), MaxResults, Result.Errors, false);
 
 		TArray<TPair<FString, FString>> Found;
 
@@ -331,23 +328,21 @@ FAgentFrameworkActionResult FAgentFrameworkPerformanceActions::ExecuteAction(con
 
 		Result.bSuccess = true;
 		Result.ResultMessage = Report;
-		return Result;
 	}
 
 	// -----------------------------------------------------------------------
 	// 8. execute_console_command — run any GEngine->Exec command
 	// -----------------------------------------------------------------------
-	if (ToolName == TEXT("execute_console_command"))
+	else if (ToolName == TEXT("execute_console_command"))
 	{
 		FString Command;
-		if (!Params->TryGetStringField(TEXT("command"), Command))
+		if (!UAgentFrameworkActionUtils::TryGetStringParam(Params, TEXT("command"), Command, Result.Errors, true))
 		{
-			Result.Errors.Add(TEXT("Missing 'command' field for execute_console_command."));
 			return Result;
 		}
 
 		UWorld* World = GetEditorWorld();
-		if (!GEngine)
+		if (!GEngine || !IsValid(GEngine))
 		{
 			Result.Errors.Add(TEXT("GEngine not available."));
 			return Result;
@@ -358,16 +353,15 @@ FAgentFrameworkActionResult FAgentFrameworkPerformanceActions::ExecuteAction(con
 
 		Result.bSuccess = true;
 		Result.ResultMessage = FString::Printf(TEXT("Executed: %s"), *Command);
-		return Result;
 	}
 
 	// -----------------------------------------------------------------------
 	// 9. start_csv_profiler
 	// -----------------------------------------------------------------------
-	if (ToolName == TEXT("start_csv_profiler"))
+	else if (ToolName == TEXT("start_csv_profiler"))
 	{
 		UWorld* World = GetEditorWorld();
-		if (GEngine)
+		if (GEngine && IsValid(GEngine))
 		{
 			GEngine->Exec(World, TEXT("csvprofile start"));
 			Result.bSuccess = true;
@@ -379,16 +373,15 @@ FAgentFrameworkActionResult FAgentFrameworkPerformanceActions::ExecuteAction(con
 		{
 			Result.Errors.Add(TEXT("GEngine not available."));
 		}
-		return Result;
 	}
 
 	// -----------------------------------------------------------------------
 	// 10. stop_csv_profiler — stop and list generated files
 	// -----------------------------------------------------------------------
-	if (ToolName == TEXT("stop_csv_profiler"))
+	else if (ToolName == TEXT("stop_csv_profiler"))
 	{
 		UWorld* World = GetEditorWorld();
-		if (GEngine)
+		if (GEngine && IsValid(GEngine))
 		{
 			GEngine->Exec(World, TEXT("csvprofile stop"));
 
@@ -414,16 +407,15 @@ FAgentFrameworkActionResult FAgentFrameworkPerformanceActions::ExecuteAction(con
 		{
 			Result.Errors.Add(TEXT("GEngine not available."));
 		}
-		return Result;
 	}
 
 	// -----------------------------------------------------------------------
 	// 11. read_profiling_file — read a CSV/log from Saved/Profiling
 	// -----------------------------------------------------------------------
-	if (ToolName == TEXT("read_profiling_file"))
+	else if (ToolName == TEXT("read_profiling_file"))
 	{
 		FString FileName;
-		if (!Params->TryGetStringField(TEXT("file_name"), FileName))
+		if (!UAgentFrameworkActionUtils::TryGetStringParam(Params, TEXT("file_name"), FileName, IgnoreErrors, false) || FileName.IsEmpty())
 		{
 			// List available files so the AI knows what to pick
 			TArray<FString> CSVFiles, LogFiles;
@@ -439,45 +431,45 @@ FAgentFrameworkActionResult FAgentFrameworkPerformanceActions::ExecuteAction(con
 
 			Result.bSuccess = true;
 			Result.ResultMessage = Report;
-			return Result;
 		}
-
-		// Absolute path or relative to profiling dir
-		FString FullPath = FPaths::IsRelative(FileName) ? (GetProfilingDir() / FileName) : FileName;
-
-		FString FileContent;
-		if (!FFileHelper::LoadFileToString(FileContent, *FullPath))
+		else
 		{
-			Result.Errors.Add(FString::Printf(TEXT("Could not read file: %s"), *FullPath));
-			return Result;
-		}
+			// Absolute path or relative to profiling dir
+			FString FullPath = FPaths::IsRelative(FileName) ? (GetProfilingDir() / FileName) : FileName;
 
-		// Optionally truncate very large files to first N lines
-		int32 MaxLines = 200;
-		Params->TryGetNumberField(TEXT("max_lines"), MaxLines);
+			FString FileContent;
+			if (!FFileHelper::LoadFileToString(FileContent, *FullPath))
+			{
+				Result.Errors.Add(FString::Printf(TEXT("Could not read file: %s"), *FullPath));
+				return Result;
+			}
 
-		TArray<FString> Lines;
-		FileContent.ParseIntoArrayLines(Lines, false);
-		FString Truncated;
-		int32 Count = FMath::Min(MaxLines, Lines.Num());
-		for (int32 i = 0; i < Count; i++)
-		{
-			Truncated += Lines[i] + TEXT("\n");
-		}
-		if (Lines.Num() > MaxLines)
-		{
-			Truncated += FString::Printf(TEXT("... (%d lines total, showing first %d)\n"), Lines.Num(), MaxLines);
-		}
+			// Optionally truncate very large files to first N lines
+			int32 MaxLines = 200;
+			UAgentFrameworkActionUtils::TryGetIntParam(Params, TEXT("max_lines"), MaxLines, Result.Errors, false);
 
-		Result.bSuccess = true;
-		Result.ResultMessage = FString::Printf(TEXT("File: %s\n\n%s"), *FullPath, *Truncated);
-		return Result;
+			TArray<FString> Lines;
+			FileContent.ParseIntoArrayLines(Lines, false);
+			FString Truncated;
+			int32 Count = FMath::Min(MaxLines, Lines.Num());
+			for (int32 i = 0; i < Count; i++)
+			{
+				Truncated += Lines[i] + TEXT("\n");
+			}
+			if (Lines.Num() > MaxLines)
+			{
+				Truncated += FString::Printf(TEXT("... (%d lines total, showing first %d)\n"), Lines.Num(), MaxLines);
+			}
+
+			Result.bSuccess = true;
+			Result.ResultMessage = FString::Printf(TEXT("File: %s\n\n%s"), *FullPath, *Truncated);
+		}
 	}
 
 	// -----------------------------------------------------------------------
 	// 12. get_scalability_settings — read quality levels
 	// -----------------------------------------------------------------------
-	if (ToolName == TEXT("get_scalability_settings"))
+	else if (ToolName == TEXT("get_scalability_settings"))
 	{
 		Scalability::FQualityLevels Levels = Scalability::GetQualityLevels();
 
@@ -496,39 +488,90 @@ FAgentFrameworkActionResult FAgentFrameworkPerformanceActions::ExecuteAction(con
 
 		Result.bSuccess = true;
 		Result.ResultMessage = Report;
-		return Result;
 	}
 
 	// -----------------------------------------------------------------------
 	// 13. set_scalability_settings — apply quality level overrides
 	// -----------------------------------------------------------------------
-	if (ToolName == TEXT("set_scalability_settings"))
+	else if (ToolName == TEXT("set_scalability_settings"))
 	{
 		Scalability::FQualityLevels Levels = Scalability::GetQualityLevels();
 
-		double TempNumber = 0.0;
+		float ResQuality = Levels.ResolutionQuality;
+		if (UAgentFrameworkActionUtils::TryGetFloatParam(Params, TEXT("resolution_quality"), ResQuality, Result.Errors, false))
+		{
+			Levels.ResolutionQuality = ResQuality;
+		}
 
-		if (Params->TryGetNumberField(TEXT("resolution_quality"), TempNumber))      Levels.ResolutionQuality      = (float)TempNumber;
-		if (Params->TryGetNumberField(TEXT("view_distance_quality"), TempNumber))    Levels.ViewDistanceQuality    = (int32)TempNumber;
-		if (Params->TryGetNumberField(TEXT("anti_aliasing_quality"), TempNumber))    Levels.AntiAliasingQuality    = (int32)TempNumber;
-		if (Params->TryGetNumberField(TEXT("shadow_quality"), TempNumber))           Levels.ShadowQuality          = (int32)TempNumber;
-		if (Params->TryGetNumberField(TEXT("global_illumination_quality"), TempNumber)) Levels.GlobalIlluminationQuality = (int32)TempNumber;
-		if (Params->TryGetNumberField(TEXT("reflection_quality"), TempNumber))       Levels.ReflectionQuality      = (int32)TempNumber;
-		if (Params->TryGetNumberField(TEXT("post_process_quality"), TempNumber))     Levels.PostProcessQuality     = (int32)TempNumber;
-		if (Params->TryGetNumberField(TEXT("texture_quality"), TempNumber))          Levels.TextureQuality         = (int32)TempNumber;
-		if (Params->TryGetNumberField(TEXT("effects_quality"), TempNumber))          Levels.EffectsQuality         = (int32)TempNumber;
-		if (Params->TryGetNumberField(TEXT("foliage_quality"), TempNumber))          Levels.FoliageQuality         = (int32)TempNumber;
-		if (Params->TryGetNumberField(TEXT("shading_quality"), TempNumber))          Levels.ShadingQuality         = (int32)TempNumber;
+		int32 ViewDistQuality = Levels.ViewDistanceQuality;
+		if (UAgentFrameworkActionUtils::TryGetIntParam(Params, TEXT("view_distance_quality"), ViewDistQuality, Result.Errors, false))
+		{
+			Levels.ViewDistanceQuality = ViewDistQuality;
+		}
+
+		int32 AAQuality = Levels.AntiAliasingQuality;
+		if (UAgentFrameworkActionUtils::TryGetIntParam(Params, TEXT("anti_aliasing_quality"), AAQuality, Result.Errors, false))
+		{
+			Levels.AntiAliasingQuality = AAQuality;
+		}
+
+		int32 ShadowQuality = Levels.ShadowQuality;
+		if (UAgentFrameworkActionUtils::TryGetIntParam(Params, TEXT("shadow_quality"), ShadowQuality, Result.Errors, false))
+		{
+			Levels.ShadowQuality = ShadowQuality;
+		}
+
+		int32 GIQuality = Levels.GlobalIlluminationQuality;
+		if (UAgentFrameworkActionUtils::TryGetIntParam(Params, TEXT("global_illumination_quality"), GIQuality, Result.Errors, false))
+		{
+			Levels.GlobalIlluminationQuality = GIQuality;
+		}
+
+		int32 ReflectionQuality = Levels.ReflectionQuality;
+		if (UAgentFrameworkActionUtils::TryGetIntParam(Params, TEXT("reflection_quality"), ReflectionQuality, Result.Errors, false))
+		{
+			Levels.ReflectionQuality = ReflectionQuality;
+		}
+
+		int32 PPQuality = Levels.PostProcessQuality;
+		if (UAgentFrameworkActionUtils::TryGetIntParam(Params, TEXT("post_process_quality"), PPQuality, Result.Errors, false))
+		{
+			Levels.PostProcessQuality = PPQuality;
+		}
+
+		int32 TexQuality = Levels.TextureQuality;
+		if (UAgentFrameworkActionUtils::TryGetIntParam(Params, TEXT("texture_quality"), TexQuality, Result.Errors, false))
+		{
+			Levels.TextureQuality = TexQuality;
+		}
+
+		int32 FxQuality = Levels.EffectsQuality;
+		if (UAgentFrameworkActionUtils::TryGetIntParam(Params, TEXT("effects_quality"), FxQuality, Result.Errors, false))
+		{
+			Levels.EffectsQuality = FxQuality;
+		}
+
+		int32 FoliageQuality = Levels.FoliageQuality;
+		if (UAgentFrameworkActionUtils::TryGetIntParam(Params, TEXT("foliage_quality"), FoliageQuality, Result.Errors, false))
+		{
+			Levels.FoliageQuality = FoliageQuality;
+		}
+
+		int32 ShadingQuality = Levels.ShadingQuality;
+		if (UAgentFrameworkActionUtils::TryGetIntParam(Params, TEXT("shading_quality"), ShadingQuality, Result.Errors, false))
+		{
+			Levels.ShadingQuality = ShadingQuality;
+		}
 
 		Scalability::SetQualityLevels(Levels);
 
 		// Optionally save to GameUserSettings
 		bool bSave = false;
-		Params->TryGetBoolField(TEXT("save_to_ini"), bSave);
+		UAgentFrameworkActionUtils::TryGetBoolParam(Params, TEXT("save_to_ini"), bSave, Result.Errors, false);
 		if (bSave)
 		{
-			UGameUserSettings* UserSettings = GEngine ? GEngine->GetGameUserSettings() : nullptr;
-			if (UserSettings)
+			UGameUserSettings* UserSettings = (GEngine && IsValid(GEngine)) ? GEngine->GetGameUserSettings() : nullptr;
+			if (IsValid(UserSettings))
 			{
 				UserSettings->SetVisualEffectQuality(Levels.EffectsQuality);
 				UserSettings->SetShadowQuality(Levels.ShadowQuality);
@@ -548,16 +591,15 @@ FAgentFrameworkActionResult FAgentFrameworkPerformanceActions::ExecuteAction(con
 		Result.ResultMessage = FString::Printf(
 			TEXT("Scalability settings applied%s.\nUse get_scalability_settings to verify."),
 			bSave ? TEXT(" and saved to GameUserSettings.ini") : TEXT(" (transient — set save_to_ini=true to persist)"));
-		return Result;
 	}
 
 	// -----------------------------------------------------------------------
 	// 14. get_renderer_settings — read URendererSettings properties
 	// -----------------------------------------------------------------------
-	if (ToolName == TEXT("get_renderer_settings"))
+	else if (ToolName == TEXT("get_renderer_settings"))
 	{
 		const URendererSettings* RendSettings = GetDefault<URendererSettings>();
-		if (!RendSettings)
+		if (!IsValid(RendSettings))
 		{
 			Result.Errors.Add(TEXT("Could not load URendererSettings."));
 			return Result;
@@ -565,7 +607,7 @@ FAgentFrameworkActionResult FAgentFrameworkPerformanceActions::ExecuteAction(con
 
 		// Optional: filter by property name prefix
 		FString Filter;
-		Params->TryGetStringField(TEXT("filter"), Filter);
+		UAgentFrameworkActionUtils::TryGetStringParam(Params, TEXT("filter"), Filter, Result.Errors, false);
 
 		UClass* Class = URendererSettings::StaticClass();
 		FString Report = TEXT("URendererSettings (DefaultEngine.ini / [/Script/Engine.RendererSettings]):\n\n");
@@ -587,24 +629,22 @@ FAgentFrameworkActionResult FAgentFrameworkPerformanceActions::ExecuteAction(con
 
 		Result.bSuccess = true;
 		Result.ResultMessage = Report;
-		return Result;
 	}
 
 	// -----------------------------------------------------------------------
 	// 15. set_renderer_setting — set a URendererSettings property via reflection
 	// -----------------------------------------------------------------------
-	if (ToolName == TEXT("set_renderer_setting"))
+	else if (ToolName == TEXT("set_renderer_setting"))
 	{
 		FString PropName, Value;
-		if (!Params->TryGetStringField(TEXT("property"), PropName) ||
-			!Params->TryGetStringField(TEXT("value"), Value))
+		if (!UAgentFrameworkActionUtils::TryGetStringParam(Params, TEXT("property"), PropName, Result.Errors, true) ||
+			!UAgentFrameworkActionUtils::TryGetStringParam(Params, TEXT("value"), Value, Result.Errors, true))
 		{
-			Result.Errors.Add(TEXT("Missing 'property' or 'value' fields for set_renderer_setting."));
 			return Result;
 		}
 
 		URendererSettings* RendSettings = GetMutableDefault<URendererSettings>();
-		if (!RendSettings)
+		if (!IsValid(RendSettings))
 		{
 			Result.Errors.Add(TEXT("Could not get mutable URendererSettings."));
 			return Result;
@@ -651,21 +691,20 @@ FAgentFrameworkActionResult FAgentFrameworkPerformanceActions::ExecuteAction(con
 			TEXT("URendererSettings.%s = %s\nSaved to DefaultEngine.ini. Editor may require restart for some settings to take effect."),
 			*PropName, *Value);
 		Result.ModifiedPaths.Add(TEXT("Config/DefaultEngine.ini: [/Script/Engine.RendererSettings]"));
-		return Result;
 	}
 
 	// -----------------------------------------------------------------------
 	// 16. adjust_lumen_settings
 	// -----------------------------------------------------------------------
-	if (ToolName == TEXT("adjust_lumen_settings"))
+	else if (ToolName == TEXT("adjust_lumen_settings"))
 	{
 		double GIQuality = 1.0;
 		double ReflectionQuality = 1.0;
-		Params->TryGetNumberField(TEXT("gi_quality"), GIQuality);
-		Params->TryGetNumberField(TEXT("reflection_quality"), ReflectionQuality);
+		UAgentFrameworkActionUtils::TryGetDoubleParam(Params, TEXT("gi_quality"), GIQuality, Result.Errors, false);
+		UAgentFrameworkActionUtils::TryGetDoubleParam(Params, TEXT("reflection_quality"), ReflectionQuality, Result.Errors, false);
 
 		UWorld* World = GetEditorWorld();
-		if (!World)
+		if (!IsValid(World))
 		{
 			Result.Errors.Add(TEXT("No active editor world found."));
 			return Result;
@@ -674,15 +713,26 @@ FAgentFrameworkActionResult FAgentFrameworkPerformanceActions::ExecuteAction(con
 		APostProcessVolume* PPVolume = nullptr;
 		for (TActorIterator<APostProcessVolume> It(World); It; ++It)
 		{
-			PPVolume = *It;
-			break;
+			if (IsValid(*It))
+			{
+				PPVolume = *It;
+				break;
+			}
 		}
 
-		if (!PPVolume)
+		if (!IsValid(PPVolume))
 		{
 			PPVolume = World->SpawnActor<APostProcessVolume>();
-			PPVolume->SetActorLabel(TEXT("LumenPPVolume"));
-			PPVolume->bUnbound = true;
+			if (IsValid(PPVolume))
+			{
+				PPVolume->SetActorLabel(TEXT("LumenPPVolume"));
+				PPVolume->bUnbound = true;
+			}
+			else
+			{
+				Result.Errors.Add(TEXT("Failed to spawn APostProcessVolume."));
+				return Result;
+			}
 		}
 
 		PPVolume->Modify();
@@ -692,32 +742,31 @@ FAgentFrameworkActionResult FAgentFrameworkPerformanceActions::ExecuteAction(con
 		Settings.bOverride_ReflectionMethod = true;
 		Settings.ReflectionMethod = EReflectionMethod::Lumen;
 		Settings.bOverride_LumenSceneLightingQuality = true;
-		Settings.LumenSceneLightingQuality = GIQuality;
+		Settings.LumenSceneLightingQuality = static_cast<float>(GIQuality);
 		Settings.bOverride_LumenSceneDetail = true;
-		Settings.LumenSceneDetail = ReflectionQuality;
+		Settings.LumenSceneDetail = static_cast<float>(ReflectionQuality);
 
 		Result.bSuccess = true;
 		Result.ResultMessage = FString::Printf(TEXT("Adjusted Lumen settings on PostProcessVolume '%s'."), *PPVolume->GetName());
-		return Result;
 	}
 
 	// -----------------------------------------------------------------------
 	// 17. configure_hlod_setup
 	// -----------------------------------------------------------------------
-	if (ToolName == TEXT("configure_hlod_setup"))
+	else if (ToolName == TEXT("configure_hlod_setup"))
 	{
 		int32 NumHLODLevels = 3;
-		Params->TryGetNumberField(TEXT("num_hlod_levels"), NumHLODLevels);
+		UAgentFrameworkActionUtils::TryGetIntParam(Params, TEXT("num_hlod_levels"), NumHLODLevels, Result.Errors, false);
 
 		UWorld* World = GetEditorWorld();
-		if (!World)
+		if (!IsValid(World))
 		{
 			Result.Errors.Add(TEXT("No active editor world found."));
 			return Result;
 		}
 
 		AWorldSettings* WorldSettings = World->GetWorldSettings();
-		if (!WorldSettings)
+		if (!IsValid(WorldSettings))
 		{
 			Result.Errors.Add(TEXT("Failed to retrieve WorldSettings."));
 			return Result;
@@ -729,12 +778,34 @@ FAgentFrameworkActionResult FAgentFrameworkPerformanceActions::ExecuteAction(con
 
 		Result.bSuccess = true;
 		Result.ResultMessage = FString::Printf(TEXT("Configured HLOD setup: bGenerateSingleClusterForLevel=true, NumHLODLevels=%d."), NumHLODLevels);
-		return Result;
 	}
 
 	// -----------------------------------------------------------------------
 	// Unknown tool
 	// -----------------------------------------------------------------------
-	Result.Errors.Add(FString::Printf(TEXT("Unknown performance tool: '%s'"), *ToolName));
+	else
+	{
+		Result.Errors.Add(FString::Printf(TEXT("Unknown performance tool: '%s'"), *ToolName));
+	}
+
+	if (Result.bSuccess)
+	{
+		PlaySuccessSound();
+	}
+
 	return Result;
+}
+
+void FAgentFrameworkPerformanceActions::PlaySuccessSound()
+{
+#if WITH_EDITOR
+	if (GEditor && IsValid(GEditor))
+	{
+		USoundBase* SuccessSound = LoadObject<USoundBase>(nullptr, TEXT("/Engine/EditorSounds/Notifications/CompileSuccess.CompileSuccess"));
+		if (IsValid(SuccessSound))
+		{
+			GEditor->PlayEditorSound(SuccessSound);
+		}
+	}
+#endif
 }

@@ -1,29 +1,23 @@
 // Copyright 2026 AgentFramework. All Rights Reserved.
 
 #include "Level/AgentFrameworkLevelActions.h"
+#include "AgentFrameworkActionUtils.h"
 #include "AgentFrameworkCoreModule.h"
 #include "Editor.h"
-#include "EditorLevelUtils.h"
 #include "Engine/World.h"
 #include "GameFramework/Actor.h"
 #include "GameFramework/WorldSettings.h"
 #include "GameFramework/GameModeBase.h"
-#include "GameFramework/DefaultPawn.h"
-#include "Components/StaticMeshComponent.h"
-#include "Components/PointLightComponent.h"
-#include "Components/DirectionalLightComponent.h"
 #include "Engine/StaticMeshActor.h"
 #include "Engine/PointLight.h"
 #include "Engine/DirectionalLight.h"
 #include "Engine/Blueprint.h"
-#include "FileHelpers.h"
-#include "LevelEditor.h"
-#include "EditorActorFolders.h"
 #include "ScopedTransaction.h"
 #include "AssetToolsModule.h"
 #include "IAssetTools.h"
 #include "AssetRegistry/AssetRegistryModule.h"
 #include "UObject/SavePackage.h"
+#include "Sound/SoundBase.h"
 
 // World Partition
 #include "WorldPartition/WorldPartition.h"
@@ -76,18 +70,18 @@ TArray<FString> FAgentFrameworkLevelActions::GetSupportedToolNames() const
 bool FAgentFrameworkLevelActions::ValidateParams(const TSharedRef<FJsonObject>& Params, TArray<FString>& OutErrors) const
 {
 	FString ToolName;
-	Params->TryGetStringField(TEXT("_tool_name"), ToolName);
+	UAgentFrameworkActionUtils::TryGetStringParam(Params, TEXT("_tool_name"), ToolName, OutErrors, false);
 
 	if (ToolName == TEXT("spawn_actor"))
 	{
-		if (!Params->HasField(TEXT("class")))
+		FString ClassName;
+		if (!UAgentFrameworkActionUtils::TryGetStringParam(Params, TEXT("class"), ClassName, OutErrors, true))
 		{
-			OutErrors.Add(TEXT("Missing required field for spawn_actor: class"));
 			return false;
 		}
 	}
 
-	return true;
+	return OutErrors.Num() == 0;
 }
 
 FAgentFrameworkActionResult FAgentFrameworkLevelActions::ExecuteAction(const TSharedRef<FJsonObject>& Params)
@@ -97,7 +91,7 @@ FAgentFrameworkActionResult FAgentFrameworkLevelActions::ExecuteAction(const TSh
 	FAgentFrameworkActionResult Result;
 	Result.bSuccess = false;
 
-	if (!GEditor)
+	if (!IsValid(GEditor))
 	{
 		Result.Errors.Add(TEXT("Editor not available."));
 		Transaction.Cancel();
@@ -105,7 +99,7 @@ FAgentFrameworkActionResult FAgentFrameworkLevelActions::ExecuteAction(const TSh
 	}
 
 	UWorld* World = GEditor->GetEditorWorldContext().World();
-	if (!World)
+	if (!IsValid(World))
 	{
 		Result.Errors.Add(TEXT("No world loaded."));
 		Transaction.Cancel();
@@ -115,7 +109,7 @@ FAgentFrameworkActionResult FAgentFrameworkLevelActions::ExecuteAction(const TSh
 	World->Modify();
 
 	FString ToolName;
-	Params->TryGetStringField(TEXT("_tool_name"), ToolName);
+	UAgentFrameworkActionUtils::TryGetStringParam(Params, TEXT("_tool_name"), ToolName, Result.Errors, false);
 
 	if (ToolName == TEXT("spawn_actor"))                  Result = ExecuteSpawnActor(Params, World);
 	else if (ToolName == TEXT("place_light"))             Result = ExecutePlaceLight(Params, World);
@@ -134,7 +128,7 @@ FAgentFrameworkActionResult FAgentFrameworkLevelActions::ExecuteAction(const TSh
 	{
 		// Legacy fallback
 		FString Action;
-		if (Params->TryGetStringField(TEXT("action"), Action))
+		if (UAgentFrameworkActionUtils::TryGetStringParam(Params, TEXT("action"), Action, Result.Errors, false) && !Action.IsEmpty())
 		{
 			if (Action == TEXT("spawn_actor")) Result = ExecuteSpawnActor(Params, World);
 			else if (Action == TEXT("place_light")) Result = ExecutePlaceLight(Params, World);
@@ -146,7 +140,11 @@ FAgentFrameworkActionResult FAgentFrameworkLevelActions::ExecuteAction(const TSh
 		}
 	}
 
-	if (!Result.bSuccess)
+	if (Result.bSuccess)
+	{
+		PlaySuccessSound();
+	}
+	else
 	{
 		Transaction.Cancel();
 	}
@@ -159,28 +157,33 @@ FAgentFrameworkActionResult FAgentFrameworkLevelActions::ExecuteSpawnActor(const
 	FAgentFrameworkActionResult Result;
 	Result.bSuccess = false;
 
-	FString ClassName;
-	if (!Params->TryGetStringField(TEXT("class"), ClassName))
+	if (!IsValid(World))
 	{
-		Result.Errors.Add(TEXT("Missing 'class' field for spawn_actor."));
+		Result.Errors.Add(TEXT("World is invalid."));
+		return Result;
+	}
+
+	FString ClassName;
+	if (!UAgentFrameworkActionUtils::TryGetStringParam(Params, TEXT("class"), ClassName, Result.Errors, true))
+	{
 		return Result;
 	}
 
 	FVector Location = FVector::ZeroVector;
 	FRotator Rotation = FRotator::ZeroRotator;
 	const TSharedPtr<FJsonObject>* LocObj = nullptr;
-	if (Params->TryGetObjectField(TEXT("location"), LocObj))
+	if (UAgentFrameworkActionUtils::TryGetObjectParam(Params, TEXT("location"), LocObj, Result.Errors, false) && LocObj && LocObj->IsValid())
 	{
-		(*LocObj)->TryGetNumberField(TEXT("x"), Location.X);
-		(*LocObj)->TryGetNumberField(TEXT("y"), Location.Y);
-		(*LocObj)->TryGetNumberField(TEXT("z"), Location.Z);
+		UAgentFrameworkActionUtils::TryGetDoubleParam(*LocObj, TEXT("x"), Location.X, Result.Errors, false);
+		UAgentFrameworkActionUtils::TryGetDoubleParam(*LocObj, TEXT("y"), Location.Y, Result.Errors, false);
+		UAgentFrameworkActionUtils::TryGetDoubleParam(*LocObj, TEXT("z"), Location.Z, Result.Errors, false);
 	}
 	const TSharedPtr<FJsonObject>* RotObj = nullptr;
-	if (Params->TryGetObjectField(TEXT("rotation"), RotObj))
+	if (UAgentFrameworkActionUtils::TryGetObjectParam(Params, TEXT("rotation"), RotObj, Result.Errors, false) && RotObj && RotObj->IsValid())
 	{
-		(*RotObj)->TryGetNumberField(TEXT("pitch"), Rotation.Pitch);
-		(*RotObj)->TryGetNumberField(TEXT("yaw"), Rotation.Yaw);
-		(*RotObj)->TryGetNumberField(TEXT("roll"), Rotation.Roll);
+		UAgentFrameworkActionUtils::TryGetDoubleParam(*RotObj, TEXT("pitch"), Rotation.Pitch, Result.Errors, false);
+		UAgentFrameworkActionUtils::TryGetDoubleParam(*RotObj, TEXT("yaw"), Rotation.Yaw, Result.Errors, false);
+		UAgentFrameworkActionUtils::TryGetDoubleParam(*RotObj, TEXT("roll"), Rotation.Roll, Result.Errors, false);
 	}
 
 	// Resolve class: built-in names or Blueprint content paths
@@ -190,7 +193,7 @@ FAgentFrameworkActionResult FAgentFrameworkLevelActions::ExecuteSpawnActor(const
 	if (ClassName.StartsWith(TEXT("/Game/")) || ClassName.StartsWith(TEXT("/Script/")))
 	{
 		UBlueprint* BP = LoadObject<UBlueprint>(nullptr, *ClassName);
-		if (BP && BP->GeneratedClass)
+		if (IsValid(BP) && IsValid(BP->GeneratedClass))
 		{
 			ActorClass = BP->GeneratedClass;
 		}
@@ -201,13 +204,13 @@ FAgentFrameworkActionResult FAgentFrameworkLevelActions::ExecuteSpawnActor(const
 		}
 	}
 
-	if (!ActorClass)
+	if (!IsValid(ActorClass))
 	{
 		// Try built-in class names
 		ActorClass = FindFirstObject<UClass>(*ClassName, EFindFirstObjectOptions::None);
 	}
 
-	if (!ActorClass)
+	if (!IsValid(ActorClass))
 	{
 		if (ClassName == TEXT("StaticMeshActor")) ActorClass = AStaticMeshActor::StaticClass();
 		else if (ClassName == TEXT("PointLight")) ActorClass = APointLight::StaticClass();
@@ -215,20 +218,20 @@ FAgentFrameworkActionResult FAgentFrameworkLevelActions::ExecuteSpawnActor(const
 		else if (ClassName == TEXT("PlayerStart"))
 		{
 			ActorClass = FindFirstObject<UClass>(TEXT("PlayerStart"), EFindFirstObjectOptions::None);
-			if (!ActorClass) ActorClass = AActor::StaticClass();
+			if (!IsValid(ActorClass)) ActorClass = AActor::StaticClass();
 		}
 		else ActorClass = AActor::StaticClass();
 	}
 
 	FActorSpawnParameters SpawnParams;
 	FString ActorLabel;
-	if (Params->TryGetStringField(TEXT("label"), ActorLabel))
+	if (UAgentFrameworkActionUtils::TryGetStringParam(Params, TEXT("label"), ActorLabel, Result.Errors, false) && !ActorLabel.IsEmpty())
 	{
 		SpawnParams.Name = FName(*ActorLabel);
 	}
 
 	AActor* NewActor = World->SpawnActor<AActor>(ActorClass, Location, Rotation, SpawnParams);
-	if (NewActor)
+	if (IsValid(NewActor))
 	{
 		if (!ActorLabel.IsEmpty())
 		{
@@ -251,23 +254,29 @@ FAgentFrameworkActionResult FAgentFrameworkLevelActions::ExecutePlaceLight(const
 	FAgentFrameworkActionResult Result;
 	Result.bSuccess = false;
 
+	if (!IsValid(World))
+	{
+		Result.Errors.Add(TEXT("World is invalid."));
+		return Result;
+	}
+
 	FString LightType = TEXT("PointLight");
-	Params->TryGetStringField(TEXT("light_type"), LightType);
+	UAgentFrameworkActionUtils::TryGetStringParam(Params, TEXT("light_type"), LightType, Result.Errors, false);
 
 	FVector Location = FVector::ZeroVector;
 	const TSharedPtr<FJsonObject>* LocObj = nullptr;
-	if (Params->TryGetObjectField(TEXT("location"), LocObj))
+	if (UAgentFrameworkActionUtils::TryGetObjectParam(Params, TEXT("location"), LocObj, Result.Errors, false) && LocObj && LocObj->IsValid())
 	{
-		(*LocObj)->TryGetNumberField(TEXT("x"), Location.X);
-		(*LocObj)->TryGetNumberField(TEXT("y"), Location.Y);
-		(*LocObj)->TryGetNumberField(TEXT("z"), Location.Z);
+		UAgentFrameworkActionUtils::TryGetDoubleParam(*LocObj, TEXT("x"), Location.X, Result.Errors, false);
+		UAgentFrameworkActionUtils::TryGetDoubleParam(*LocObj, TEXT("y"), Location.Y, Result.Errors, false);
+		UAgentFrameworkActionUtils::TryGetDoubleParam(*LocObj, TEXT("z"), Location.Z, Result.Errors, false);
 	}
 
 	UClass* LightClass = APointLight::StaticClass();
 	if (LightType == TEXT("DirectionalLight")) LightClass = ADirectionalLight::StaticClass();
 
 	AActor* Light = World->SpawnActor<AActor>(LightClass, Location, FRotator::ZeroRotator);
-	if (Light)
+	if (IsValid(Light))
 	{
 		Result.bSuccess = true;
 		Result.ResultMessage = FString::Printf(TEXT("Placed %s at %s"), *LightType, *Location.ToString());
@@ -285,8 +294,14 @@ FAgentFrameworkActionResult FAgentFrameworkLevelActions::ExecuteModifyWorldSetti
 	FAgentFrameworkActionResult Result;
 	Result.bSuccess = false;
 
+	if (!IsValid(World))
+	{
+		Result.Errors.Add(TEXT("World is invalid."));
+		return Result;
+	}
+
 	AWorldSettings* WorldSettings = World->GetWorldSettings();
-	if (!WorldSettings)
+	if (!IsValid(WorldSettings))
 	{
 		Result.Errors.Add(TEXT("Could not access World Settings."));
 		return Result;
@@ -298,7 +313,7 @@ FAgentFrameworkActionResult FAgentFrameworkLevelActions::ExecuteModifyWorldSetti
 
 	// Game Mode Override
 	FString GameModeOverride;
-	if (Params->TryGetStringField(TEXT("game_mode_override"), GameModeOverride))
+	if (UAgentFrameworkActionUtils::TryGetStringParam(Params, TEXT("game_mode_override"), GameModeOverride, Result.Errors, false) && !GameModeOverride.IsEmpty())
 	{
 		UClass* GameModeClass = nullptr;
 
@@ -306,7 +321,7 @@ FAgentFrameworkActionResult FAgentFrameworkLevelActions::ExecuteModifyWorldSetti
 		if (GameModeOverride.StartsWith(TEXT("/Game/")) || GameModeOverride.StartsWith(TEXT("/Script/")))
 		{
 			UBlueprint* BP = LoadObject<UBlueprint>(nullptr, *GameModeOverride);
-			if (BP && BP->GeneratedClass && BP->GeneratedClass->IsChildOf(AGameModeBase::StaticClass()))
+			if (IsValid(BP) && IsValid(BP->GeneratedClass) && BP->GeneratedClass->IsChildOf(AGameModeBase::StaticClass()))
 			{
 				GameModeClass = BP->GeneratedClass;
 			}
@@ -317,13 +332,13 @@ FAgentFrameworkActionResult FAgentFrameworkLevelActions::ExecuteModifyWorldSetti
 			}
 		}
 
-		if (!GameModeClass)
+		if (!IsValid(GameModeClass))
 		{
 			// Try by name
 			GameModeClass = FindFirstObject<UClass>(*GameModeOverride, EFindFirstObjectOptions::None);
 		}
 
-		if (GameModeClass && GameModeClass->IsChildOf(AGameModeBase::StaticClass()))
+		if (IsValid(GameModeClass) && GameModeClass->IsChildOf(AGameModeBase::StaticClass()))
 		{
 			WorldSettings->DefaultGameMode = TSubclassOf<AGameModeBase>(GameModeClass);
 			Changes.Add(FString::Printf(TEXT("GameMode override set to %s"), *GameModeClass->GetName()));
@@ -336,14 +351,14 @@ FAgentFrameworkActionResult FAgentFrameworkLevelActions::ExecuteModifyWorldSetti
 
 	// Default Pawn Class (on the GameMode CDO if accessible)
 	FString DefaultPawnClass;
-	if (Params->TryGetStringField(TEXT("default_pawn_class"), DefaultPawnClass))
+	if (UAgentFrameworkActionUtils::TryGetStringParam(Params, TEXT("default_pawn_class"), DefaultPawnClass, Result.Errors, false) && !DefaultPawnClass.IsEmpty())
 	{
 		Result.Warnings.Add(TEXT("default_pawn_class should be set on the GameMode Blueprint's defaults using set_blueprint_defaults tool instead."));
 	}
 
 	// Kill Z
-	double KillZ;
-	if (Params->TryGetNumberField(TEXT("kill_z"), KillZ))
+	double KillZ = 0.0;
+	if (Params->HasField(TEXT("kill_z")) && UAgentFrameworkActionUtils::TryGetDoubleParam(Params, TEXT("kill_z"), KillZ, Result.Errors, false))
 	{
 		WorldSettings->KillZ = KillZ;
 		Changes.Add(FString::Printf(TEXT("KillZ set to %.1f"), KillZ));
@@ -368,8 +383,14 @@ FAgentFrameworkActionResult FAgentFrameworkLevelActions::ExecuteModifyWorldSetti
 FAgentFrameworkActionResult FAgentFrameworkLevelActions::ExecuteConfigureWorldPartition(const TSharedRef<FJsonObject>& Params, UWorld* World)
 {
 	FAgentFrameworkActionResult Result;
+	if (!IsValid(World))
+	{
+		Result.Errors.Add(TEXT("World is invalid."));
+		return Result;
+	}
+
 	UWorldPartition* WorldPartition = World->GetWorldPartition();
-	if (!WorldPartition)
+	if (!IsValid(WorldPartition))
 	{
 		Result.Errors.Add(TEXT("World Partition is not enabled/supported in the current world."));
 		return Result;
@@ -386,11 +407,16 @@ FAgentFrameworkActionResult FAgentFrameworkLevelActions::ExecuteConfigureWorldPa
 FAgentFrameworkActionResult FAgentFrameworkLevelActions::ExecuteCreateFoliageType(const TSharedRef<FJsonObject>& Params, UWorld* World)
 {
 	FAgentFrameworkActionResult Result;
-	FString AssetPath = Params->GetStringField(TEXT("asset_path"));
-	FString StaticMeshPath = Params->GetStringField(TEXT("static_mesh_path"));
+	FString AssetPath, StaticMeshPath;
+
+	if (!UAgentFrameworkActionUtils::TryGetStringParam(Params, TEXT("asset_path"), AssetPath, Result.Errors, true) ||
+		!UAgentFrameworkActionUtils::TryGetStringParam(Params, TEXT("static_mesh_path"), StaticMeshPath, Result.Errors, true))
+	{
+		return Result;
+	}
 
 	UStaticMesh* StaticMesh = LoadObject<UStaticMesh>(nullptr, *StaticMeshPath);
-	if (!StaticMesh)
+	if (!IsValid(StaticMesh))
 	{
 		Result.Errors.Add(FString::Printf(TEXT("StaticMesh not found: '%s'"), *StaticMeshPath));
 		return Result;
@@ -402,7 +428,7 @@ FAgentFrameworkActionResult FAgentFrameworkLevelActions::ExecuteCreateFoliageTyp
 	UFoliageType_InstancedStaticMesh* FoliageType = Cast<UFoliageType_InstancedStaticMesh>(
 		AssetTools.CreateAsset(AssetName, PackagePath, UFoliageType_InstancedStaticMesh::StaticClass(), nullptr));
 
-	if (!FoliageType)
+	if (!IsValid(FoliageType))
 	{
 		Result.Errors.Add(FString::Printf(TEXT("Failed to create Foliage Type asset at '%s'."), *AssetPath));
 		return Result;
@@ -412,13 +438,16 @@ FAgentFrameworkActionResult FAgentFrameworkLevelActions::ExecuteCreateFoliageTyp
 	FoliageType->SetStaticMesh(StaticMesh);
 
 	UPackage* Package = FoliageType->GetOutermost();
-	Package->MarkPackageDirty();
-	FString PackageFilename;
-	if (FPackageName::TryConvertLongPackageNameToFilename(Package->GetName(), PackageFilename, FPackageName::GetAssetPackageExtension()))
+	if (IsValid(Package))
 	{
-		FSavePackageArgs SaveArgs;
-		SaveArgs.TopLevelFlags = RF_Standalone;
-		UPackage::SavePackage(Package, FoliageType, *PackageFilename, SaveArgs);
+		Package->MarkPackageDirty();
+		FString PackageFilename;
+		if (FPackageName::TryConvertLongPackageNameToFilename(Package->GetName(), PackageFilename, FPackageName::GetAssetPackageExtension()))
+		{
+			FSavePackageArgs SaveArgs;
+			SaveArgs.TopLevelFlags = RF_Standalone;
+			UPackage::SavePackage(Package, FoliageType, *PackageFilename, SaveArgs);
+		}
 	}
 	FAssetRegistryModule::AssetCreated(FoliageType);
 
@@ -432,16 +461,27 @@ FAgentFrameworkActionResult FAgentFrameworkLevelActions::ExecutePaintFoliageBrus
 {
 	FAgentFrameworkActionResult Result;
 #if WITH_EDITOR
-	FString FoliageTypePath = Params->GetStringField(TEXT("foliage_type_path"));
+	FString FoliageTypePath;
+	if (!UAgentFrameworkActionUtils::TryGetStringParam(Params, TEXT("foliage_type_path"), FoliageTypePath, Result.Errors, true))
+	{
+		return Result;
+	}
+
 	UFoliageType* FoliageType = LoadObject<UFoliageType>(nullptr, *FoliageTypePath);
-	if (!FoliageType)
+	if (!IsValid(FoliageType))
 	{
 		Result.Errors.Add(FString::Printf(TEXT("FoliageType not found: '%s'"), *FoliageTypePath));
 		return Result;
 	}
 
+	if (!IsValid(World))
+	{
+		Result.Errors.Add(TEXT("World is invalid."));
+		return Result;
+	}
+
 	AInstancedFoliageActor* IFA = AInstancedFoliageActor::GetInstancedFoliageActorForCurrentLevel(World, true);
-	if (!IFA)
+	if (!IsValid(IFA))
 	{
 		Result.Errors.Add(TEXT("Failed to retrieve or spawn InstancedFoliageActor."));
 		return Result;
@@ -485,11 +525,17 @@ FAgentFrameworkActionResult FAgentFrameworkLevelActions::ExecutePaintFoliageBrus
 FAgentFrameworkActionResult FAgentFrameworkLevelActions::ExecuteCreateLandscape(const TSharedRef<FJsonObject>& Params, UWorld* World)
 {
 	FAgentFrameworkActionResult Result;
+	if (!IsValid(World))
+	{
+		Result.Errors.Add(TEXT("World is invalid."));
+		return Result;
+	}
+
 	FString MaterialPath;
-	Params->TryGetStringField(TEXT("material_path"), MaterialPath);
+	UAgentFrameworkActionUtils::TryGetStringParam(Params, TEXT("material_path"), MaterialPath, Result.Errors, false);
 
 	ALandscape* Landscape = World->SpawnActor<ALandscape>();
-	if (!Landscape)
+	if (!IsValid(Landscape))
 	{
 		Result.Errors.Add(TEXT("Failed to spawn ALandscape actor."));
 		return Result;
@@ -499,7 +545,7 @@ FAgentFrameworkActionResult FAgentFrameworkLevelActions::ExecuteCreateLandscape(
 	if (!MaterialPath.IsEmpty())
 	{
 		UMaterialInterface* Mat = LoadObject<UMaterialInterface>(nullptr, *MaterialPath);
-		if (Mat)
+		if (IsValid(Mat))
 		{
 			Landscape->LandscapeMaterial = Mat;
 		}
@@ -513,11 +559,16 @@ FAgentFrameworkActionResult FAgentFrameworkLevelActions::ExecuteCreateLandscape(
 FAgentFrameworkActionResult FAgentFrameworkLevelActions::ExecuteCreateLandscapeGrassType(const TSharedRef<FJsonObject>& Params, UWorld* World)
 {
 	FAgentFrameworkActionResult Result;
-	FString AssetPath = Params->GetStringField(TEXT("asset_path"));
-	FString StaticMeshPath = Params->GetStringField(TEXT("static_mesh_path"));
+	FString AssetPath, StaticMeshPath;
+
+	if (!UAgentFrameworkActionUtils::TryGetStringParam(Params, TEXT("asset_path"), AssetPath, Result.Errors, true) ||
+		!UAgentFrameworkActionUtils::TryGetStringParam(Params, TEXT("static_mesh_path"), StaticMeshPath, Result.Errors, true))
+	{
+		return Result;
+	}
 
 	UStaticMesh* StaticMesh = LoadObject<UStaticMesh>(nullptr, *StaticMeshPath);
-	if (!StaticMesh)
+	if (!IsValid(StaticMesh))
 	{
 		Result.Errors.Add(FString::Printf(TEXT("StaticMesh not found: '%s'"), *StaticMeshPath));
 		return Result;
@@ -529,7 +580,7 @@ FAgentFrameworkActionResult FAgentFrameworkLevelActions::ExecuteCreateLandscapeG
 	ULandscapeGrassType* GrassType = Cast<ULandscapeGrassType>(
 		AssetTools.CreateAsset(AssetName, PackagePath, ULandscapeGrassType::StaticClass(), nullptr));
 
-	if (!GrassType)
+	if (!IsValid(GrassType))
 	{
 		Result.Errors.Add(FString::Printf(TEXT("Failed to create Landscape Grass Type asset at '%s'."), *AssetPath));
 		return Result;
@@ -546,13 +597,16 @@ FAgentFrameworkActionResult FAgentFrameworkLevelActions::ExecuteCreateLandscapeG
 	GrassType->GrassVarieties.Add(Variety);
 
 	UPackage* Package = GrassType->GetOutermost();
-	Package->MarkPackageDirty();
-	FString PackageFilename;
-	if (FPackageName::TryConvertLongPackageNameToFilename(Package->GetName(), PackageFilename, FPackageName::GetAssetPackageExtension()))
+	if (IsValid(Package))
 	{
-		FSavePackageArgs SaveArgs;
-		SaveArgs.TopLevelFlags = RF_Standalone;
-		UPackage::SavePackage(Package, GrassType, *PackageFilename, SaveArgs);
+		Package->MarkPackageDirty();
+		FString PackageFilename;
+		if (FPackageName::TryConvertLongPackageNameToFilename(Package->GetName(), PackageFilename, FPackageName::GetAssetPackageExtension()))
+		{
+			FSavePackageArgs SaveArgs;
+			SaveArgs.TopLevelFlags = RF_Standalone;
+			UPackage::SavePackage(Package, GrassType, *PackageFilename, SaveArgs);
+		}
 	}
 	FAssetRegistryModule::AssetCreated(GrassType);
 
@@ -565,10 +619,20 @@ FAgentFrameworkActionResult FAgentFrameworkLevelActions::ExecuteCreateLandscapeG
 FAgentFrameworkActionResult FAgentFrameworkLevelActions::ExecuteCreateLevelInstance(const TSharedRef<FJsonObject>& Params, UWorld* World)
 {
 	FAgentFrameworkActionResult Result;
-	FString LevelAssetPath = Params->GetStringField(TEXT("level_asset_path"));
+	if (!IsValid(World))
+	{
+		Result.Errors.Add(TEXT("World is invalid."));
+		return Result;
+	}
+
+	FString LevelAssetPath;
+	if (!UAgentFrameworkActionUtils::TryGetStringParam(Params, TEXT("level_asset_path"), LevelAssetPath, Result.Errors, true))
+	{
+		return Result;
+	}
 
 	ALevelInstance* LevelInstance = World->SpawnActor<ALevelInstance>();
-	if (!LevelInstance)
+	if (!IsValid(LevelInstance))
 	{
 		Result.Errors.Add(TEXT("Failed to spawn ALevelInstance actor."));
 		return Result;
@@ -587,8 +651,14 @@ FAgentFrameworkActionResult FAgentFrameworkLevelActions::ExecuteCreateLevelInsta
 FAgentFrameworkActionResult FAgentFrameworkLevelActions::ExecuteCreatePackedLevelActor(const TSharedRef<FJsonObject>& Params, UWorld* World)
 {
 	FAgentFrameworkActionResult Result;
+	if (!IsValid(World))
+	{
+		Result.Errors.Add(TEXT("World is invalid."));
+		return Result;
+	}
+
 	APackedLevelActor* PackedActor = World->SpawnActor<APackedLevelActor>();
-	if (!PackedActor)
+	if (!IsValid(PackedActor))
 	{
 		Result.Errors.Add(TEXT("Failed to spawn APackedLevelActor."));
 		return Result;
@@ -602,8 +672,14 @@ FAgentFrameworkActionResult FAgentFrameworkLevelActions::ExecuteCreatePackedLeve
 FAgentFrameworkActionResult FAgentFrameworkLevelActions::ExecuteSetupCineCameraRigRail(const TSharedRef<FJsonObject>& Params, UWorld* World)
 {
 	FAgentFrameworkActionResult Result;
+	if (!IsValid(World))
+	{
+		Result.Errors.Add(TEXT("World is invalid."));
+		return Result;
+	}
+
 	ACineCameraRigRail* RigRail = World->SpawnActor<ACineCameraRigRail>();
-	if (!RigRail)
+	if (!IsValid(RigRail))
 	{
 		Result.Errors.Add(TEXT("Failed to spawn ACineCameraRigRail."));
 		return Result;
@@ -619,10 +695,14 @@ FAgentFrameworkActionResult FAgentFrameworkLevelActions::ExecuteSetupCineCameraR
 FAgentFrameworkActionResult FAgentFrameworkLevelActions::ExecuteSetupDMXPatch(const TSharedRef<FJsonObject>& Params, UWorld* World)
 {
 	FAgentFrameworkActionResult Result;
-	FString DMXLibraryPath = Params->GetStringField(TEXT("dmx_library_path"));
+	FString DMXLibraryPath;
+	if (!UAgentFrameworkActionUtils::TryGetStringParam(Params, TEXT("dmx_library_path"), DMXLibraryPath, Result.Errors, true))
+	{
+		return Result;
+	}
 
 	UDMXLibrary* DMXLibrary = LoadObject<UDMXLibrary>(nullptr, *DMXLibraryPath);
-	if (!DMXLibrary)
+	if (!IsValid(DMXLibrary))
 	{
 		Result.Errors.Add(FString::Printf(TEXT("DMX Library not found: '%s'"), *DMXLibraryPath));
 		return Result;
@@ -639,7 +719,7 @@ FAgentFrameworkActionResult FAgentFrameworkLevelActions::ExecuteSetupChaosVehicl
 {
 	FAgentFrameworkActionResult Result;
 	UChaosWheeledVehicleMovementComponent* Comp = NewObject<UChaosWheeledVehicleMovementComponent>();
-	if (!Comp)
+	if (!IsValid(Comp))
 	{
 		Result.Errors.Add(TEXT("Failed to instantiate UChaosWheeledVehicleMovementComponent."));
 		return Result;
@@ -650,3 +730,16 @@ FAgentFrameworkActionResult FAgentFrameworkLevelActions::ExecuteSetupChaosVehicl
 	return Result;
 }
 
+void FAgentFrameworkLevelActions::PlaySuccessSound()
+{
+#if WITH_EDITOR
+	if (IsValid(GEditor))
+	{
+		USoundBase* SuccessSound = LoadObject<USoundBase>(nullptr, TEXT("/Engine/EditorSounds/Notifications/CompileSuccess.CompileSuccess"));
+		if (IsValid(SuccessSound))
+		{
+			GEditor->PlayEditorSound(SuccessSound);
+		}
+	}
+#endif
+}

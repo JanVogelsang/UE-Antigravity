@@ -1,6 +1,6 @@
----
+﻿---
 name: unreal-instructions
-description: Master routing guide for Unreal Engine Dual-MCP ecosystem and skills.
+description: REQUIRED ENTRY POINT for ALL Unreal Engine tasks. Must trigger for UE5, Blueprints, C++, UMG, Editor, UObject, multiplayer, compilation, or any engine interaction.
 ---
 # Unreal Engine MCP Guide
 
@@ -15,18 +15,16 @@ description: Master routing guide for Unreal Engine Dual-MCP ecosystem and skill
 <!-- LOCAL_ENV_START -->
 ## 2. Local Environment & Workflows
 
-### Startup Requirement
-When this plugin first loads, you **MUST** call `ask_permission` with:
-- `Action`: `"unsandboxed"`
-- `Target`: `"C:\Program Files\Epic Games\UE_5.8\Engine\Binaries\Win64\UnrealEditor.exe"`
-
-This grants the ability to launch the Unreal Editor process outside the terminal sandbox. Do this proactively before any editor interaction is needed.
+### Startup Requirement (Sandbox Pre-Authorization)
+Launching the Unreal Editor spawns a long-lived GUI process outside the terminal sandbox. How to authorize this depends on your agent harness:
+- **If your harness provides an `ask_permission` tool (e.g. Antigravity):** When this plugin first loads, proactively call `ask_permission` with `Action`: `"unsandboxed"` and `Target`: `"C:\Program Files\Epic Games\UE_5.8\Engine\Binaries\Win64\UnrealEditor.exe"` before any editor interaction is needed.
+- **If it does not (e.g. Claude Code, OpenAI Codex, Kilo Code):** Skip this step entirely — do NOT search for or attempt to call `ask_permission`. Launching the editor goes through your harness's standard permission flow: the launch command itself will prompt for approval unless the installer already pre-approved it (e.g. via `.claude/settings.json` allow rules or your assistant's command allowlist).
 
 ### Local Paths
-- **Unreal Engine Root:** C:/Program Files/Epic Games/UE_5.8
+- **Unreal Engine Root:** C:\Program Files\Epic Games\UE_5.8
 - **Unreal Editor Executable:** C:\Program Files\Epic Games\UE_5.8\Engine\Binaries\Win64\UnrealEditor.exe
 - **Unreal Build Tool:** C:\Program Files\Epic Games\UE_5.8\Engine\Build\BatchFiles\Build.bat
-- **Unreal Project File:** C:\Users\janv1\Documents\Unreal Projects\tau-game\Tau.uproject
+- **Unreal Project File:** C:\Users\janv1\Documents\Unreal Projects\AgentFrameworkTest\AgentFrameworkTest.uproject
 - **EOS DevAuthTool:** C:\Program Files\EOS_DevAuthTool\EOS_DevAuthTool.exe
 
 ### Developer Tool Workflows
@@ -40,25 +38,25 @@ Wait until the user has interacted with the opened EOS_DevAuthTool window (e.g. 
 #### 2. Building the Project
 To compile the C++ code and binaries for the editor (e.g. when editor is closed, to prevent out-of-date binaries preventing launch):
 ```powershell
-Start-Process -FilePath "C:\Program Files\Epic Games\UE_5.8\Engine\Build\BatchFiles\Build.bat" -ArgumentList "TauEditor", "Win64", "Development", '"C:\Users\janv1\Documents\Unreal Projects\tau-game\Tau.uproject"', "-WaitMutex" -Wait -NoNewWindow
+Start-Process -FilePath "C:\Program Files\Epic Games\UE_5.8\Engine\Build\BatchFiles\Build.bat" -ArgumentList "AgentFrameworkTestEditor", "Win64", "Development", '"C:\Users\janv1\Documents\Unreal Projects\AgentFrameworkTest\AgentFrameworkTest.uproject"', "-WaitMutex" -Wait -NoNewWindow
 ```
 
 #### 3. Launching the Unreal Editor
 ##### A. Standard Launch (Default / Single-player / Local Testing)
 Launch the editor without online/EOS arguments (DevAuthTool is not required):
 ```powershell
-Invoke-CimMethod -ClassName Win32_Process -MethodName Create -Arguments @{ CommandLine = '"C:\Program Files\Epic Games\UE_5.8\Engine\Binaries\Win64\UnrealEditor.exe" "C:\Users\janv1\Documents\Unreal Projects\tau-game\Tau.uproject"' }
+Invoke-CimMethod -ClassName Win32_Process -MethodName Create -Arguments @{ CommandLine = '"C:\Program Files\Epic Games\UE_5.8\Engine\Binaries\Win64\UnrealEditor.exe" "C:\Users\janv1\Documents\Unreal Projects\AgentFrameworkTest\AgentFrameworkTest.uproject"' }
 ```
 
 ##### B. Multiplayer / EOS Launch (Only when testing multiplayer or explicitly requested)
 Start the EOS DevAuthTool first, then launch the editor with developer authentication arguments:
 ```powershell
-Invoke-CimMethod -ClassName Win32_Process -MethodName Create -Arguments @{ CommandLine = '"C:\Program Files\Epic Games\UE_5.8\Engine\Binaries\Win64\UnrealEditor.exe" "C:\Users\janv1\Documents\Unreal Projects\tau-game\Tau.uproject" -CustomConfig=EOS -AUTH_TYPE=developer -AUTH_LOGIN=localhost:8080 -AUTH_PASSWORD=TauDev' }
+Invoke-CimMethod -ClassName Win32_Process -MethodName Create -Arguments @{ CommandLine = '"C:\Program Files\Epic Games\UE_5.8\Engine\Binaries\Win64\UnrealEditor.exe" "C:\Users\janv1\Documents\Unreal Projects\AgentFrameworkTest\AgentFrameworkTest.uproject" -CustomConfig=EOS -AUTH_TYPE=developer -AUTH_LOGIN=localhost:8080 -AUTH_PASSWORD=TauDev' }
 ```
 <!-- LOCAL_ENV_END -->
 
 ## 3. Skills Directory
-Read the corresponding file via `view_file` when performing these tasks:
+Read the corresponding file with your harness's native file-reading tool (`view_file` in Antigravity, `Read` in Claude Code, or equivalent) when performing these tasks:
 - [blueprint-authoring](../blueprint-authoring/SKILL.md): Modifying `.uasset` blueprints (nodes, variables, formatting).
 - [setup-replication](../setup-replication/SKILL.md): Network replication, RPCs, and RepNotify.
 - [add-component](../add-component/SKILL.md): Declaring/attaching UActorComponents in C++.
@@ -68,4 +66,5 @@ Read the corresponding file via `view_file` when performing these tasks:
 - [create-actor](../create-actor/SKILL.md): Boilerplate for new Actor/Pawn C++ classes.
 - [create-interface](../create-interface/SKILL.md): Blueprint and C++ interface creation.
 - [pie-verifier](../pie-verifier/SKILL.md): Play-In-Editor (PIE) state and viewport checks.
+
 

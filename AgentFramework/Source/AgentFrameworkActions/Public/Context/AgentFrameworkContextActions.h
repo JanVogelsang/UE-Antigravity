@@ -30,4 +30,7 @@ private:
     FAgentFrameworkActionResult ExecuteListDirectory(const TSharedRef<FJsonObject>& Params, FAgentFrameworkActionResult& Result);
     FAgentFrameworkActionResult ExecuteReadFileSnippet(const TSharedRef<FJsonObject>& Params, FAgentFrameworkActionResult& Result);
     FAgentFrameworkActionResult ExecuteActivateSkill(const TSharedRef<FJsonObject>& Params, FAgentFrameworkActionResult& Result);
+    FAgentFrameworkActionResult ExecuteEnforceNamingConventions(const TSharedRef<FJsonObject>& Params, FAgentFrameworkActionResult& Result);
+    FAgentFrameworkActionResult ExecuteOrganizeAssetsByType(const TSharedRef<FJsonObject>& Params, FAgentFrameworkActionResult& Result);
+    FAgentFrameworkActionResult ExecuteConsolidateAssetReferences(const TSharedRef<FJsonObject>& Params, FAgentFrameworkActionResult& Result);
 };

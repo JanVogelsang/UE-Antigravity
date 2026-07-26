@@ -16,9 +16,9 @@
 #include "K2Node_CallFunction.h"
 #include "K2Node_FunctionEntry.h"
 #include "K2Node_FunctionResult.h"
-#include "K2Node_VariableGet.h"
-#include "K2Node_VariableSet.h"
 #include "K2Node_CustomEvent.h"
+#include "AgentFrameworkActionUtils.h"
+#include "Sound/SoundBase.h"
 #include "K2Node_EnhancedInputAction.h"
 #include "InputAction.h"
 
@@ -36,6 +36,10 @@
 #include "GameFramework/Pawn.h"
 #include "GameFramework/GameModeBase.h"
 #include "GameFramework/PlayerController.h"
+#include "GameFramework/Actor.h"
+#include "WidgetBlueprint.h"
+#include "Blueprint/WidgetTree.h"
+#include "Components/Widget.h"
 
 // Asset management
 #include "AssetToolsModule.h"
@@ -69,6 +73,53 @@ TMap<FString, int32> FAgentFrameworkBlueprintActions::AssetModificationCounts;
 
 namespace
 {
+	FString FormatJsonObjectToUnrealText(const TSharedPtr<FJsonObject>& Obj)
+	{
+		if (!Obj.IsValid()) return TEXT("()");
+		FString OutStr = TEXT("(");
+		bool bFirst = true;
+		for (const auto& Pair : Obj->Values)
+		{
+			if (!bFirst) OutStr += TEXT(",");
+			bFirst = false;
+
+			OutStr += FString(Pair.Key) + TEXT("=");
+			if (Pair.Value->Type == EJson::Object)
+			{
+				OutStr += FormatJsonObjectToUnrealText(Pair.Value->AsObject());
+			}
+			else if (Pair.Value->Type == EJson::String)
+			{
+				OutStr += FString::Printf(TEXT("\"%s\""), *Pair.Value->AsString());
+			}
+			else if (Pair.Value->Type == EJson::Number)
+			{
+				OutStr += FString::Printf(TEXT("%f"), Pair.Value->AsNumber());
+			}
+			else if (Pair.Value->Type == EJson::Boolean)
+			{
+				OutStr += Pair.Value->AsBool() ? TEXT("True") : TEXT("False");
+			}
+			else if (Pair.Value->Type == EJson::Array)
+			{
+				OutStr += TEXT("(");
+				bool bArrFirst = true;
+				for (const auto& Elem : Pair.Value->AsArray())
+				{
+					if (!bArrFirst) OutStr += TEXT(",");
+					bArrFirst = false;
+					if (Elem->Type == EJson::Object) OutStr += FormatJsonObjectToUnrealText(Elem->AsObject());
+					else if (Elem->Type == EJson::String) OutStr += FString::Printf(TEXT("\"%s\""), *Elem->AsString());
+					else if (Elem->Type == EJson::Number) OutStr += FString::Printf(TEXT("%f"), Elem->AsNumber());
+					else if (Elem->Type == EJson::Boolean) OutStr += Elem->AsBool() ? TEXT("True") : TEXT("False");
+				}
+				OutStr += TEXT(")");
+			}
+		}
+		OutStr += TEXT(")");
+		return OutStr;
+	}
+
 	FString ExpandBlueprintAssetPath(const FString& InPath)
 	{
 		if (InPath.IsEmpty()) return InPath;
@@ -97,7 +148,7 @@ namespace
 		auto FormatSingleType = [](const FName& PinCategory, const FName& PinSubCategory, UObject* SubCategoryObject) -> FString
 		{
 			FString BaseName = PinCategory.ToString();
-			if (SubCategoryObject)
+			if (IsValid(SubCategoryObject))
 			{
 				BaseName = SubCategoryObject->GetName();
 			}
@@ -211,7 +262,11 @@ TArray<FString> FAgentFrameworkBlueprintActions::GetSupportedToolNames() const
 		TEXT("execute_batch_blueprint_operations"),
 		TEXT("get_blueprint_schema"),
 		TEXT("export_blueprint_summary"),
-		TEXT("check_asset_state")
+		TEXT("check_asset_state"),
+		TEXT("disconnect_blueprint_pins"),
+		TEXT("modify_blueprint_subobject"),
+		TEXT("configure_actor_replication"),
+		TEXT("set_variable_replication")
 	};
 }
 
@@ -219,6 +274,18 @@ bool FAgentFrameworkBlueprintActions::ValidateParams(const TSharedRef<FJsonObjec
 {
 	FString AssetPath;
 	if (Params->TryGetStringField(TEXT("asset_path"), AssetPath))
+	{
+		Params->SetStringField(TEXT("asset_path"), ExpandBlueprintAssetPath(AssetPath));
+	}
+	else if (Params->TryGetStringField(TEXT("blueprint_path"), AssetPath))
+	{
+		Params->SetStringField(TEXT("asset_path"), ExpandBlueprintAssetPath(AssetPath));
+	}
+	else if (Params->TryGetStringField(TEXT("TargetAsset"), AssetPath))
+	{
+		Params->SetStringField(TEXT("asset_path"), ExpandBlueprintAssetPath(AssetPath));
+	}
+	else if (Params->TryGetStringField(TEXT("AssetPath"), AssetPath))
 	{
 		Params->SetStringField(TEXT("asset_path"), ExpandBlueprintAssetPath(AssetPath));
 	}
@@ -343,6 +410,40 @@ bool FAgentFrameworkBlueprintActions::ValidateParams(const TSharedRef<FJsonObjec
 			return false;
 		}
 	}
+	else if (ToolName == TEXT("disconnect_blueprint_pins"))
+	{
+		bool bHasNode = Params->HasField(TEXT("node_guid")) || Params->HasField(TEXT("NodeGuid")) || Params->HasField(TEXT("node_name")) || Params->HasField(TEXT("source_node"));
+		bool bHasPin = Params->HasField(TEXT("pin_name")) || Params->HasField(TEXT("PinName"));
+		if (!bHasNode || !bHasPin)
+		{
+			OutErrors.Add(TEXT("Missing required field(s) for disconnect_blueprint_pins: node_guid (or NodeGuid/node_name), pin_name (or PinName)"));
+			return false;
+		}
+	}
+	else if (ToolName == TEXT("modify_blueprint_subobject"))
+	{
+		bool bHasSubObj = Params->HasField(TEXT("subobject_path")) || Params->HasField(TEXT("SubObjectPath"));
+		bool bHasProps = Params->HasField(TEXT("properties")) || Params->HasField(TEXT("Properties"));
+		if (!bHasSubObj || !bHasProps)
+		{
+			OutErrors.Add(TEXT("Missing required field(s) for modify_blueprint_subobject: subobject_path, properties"));
+			return false;
+		}
+	}
+	else if (ToolName == TEXT("configure_actor_replication"))
+	{
+		// asset_path is validated by root check
+	}
+	else if (ToolName == TEXT("set_variable_replication"))
+	{
+		bool bHasVar = Params->HasField(TEXT("variable_name")) || Params->HasField(TEXT("VariableName"));
+		bool bHasRep = Params->HasField(TEXT("replication_type")) || Params->HasField(TEXT("ReplicationType"));
+		if (!bHasVar || !bHasRep)
+		{
+			OutErrors.Add(TEXT("Missing required field(s) for set_variable_replication: variable_name, replication_type"));
+			return false;
+		}
+	}
 
 	return true;
 }
@@ -431,6 +532,10 @@ FAgentFrameworkActionResult FAgentFrameworkBlueprintActions::ExecuteAction(const
 	else if (ToolName == TEXT("export_blueprint_summary"))      Result = ExecuteExportBlueprintSummary(Params, Result);
 	else if (ToolName == TEXT("check_asset_state"))             Result = ExecuteCheckAssetState(Params, Result);
 	else if (ToolName == TEXT("modify_blueprint"))              Result = ExecuteModifyBlueprint(Params, Result);
+	else if (ToolName == TEXT("disconnect_blueprint_pins"))   Result = ExecuteDisconnectPins(Params, Result);
+	else if (ToolName == TEXT("modify_blueprint_subobject"))   Result = ExecuteModifySubobject(Params, Result);
+	else if (ToolName == TEXT("configure_actor_replication"))  Result = ExecuteConfigureActorReplication(Params, Result);
+	else if (ToolName == TEXT("set_variable_replication"))     Result = ExecuteSetVariableReplication(Params, Result);
 	else
 	{
 		// Legacy param-based fallback dispatch
@@ -442,7 +547,7 @@ FAgentFrameworkActionResult FAgentFrameworkBlueprintActions::ExecuteAction(const
 		else if (Params->HasField(TEXT("defaults")))          Result = ExecuteSetDefaults(Params, Result);
 		else
 		{
-			Result.Errors.Add(FString::Printf(TEXT("Unknown Blueprint tool: '%s'. Supported: create_blueprint_actor, add_blueprint_component, add_blueprint_variable, add_blueprint_function, add_blueprint_event, compile_blueprint, set_blueprint_defaults, set_component_properties, inject_blueprint_nodes_t3d, get_blueprint_info, get_blueprint_schema, connect_blueprint_pins, set_node_pin_default, verify_blueprint_connections, analyze_blueprint_graph, execute_batch_blueprint_operations"), *ToolName));
+			Result.Errors.Add(FString::Printf(TEXT("Unknown Blueprint tool: '%s'. Supported: create_blueprint_actor, add_blueprint_component, add_blueprint_variable, add_blueprint_function, add_blueprint_event, compile_blueprint, set_blueprint_defaults, set_component_properties, inject_blueprint_nodes_t3d, get_blueprint_info, get_blueprint_schema, connect_blueprint_pins, set_node_pin_default, verify_blueprint_connections, analyze_blueprint_graph, execute_batch_blueprint_operations, disconnect_blueprint_pins, modify_blueprint_subobject, configure_actor_replication, set_variable_replication"), *ToolName));
 		}
 	}
 
@@ -454,11 +559,23 @@ FAgentFrameworkActionResult FAgentFrameworkBlueprintActions::ExecuteAction(const
 	if (Result.bSuccess && !bIsReadOnly)
 	{
 		FString AssetPath;
-		if (Params->TryGetStringField(TEXT("asset_path"), AssetPath))
+		TArray<FString> Errors;
+		if (UAgentFrameworkActionUtils::TryGetStringParam(Params, TEXT("asset_path"), AssetPath, Errors, false))
 		{
 			AssetModificationCounts.FindOrAdd(AssetPath, 0)++;
 			FAgentFrameworkActionsModule::AgentDirtiedPackages.Add(FName(*AssetPath));
 		}
+
+#if WITH_EDITOR
+		if (GEditor)
+		{
+			USoundBase* SuccessSound = LoadObject<USoundBase>(nullptr, TEXT("/Engine/EditorSounds/Notifications/CompileSuccess.CompileSuccess"));
+			if (IsValid(SuccessSound))
+			{
+				GEditor->PlayEditorSound(SuccessSound);
+			}
+		}
+#endif
 	}
 
 	return Result;
@@ -470,7 +587,11 @@ FAgentFrameworkActionResult FAgentFrameworkBlueprintActions::ExecuteAction(const
 
 bool FAgentFrameworkBlueprintActions::CompileAndReport(UBlueprint* Blueprint, FAgentFrameworkActionResult& Result, bool bSkipGC)
 {
-	check(Blueprint);
+	if (!IsValid(Blueprint))
+	{
+		Result.Errors.Add(TEXT("Blueprint pointer is invalid."));
+		return false;
+	}
 	FBlueprintEditorUtils::MarkBlueprintAsStructurallyModified(Blueprint);
 
 	FCompilerResultsLog Log;
@@ -534,18 +655,18 @@ bool FAgentFrameworkBlueprintActions::CompileAndReport(UBlueprint* Blueprint, FA
 
 UEdGraph* FAgentFrameworkBlueprintActions::FindOrCreateEventGraph(UBlueprint* Blueprint, const FString& GraphName)
 {
-	check(Blueprint);
+	if (!IsValid(Blueprint)) return nullptr;
 
 	// Search UbergraphPages
 	for (UEdGraph* Graph : Blueprint->UbergraphPages)
 	{
-		if (Graph && Graph->GetName() == GraphName)
+		if (IsValid(Graph) && Graph->GetName() == GraphName)
 			return Graph;
 	}
 	// Search FunctionGraphs
 	for (UEdGraph* Graph : Blueprint->FunctionGraphs)
 	{
-		if (Graph && Graph->GetName() == GraphName)
+		if (IsValid(Graph) && Graph->GetName() == GraphName)
 			return Graph;
 	}
 
@@ -558,8 +679,11 @@ UEdGraph* FAgentFrameworkBlueprintActions::FindOrCreateEventGraph(UBlueprint* Bl
 			UEdGraph::StaticClass(),
 			UEdGraphSchema_K2::StaticClass());
 
-		FBlueprintEditorUtils::AddUbergraphPage(Blueprint, NewGraph);
-		return NewGraph;
+		if (IsValid(NewGraph))
+		{
+			FBlueprintEditorUtils::AddUbergraphPage(Blueprint, NewGraph);
+			return NewGraph;
+		}
 	}
 
 	return nullptr;
@@ -571,13 +695,13 @@ UEdGraph* FAgentFrameworkBlueprintActions::FindOrCreateEventGraph(UBlueprint* Bl
 
 USCS_Node* FAgentFrameworkBlueprintActions::FindSCSNodeByName(UBlueprint* Blueprint, const FString& NodeName)
 {
-	if (!Blueprint || !Blueprint->SimpleConstructionScript)
+	if (!IsValid(Blueprint) || !IsValid(Blueprint->SimpleConstructionScript))
 		return nullptr;
 
 	TArray<USCS_Node*> AllNodes = Blueprint->SimpleConstructionScript->GetAllNodes();
 	for (USCS_Node* Node : AllNodes)
 	{
-		if (Node && Node->GetVariableName().ToString() == NodeName)
+		if (IsValid(Node) && Node->GetVariableName().ToString() == NodeName)
 			return Node;
 	}
 	return nullptr;
@@ -630,25 +754,25 @@ FString FAgentFrameworkBlueprintActions::ResolveT3DPlaceholders(const FString& T
 
 bool FAgentFrameworkBlueprintActions::DetectInfiniteLoopRisk(UBlueprint* Blueprint, TArray<FString>& OutWarnings) const
 {
-	if (!Blueprint) return false;
+	if (!IsValid(Blueprint)) return false;
 	bool bRiskDetected = false;
 	int32 CastCount = 0;
 
 	// Audit UbergraphPages
 	for (UEdGraph* Graph : Blueprint->UbergraphPages)
 	{
-		if (!Graph) continue;
+		if (!IsValid(Graph)) continue;
 		for (UEdGraphNode* Node : Graph->Nodes)
 		{
-			if (!Node) continue;
+			if (!IsValid(Node)) continue;
 
-			if (Node->GetClass()->GetName().Contains(TEXT("K2Node_DynamicCast")))
+			if (IsValid(Node->GetClass()) && Node->GetClass()->GetName().Contains(TEXT("K2Node_DynamicCast")))
 			{
 				CastCount++;
 			}
 
 			UK2Node_Event* EventNode = Cast<UK2Node_Event>(Node);
-			if (EventNode)
+			if (IsValid(EventNode))
 			{
 				FName EventName = EventNode->GetFunctionName();
 				if (EventName == FName(TEXT("ReceiveTick")))
@@ -663,10 +787,10 @@ bool FAgentFrameworkBlueprintActions::DetectInfiniteLoopRisk(UBlueprint* Bluepri
 	// Audit FunctionGraphs for Casts
 	for (UEdGraph* Graph : Blueprint->FunctionGraphs)
 	{
-		if (!Graph) continue;
+		if (!IsValid(Graph)) continue;
 		for (UEdGraphNode* Node : Graph->Nodes)
 		{
-			if (Node && Node->GetClass()->GetName().Contains(TEXT("K2Node_DynamicCast")))
+			if (IsValid(Node) && IsValid(Node->GetClass()) && Node->GetClass()->GetName().Contains(TEXT("K2Node_DynamicCast")))
 			{
 				CastCount++;
 			}
@@ -679,7 +803,7 @@ bool FAgentFrameworkBlueprintActions::DetectInfiniteLoopRisk(UBlueprint* Bluepri
 		bRiskDetected = true;
 	}
 
-	if (Blueprint->SimpleConstructionScript)
+	if (IsValid(Blueprint->SimpleConstructionScript))
 	{
 		TArray<USCS_Node*> AllNodes = Blueprint->SimpleConstructionScript->GetAllNodes();
 		if (AllNodes.Num() > 50)
@@ -698,11 +822,12 @@ bool FAgentFrameworkBlueprintActions::DetectInfiniteLoopRisk(UBlueprint* Bluepri
 
 FString FAgentFrameworkBlueprintActions::BuildBlueprintInfoJson(UBlueprint* Blueprint, const TArray<FString>* NodeNamesFilter, bool bExcludeVisualLayout, const FString& QueryMode)
 {
+	if (!IsValid(Blueprint)) return TEXT("{}");
 	TSharedPtr<FJsonObject> Root = MakeShared<FJsonObject>();
 
 	// Basic info
 	Root->SetStringField(TEXT("asset_path"), CompressBlueprintAssetPath(Blueprint->GetPathName()));
-	Root->SetStringField(TEXT("parent_class"), Blueprint->ParentClass ? Blueprint->ParentClass->GetName() : TEXT("unknown"));
+	Root->SetStringField(TEXT("parent_class"), IsValid(Blueprint->ParentClass) ? Blueprint->ParentClass->GetName() : TEXT("unknown"));
 
 	FString StatusStr = TEXT("unknown");
 	switch (Blueprint->Status)
@@ -730,19 +855,19 @@ FString FAgentFrameworkBlueprintActions::BuildBlueprintInfoJson(UBlueprint* Blue
 
 	// SCS Components
 	TArray<TSharedPtr<FJsonValue>> CompsArray;
-	if (Blueprint->SimpleConstructionScript)
+	if (IsValid(Blueprint->SimpleConstructionScript))
 	{
 		TArray<USCS_Node*> AllNodes = Blueprint->SimpleConstructionScript->GetAllNodes();
 		for (USCS_Node* Node : AllNodes)
 		{
-			if (!Node) continue;
+			if (!IsValid(Node)) continue;
 			TSharedPtr<FJsonObject> CompObj = MakeShared<FJsonObject>();
 			CompObj->SetStringField(TEXT("name"), Node->GetVariableName().ToString());
-			CompObj->SetStringField(TEXT("class"), Node->ComponentClass ? Node->ComponentClass->GetName() : TEXT("unknown"));
+			CompObj->SetStringField(TEXT("class"), IsValid(Node->ComponentClass) ? Node->ComponentClass->GetName() : TEXT("unknown"));
 
 			// Parent node
 			USCS_Node* ParentNode = Blueprint->SimpleConstructionScript->FindParentNode(Node);
-			if (ParentNode)
+			if (IsValid(ParentNode))
 				CompObj->SetStringField(TEXT("parent"), ParentNode->GetVariableName().ToString());
 			else
 				CompObj->SetStringField(TEXT("parent"), TEXT("root"));
@@ -757,7 +882,7 @@ FString FAgentFrameworkBlueprintActions::BuildBlueprintInfoJson(UBlueprint* Blue
 
 	auto AddGraphEntry = [&](UEdGraph* Graph, const FString& GraphType)
 	{
-		if (!Graph) return;
+		if (!IsValid(Graph)) return;
 		TSharedPtr<FJsonObject> GObj = MakeShared<FJsonObject>();
 		GObj->SetStringField(TEXT("name"), Graph->GetName());
 		GObj->SetStringField(TEXT("type"), GraphType);
@@ -767,24 +892,24 @@ FString FAgentFrameworkBlueprintActions::BuildBlueprintInfoJson(UBlueprint* Blue
 		TArray<TSharedPtr<FJsonValue>> NodesArray;
 		for (UEdGraphNode* Node : Graph->Nodes)
 		{
-			if (!Node) continue;
+			if (!IsValid(Node)) continue;
 			if (NodeNamesFilter && !NodeNamesFilter->Contains(Node->GetName())) continue;
 
 			// If interface_only mode, only include entry/result/event nodes
 			if (QueryMode.Equals(TEXT("interface_only"), ESearchCase::IgnoreCase))
 			{
 				bool bIsInterfaceNode = false;
-				if (GraphType.Equals(TEXT("event_graph"), ESearchCase::IgnoreCase))
+				if (GraphType.Equals(TEXT("event_graph"), ESearchCase::IgnoreCase) && IsValid(Node->GetClass()))
 				{
 					bIsInterfaceNode = Node->GetClass()->IsChildOf(UK2Node_Event::StaticClass()) ||
 					                   Node->GetClass()->IsChildOf(UK2Node_CustomEvent::StaticClass());
 				}
-				else if (GraphType.Equals(TEXT("function"), ESearchCase::IgnoreCase))
+				else if (GraphType.Equals(TEXT("function"), ESearchCase::IgnoreCase) && IsValid(Node->GetClass()))
 				{
 					bIsInterfaceNode = Node->GetClass()->IsChildOf(UK2Node_FunctionEntry::StaticClass()) ||
 					                   Node->GetClass()->IsChildOf(UK2Node_FunctionResult::StaticClass());
 				}
-				else if (GraphType.Equals(TEXT("macro"), ESearchCase::IgnoreCase))
+				else if (GraphType.Equals(TEXT("macro"), ESearchCase::IgnoreCase) && IsValid(Node->GetClass()))
 				{
 					bIsInterfaceNode = Node->GetClass()->GetName().Contains(TEXT("Tunnel"));
 				}
@@ -794,7 +919,7 @@ FString FAgentFrameworkBlueprintActions::BuildBlueprintInfoJson(UBlueprint* Blue
 			
 			TSharedPtr<FJsonObject> NodeObj = MakeShared<FJsonObject>();
 			NodeObj->SetStringField(TEXT("name"), Node->GetName());
-			NodeObj->SetStringField(TEXT("class"), Node->GetClass()->GetName());
+			NodeObj->SetStringField(TEXT("class"), IsValid(Node->GetClass()) ? Node->GetClass()->GetName() : TEXT("unknown"));
 			NodeObj->SetStringField(TEXT("title"), Node->GetNodeTitle(ENodeTitleType::FullTitle).ToString());
 			
 			if (!bExcludeVisualLayout)
@@ -806,7 +931,7 @@ FString FAgentFrameworkBlueprintActions::BuildBlueprintInfoJson(UBlueprint* Blue
 			}
 
 			// For K2Node_CallFunction, include the function reference
-			if (Node->GetClass()->GetName().Contains(TEXT("CallFunction")))
+			if (IsValid(Node->GetClass()) && Node->GetClass()->GetName().Contains(TEXT("CallFunction")))
 			{
 				FString FuncRef;
 				if (FProperty* Prop = Node->GetClass()->FindPropertyByName(TEXT("FunctionReference")))
@@ -836,7 +961,7 @@ FString FAgentFrameworkBlueprintActions::BuildBlueprintInfoJson(UBlueprint* Blue
 					TArray<TSharedPtr<FJsonValue>> LinksArray;
 					for (UEdGraphPin* LinkedPin : Pin->LinkedTo)
 					{
-						if (!LinkedPin || !LinkedPin->GetOwningNode()) continue;
+						if (!LinkedPin || !IsValid(LinkedPin->GetOwningNode())) continue;
 						TSharedPtr<FJsonObject> LinkObj = MakeShared<FJsonObject>();
 						LinkObj->SetStringField(TEXT("node"), LinkedPin->GetOwningNode()->GetName());
 						LinkObj->SetStringField(TEXT("pin"), LinkedPin->PinName.ToString());
@@ -856,9 +981,9 @@ FString FAgentFrameworkBlueprintActions::BuildBlueprintInfoJson(UBlueprint* Blue
 		GraphsArray.Add(MakeShared<FJsonValueObject>(GObj));
 	};
 
-	for (UEdGraph* G : Blueprint->UbergraphPages)   AddGraphEntry(G, TEXT("event_graph"));
-	for (UEdGraph* G : Blueprint->FunctionGraphs)   AddGraphEntry(G, TEXT("function"));
-	for (UEdGraph* G : Blueprint->MacroGraphs)      AddGraphEntry(G, TEXT("macro"));
+	for (UEdGraph* G : Blueprint->UbergraphPages)   if (IsValid(G)) AddGraphEntry(G, TEXT("event_graph"));
+	for (UEdGraph* G : Blueprint->FunctionGraphs)   if (IsValid(G)) AddGraphEntry(G, TEXT("function"));
+	for (UEdGraph* G : Blueprint->MacroGraphs)      if (IsValid(G)) AddGraphEntry(G, TEXT("macro"));
 
 	Root->SetArrayField(TEXT("graphs"), GraphsArray);
 
@@ -906,8 +1031,15 @@ bool FAgentFrameworkBlueprintActions::ResolveEventMapping(const FString& EventNa
 
 FAgentFrameworkActionResult FAgentFrameworkBlueprintActions::ExecuteCreateBlueprint(const TSharedRef<FJsonObject>& Params, FAgentFrameworkActionResult& Result)
 {
-	FString AssetPath      = Params->GetStringField(TEXT("asset_path"));
-	FString ParentClassName = Params->GetStringField(TEXT("parent_class"));
+	FString AssetPath;
+	FString ParentClassName;
+	TArray<FString> Errors;
+	if (!UAgentFrameworkActionUtils::TryGetStringParam(Params, TEXT("asset_path"), AssetPath, Errors, true) ||
+		!UAgentFrameworkActionUtils::TryGetStringParam(Params, TEXT("parent_class"), ParentClassName, Errors, true))
+	{
+		Result.Errors.Append(Errors);
+		return Result;
+	}
 
 	// Resolve parent class — try aliases first, then full reflection search
 	UClass* ParentClass = nullptr;
@@ -919,13 +1051,13 @@ FAgentFrameworkActionResult FAgentFrameworkBlueprintActions::ExecuteCreateBluepr
 	else
 	{
 		ParentClass = FindObject<UClass>(nullptr, *ParentClassName);
-		if (!ParentClass)
+		if (!IsValid(ParentClass))
 			ParentClass = FindFirstObject<UClass>(*ParentClassName, EFindFirstObjectOptions::None);
-		if (!ParentClass)
+		if (!IsValid(ParentClass))
 			ParentClass = FindFirstObject<UClass>(*(FString(TEXT("/Script/Engine.")) + ParentClassName), EFindFirstObjectOptions::None);
 	}
 
-	if (!ParentClass)
+	if (!IsValid(ParentClass))
 	{
 		Result.Errors.Add(FString::Printf(TEXT("Could not find parent class: '%s'. Try 'Actor', 'Pawn', 'Character', 'PlayerController', or 'GameModeBase'."), *ParentClassName));
 		return Result;
@@ -939,12 +1071,15 @@ FAgentFrameworkActionResult FAgentFrameworkBlueprintActions::ExecuteCreateBluepr
 	AssetTools.CreateUniqueAssetName(AssetPath, TEXT(""), UniquePackagePath, UniqueName);
 
 	UBlueprintFactory* Factory = NewObject<UBlueprintFactory>();
-	Factory->ParentClass = ParentClass;
+	if (IsValid(Factory))
+	{
+		Factory->ParentClass = ParentClass;
+	}
 
 	UObject* NewAsset = AssetTools.CreateAsset(AssetName, PackagePath, UBlueprint::StaticClass(), Factory);
 	UBlueprint* NewBlueprint = Cast<UBlueprint>(NewAsset);
 
-	if (!NewBlueprint)
+	if (!IsValid(NewBlueprint))
 	{
 		Result.Errors.Add(FString::Printf(TEXT("Failed to create Blueprint at '%s'. Check that the path is valid and under /Game/."), *AssetPath));
 		return Result;
@@ -954,33 +1089,42 @@ FAgentFrameworkActionResult FAgentFrameworkBlueprintActions::ExecuteCreateBluepr
 
 	// --- Inline Components ---
 	const TArray<TSharedPtr<FJsonValue>>* ComponentsArray = nullptr;
-	if (Params->TryGetArrayField(TEXT("components"), ComponentsArray))
+	TArray<FString> CompsErrors;
+	if (UAgentFrameworkActionUtils::TryGetArrayParam(Params, TEXT("components"), ComponentsArray, CompsErrors, false) && ComponentsArray)
 	{
 		for (const TSharedPtr<FJsonValue>& CompValue : *ComponentsArray)
 		{
 			const TSharedPtr<FJsonObject> CompObj = CompValue->AsObject();
 			if (!CompObj.IsValid()) continue;
 
-			FString CompName      = CompObj->GetStringField(TEXT("name"));
-			FString CompClassName = CompObj->GetStringField(TEXT("class"));
+			FString CompName;
+			FString CompClassName;
+			TArray<FString> InlineCompErrors;
+			if (!UAgentFrameworkActionUtils::TryGetStringParam(CompObj, TEXT("name"), CompName, InlineCompErrors, true) ||
+				!UAgentFrameworkActionUtils::TryGetStringParam(CompObj, TEXT("class"), CompClassName, InlineCompErrors, true))
+			{
+				Result.Warnings.Append(InlineCompErrors);
+				continue;
+			}
 
 			UClass* CompClass = FindFirstObject<UClass>(*CompClassName, EFindFirstObjectOptions::None);
-			if (!CompClass)
+			if (!IsValid(CompClass))
 				CompClass = FindFirstObject<UClass>(*(TEXT("U") + CompClassName), EFindFirstObjectOptions::None);
-			if (!CompClass)
+			if (!IsValid(CompClass))
 				CompClass = FindFirstObject<UClass>(*(FString(TEXT("/Script/Engine.")) + CompClassName), EFindFirstObjectOptions::None);
 
-			if (CompClass && NewBlueprint->SimpleConstructionScript)
+			if (IsValid(CompClass) && IsValid(NewBlueprint->SimpleConstructionScript))
 			{
 				NewBlueprint->Modify();
 				USCS_Node* NewNode = NewBlueprint->SimpleConstructionScript->CreateNode(CompClass, *CompName);
-				if (NewNode)
+				if (IsValid(NewNode))
 				{
 					FString AttachTo;
-					if (CompObj->TryGetStringField(TEXT("attach_to"), AttachTo) && !AttachTo.IsEmpty())
+					TArray<FString> AttachErrors;
+					if (UAgentFrameworkActionUtils::TryGetStringParam(CompObj, TEXT("attach_to"), AttachTo, AttachErrors, false) && !AttachTo.IsEmpty())
 					{
 						USCS_Node* ParentNode = FindSCSNodeByName(NewBlueprint, AttachTo);
-						if (ParentNode)
+						if (IsValid(ParentNode))
 							ParentNode->AddChildNode(NewNode);
 						else
 							NewBlueprint->SimpleConstructionScript->AddNode(NewNode);
@@ -1001,15 +1145,23 @@ FAgentFrameworkActionResult FAgentFrameworkBlueprintActions::ExecuteCreateBluepr
 
 	// --- Inline Variables ---
 	const TArray<TSharedPtr<FJsonValue>>* VariablesArray = nullptr;
-	if (Params->TryGetArrayField(TEXT("variables"), VariablesArray))
+	TArray<FString> VarsErrors;
+	if (UAgentFrameworkActionUtils::TryGetArrayParam(Params, TEXT("variables"), VariablesArray, VarsErrors, false) && VariablesArray)
 	{
 		for (const TSharedPtr<FJsonValue>& VarValue : *VariablesArray)
 		{
 			const TSharedPtr<FJsonObject> VarObj = VarValue->AsObject();
 			if (!VarObj.IsValid()) continue;
 
-			FString VarName = VarObj->GetStringField(TEXT("name"));
-			FString VarType = VarObj->GetStringField(TEXT("type"));
+			FString VarName;
+			FString VarType;
+			TArray<FString> InlineVarErrors;
+			if (!UAgentFrameworkActionUtils::TryGetStringParam(VarObj, TEXT("name"), VarName, InlineVarErrors, true) ||
+				!UAgentFrameworkActionUtils::TryGetStringParam(VarObj, TEXT("type"), VarType, InlineVarErrors, true))
+			{
+				Result.Warnings.Append(InlineVarErrors);
+				continue;
+			}
 
 			FEdGraphPinType PinType;
 			ResolvePinType(VarType, PinType);
@@ -1039,13 +1191,16 @@ FAgentFrameworkActionResult FAgentFrameworkBlueprintActions::ExecuteCreateBluepr
 
 	// Save
 	UPackage* Package = NewBlueprint->GetOutermost();
-	Package->MarkPackageDirty();
-	FString PackageFilename;
-	if (FPackageName::TryConvertLongPackageNameToFilename(Package->GetName(), PackageFilename, FPackageName::GetAssetPackageExtension()))
+	if (IsValid(Package))
 	{
-		FSavePackageArgs SaveArgs;
-		SaveArgs.TopLevelFlags = RF_Standalone;
-		UPackage::SavePackage(Package, NewBlueprint, *PackageFilename, SaveArgs);
+		Package->MarkPackageDirty();
+		FString PackageFilename;
+		if (FPackageName::TryConvertLongPackageNameToFilename(Package->GetName(), PackageFilename, FPackageName::GetAssetPackageExtension()))
+		{
+			FSavePackageArgs SaveArgs;
+			SaveArgs.TopLevelFlags = RF_Standalone;
+			UPackage::SavePackage(Package, NewBlueprint, *PackageFilename, SaveArgs);
+		}
 	}
 
 	FAssetRegistryModule::AssetCreated(NewBlueprint);
@@ -1063,61 +1218,104 @@ FAgentFrameworkActionResult FAgentFrameworkBlueprintActions::ExecuteCreateBluepr
 
 FAgentFrameworkActionResult FAgentFrameworkBlueprintActions::ExecuteAddComponent(const TSharedRef<FJsonObject>& Params, FAgentFrameworkActionResult& Result)
 {
-	FString AssetPath    = Params->GetStringField(TEXT("asset_path"));
-	FString CompClassName = Params->GetStringField(TEXT("component_class"));
-	FString CompName     = Params->GetStringField(TEXT("component_name"));
+	FString AssetPath;
+	FString CompClassName;
+	FString CompName;
+	TArray<FString> Errors;
+	if (!UAgentFrameworkActionUtils::TryGetStringParam(Params, TEXT("blueprint_path"), AssetPath, Errors, false) &&
+		!UAgentFrameworkActionUtils::TryGetStringParam(Params, TEXT("asset_path"), AssetPath, Errors, false))
+	{
+		Result.Errors.Add(TEXT("Missing required field for add_blueprint_component: blueprint_path or asset_path"));
+		return Result;
+	}
 
-	UBlueprint* Blueprint = LoadObject<UBlueprint>(nullptr, *AssetPath);
-	if (!Blueprint)
+	if (!UAgentFrameworkActionUtils::TryGetStringParam(Params, TEXT("component_class"), CompClassName, Errors, true) ||
+		!UAgentFrameworkActionUtils::TryGetStringParam(Params, TEXT("component_name"), CompName, Errors, true))
+	{
+		Result.Errors.Append(Errors);
+		return Result;
+	}
+
+	UBlueprint* Blueprint = Cast<UBlueprint>(StaticLoadObject(UBlueprint::StaticClass(), nullptr, *AssetPath));
+	if (!IsValid(Blueprint))
+	{
+		Blueprint = LoadObject<UBlueprint>(nullptr, *AssetPath);
+	}
+	if (!IsValid(Blueprint))
 	{
 		Result.Errors.Add(FString::Printf(TEXT("Blueprint not found: '%s'"), *AssetPath));
 		return Result;
 	}
 
 	UClass* CompClass = FindFirstObject<UClass>(*CompClassName, EFindFirstObjectOptions::None);
-	if (!CompClass)
+	if (!IsValid(CompClass) && !CompClassName.StartsWith(TEXT("U")))
+	{
 		CompClass = FindFirstObject<UClass>(*(TEXT("U") + CompClassName), EFindFirstObjectOptions::None);
+	}
+	if (!IsValid(CompClass))
+	{
+		CompClass = LoadClass<UActorComponent>(nullptr, *CompClassName);
+	}
 
-	if (!CompClass)
+	if (!IsValid(CompClass))
 	{
 		Result.Errors.Add(FString::Printf(TEXT("Component class not found: '%s'. Include the 'U' prefix or use the exact class name like 'StaticMeshComponent'."), *CompClassName));
 		return Result;
 	}
 
-	if (!Blueprint->SimpleConstructionScript)
+	USimpleConstructionScript* SCS = Blueprint->SimpleConstructionScript;
+	if (!IsValid(SCS))
 	{
 		Result.Errors.Add(TEXT("Blueprint has no SimpleConstructionScript. Actors, Pawns, and Characters all have SCS; Interfaces and Function Libraries do not."));
 		return Result;
 	}
 
 	Blueprint->Modify();
-	USCS_Node* NewNode = Blueprint->SimpleConstructionScript->CreateNode(CompClass, *CompName);
-	if (!NewNode)
+	USCS_Node* NewNode = SCS->CreateNode(CompClass, *CompName);
+	if (!IsValid(NewNode))
 	{
 		Result.Errors.Add(FString::Printf(TEXT("Failed to create SCS node for component '%s'."), *CompName));
 		return Result;
 	}
 
-	// Attach-to support (full implementation)
-	FString AttachTo;
-	if (Params->TryGetStringField(TEXT("attach_to"), AttachTo) && !AttachTo.IsEmpty())
+	// Attach-to support (supports parent_component_name or attach_to)
+	FString ParentCompName;
+	TArray<FString> AttachErrors;
+	if (!UAgentFrameworkActionUtils::TryGetStringParam(Params, TEXT("parent_component_name"), ParentCompName, AttachErrors, false) || ParentCompName.IsEmpty())
 	{
-		USCS_Node* ParentNode = FindSCSNodeByName(Blueprint, AttachTo);
-		if (ParentNode)
+		UAgentFrameworkActionUtils::TryGetStringParam(Params, TEXT("attach_to"), ParentCompName, AttachErrors, false);
+	}
+
+	if (!ParentCompName.IsEmpty() && ParentCompName != TEXT("DefaultSceneRoot") && ParentCompName != TEXT("None"))
+	{
+		USCS_Node* ParentNode = SCS->FindSCSNode(FName(*ParentCompName));
+		if (!IsValid(ParentNode))
+		{
+			ParentNode = FindSCSNodeByName(Blueprint, ParentCompName);
+		}
+
+		if (IsValid(ParentNode))
+		{
 			ParentNode->AddChildNode(NewNode);
+		}
 		else
 		{
-			Result.Warnings.Add(FString::Printf(TEXT("Parent component '%s' not found in SCS; attaching to root instead."), *AttachTo));
-			Blueprint->SimpleConstructionScript->AddNode(NewNode);
+			Result.Warnings.Add(FString::Printf(TEXT("Parent component '%s' not found in SCS; attaching to root instead."), *ParentCompName));
+			SCS->AddNode(NewNode);
 		}
 	}
 	else
 	{
-		Blueprint->SimpleConstructionScript->AddNode(NewNode);
+		SCS->AddNode(NewNode);
 	}
 
+	FBlueprintEditorUtils::MarkBlueprintAsStructurallyModified(Blueprint);
+
 	bool bCompileOk = CompileAndReport(Blueprint, Result, true);
-	Blueprint->GetOutermost()->MarkPackageDirty();
+	if (IsValid(Blueprint->GetOutermost()))
+	{
+		Blueprint->GetOutermost()->MarkPackageDirty();
+	}
 
 	Result.bSuccess = bCompileOk;
 	Result.ResultMessage = FString::Printf(TEXT("Added %s component '%s' to '%s'. Compile: %s."),
@@ -1132,12 +1330,20 @@ FAgentFrameworkActionResult FAgentFrameworkBlueprintActions::ExecuteAddComponent
 
 FAgentFrameworkActionResult FAgentFrameworkBlueprintActions::ExecuteAddVariable(const TSharedRef<FJsonObject>& Params, FAgentFrameworkActionResult& Result)
 {
-	FString AssetPath = Params->GetStringField(TEXT("asset_path"));
-	FString VarName   = Params->GetStringField(TEXT("variable_name"));
-	FString VarType   = Params->GetStringField(TEXT("variable_type"));
+	FString AssetPath;
+	FString VarName;
+	FString VarType;
+	TArray<FString> Errors;
+	if (!UAgentFrameworkActionUtils::TryGetStringParam(Params, TEXT("asset_path"), AssetPath, Errors, true) ||
+		!UAgentFrameworkActionUtils::TryGetStringParam(Params, TEXT("variable_name"), VarName, Errors, true) ||
+		!UAgentFrameworkActionUtils::TryGetStringParam(Params, TEXT("variable_type"), VarType, Errors, true))
+	{
+		Result.Errors.Append(Errors);
+		return Result;
+	}
 
 	UBlueprint* Blueprint = LoadObject<UBlueprint>(nullptr, *AssetPath);
-	if (!Blueprint)
+	if (!IsValid(Blueprint))
 	{
 		Result.Errors.Add(FString::Printf(TEXT("Blueprint not found: '%s'"), *AssetPath));
 		return Result;
@@ -1156,15 +1362,20 @@ FAgentFrameworkActionResult FAgentFrameworkBlueprintActions::ExecuteAddVariable(
 
 	// Optional: expose as editable / category
 	FString Category;
-	if (Params->TryGetStringField(TEXT("category"), Category) && !Category.IsEmpty())
+	TArray<FString> CatErrors;
+	if (UAgentFrameworkActionUtils::TryGetStringParam(Params, TEXT("category"), Category, CatErrors, false) && !Category.IsEmpty())
 		FBlueprintEditorUtils::SetBlueprintVariableCategory(Blueprint, FName(*VarName), nullptr, FText::FromString(Category));
 
 	bool bEditable = true;
-	Params->TryGetBoolField(TEXT("editable"), bEditable);
+	TArray<FString> EditErrors;
+	UAgentFrameworkActionUtils::TryGetBoolParam(Params, TEXT("editable"), bEditable, EditErrors, false);
 	FBlueprintEditorUtils::SetBlueprintOnlyEditableFlag(Blueprint, FName(*VarName), !bEditable);
 
 	bool bCompileOk = CompileAndReport(Blueprint, Result, true);
-	Blueprint->GetOutermost()->MarkPackageDirty();
+	if (IsValid(Blueprint->GetOutermost()))
+	{
+		Blueprint->GetOutermost()->MarkPackageDirty();
+	}
 
 	Result.bSuccess = bCompileOk;
 	Result.ResultMessage = FString::Printf(TEXT("Added variable '%s' (%s) to '%s'. Compile: %s."),
@@ -1179,11 +1390,18 @@ FAgentFrameworkActionResult FAgentFrameworkBlueprintActions::ExecuteAddVariable(
 
 FAgentFrameworkActionResult FAgentFrameworkBlueprintActions::ExecuteAddFunction(const TSharedRef<FJsonObject>& Params, FAgentFrameworkActionResult& Result)
 {
-	FString AssetPath    = Params->GetStringField(TEXT("asset_path"));
-	FString FunctionName = Params->GetStringField(TEXT("function_name"));
+	FString AssetPath;
+	FString FunctionName;
+	TArray<FString> Errors;
+	if (!UAgentFrameworkActionUtils::TryGetStringParam(Params, TEXT("asset_path"), AssetPath, Errors, true) ||
+		!UAgentFrameworkActionUtils::TryGetStringParam(Params, TEXT("function_name"), FunctionName, Errors, true))
+	{
+		Result.Errors.Append(Errors);
+		return Result;
+	}
 
 	UBlueprint* Blueprint = LoadObject<UBlueprint>(nullptr, *AssetPath);
-	if (!Blueprint)
+	if (!IsValid(Blueprint))
 	{
 		Result.Errors.Add(FString::Printf(TEXT("Blueprint not found: '%s'"), *AssetPath));
 		return Result;
@@ -1193,14 +1411,14 @@ FAgentFrameworkActionResult FAgentFrameworkBlueprintActions::ExecuteAddFunction(
 	UEdGraph* ExistingGraph = nullptr;
 	for (UEdGraph* G : Blueprint->FunctionGraphs)
 	{
-		if (G && G->GetName() == FunctionName)
+		if (IsValid(G) && G->GetName() == FunctionName)
 		{
 			ExistingGraph = G;
 			break;
 		}
 	}
 
-	if (ExistingGraph)
+	if (IsValid(ExistingGraph))
 	{
 		Result.Warnings.Add(FString::Printf(TEXT("Function '%s' already exists in '%s'. Use inject_blueprint_nodes_t3d to add nodes to it."), *FunctionName, *AssetPath));
 		Result.bSuccess = true;
@@ -1215,79 +1433,99 @@ FAgentFrameworkActionResult FAgentFrameworkBlueprintActions::ExecuteAddFunction(
 		UEdGraph::StaticClass(),
 		UEdGraphSchema_K2::StaticClass());
 
-	FBlueprintEditorUtils::AddFunctionGraph(Blueprint, NewFunctionGraph, /*bIsUserCreated=*/true, (UClass*)nullptr);
-
-	// Add typed inputs if provided
-	const TArray<TSharedPtr<FJsonValue>>* InputsArray = nullptr;
-	if (Params->TryGetArrayField(TEXT("inputs"), InputsArray))
+	if (IsValid(NewFunctionGraph))
 	{
-		// Find the function entry node
-		UK2Node_FunctionEntry* EntryNode = nullptr;
-		for (UEdGraphNode* Node : NewFunctionGraph->Nodes)
-		{
-			EntryNode = Cast<UK2Node_FunctionEntry>(Node);
-			if (EntryNode) break;
-		}
+		FBlueprintEditorUtils::AddFunctionGraph(Blueprint, NewFunctionGraph, /*bIsUserCreated=*/true, (UClass*)nullptr);
 
-		if (EntryNode)
+		// Add typed inputs if provided
+		const TArray<TSharedPtr<FJsonValue>>* InputsArray = nullptr;
+		TArray<FString> InputsErrors;
+		if (UAgentFrameworkActionUtils::TryGetArrayParam(Params, TEXT("inputs"), InputsArray, InputsErrors, false) && InputsArray)
 		{
-			for (const TSharedPtr<FJsonValue>& InputVal : *InputsArray)
+			// Find the function entry node
+			UK2Node_FunctionEntry* EntryNode = nullptr;
+			for (UEdGraphNode* Node : NewFunctionGraph->Nodes)
 			{
-				const TSharedPtr<FJsonObject> InputObj = InputVal->AsObject();
-				if (!InputObj.IsValid()) continue;
-
-				FString ParamName = InputObj->GetStringField(TEXT("name"));
-				FString ParamType = InputObj->GetStringField(TEXT("type"));
-
-				FEdGraphPinType PinType;
-				ResolvePinType(ParamType, PinType);
-
-				EntryNode->Modify();
-				TSharedPtr<FUserPinInfo> PinInfo = MakeShared<FUserPinInfo>();
-				PinInfo->PinName = FName(*ParamName);
-				PinInfo->PinType = PinType;
-				EntryNode->UserDefinedPins.Add(PinInfo);
+				EntryNode = Cast<UK2Node_FunctionEntry>(Node);
+				if (IsValid(EntryNode)) break;
 			}
-			EntryNode->ReconstructNode();
-		}
-	}
 
-	// Add typed outputs (return values) if provided
-	const TArray<TSharedPtr<FJsonValue>>* OutputsArray = nullptr;
-	if (Params->TryGetArrayField(TEXT("outputs"), OutputsArray))
-	{
-		UK2Node_FunctionResult* ResultNode = nullptr;
-		for (UEdGraphNode* Node : NewFunctionGraph->Nodes)
-		{
-			ResultNode = Cast<UK2Node_FunctionResult>(Node);
-			if (ResultNode) break;
-		}
-
-		if (ResultNode)
-		{
-			for (const TSharedPtr<FJsonValue>& OutputVal : *OutputsArray)
+			if (IsValid(EntryNode))
 			{
-				const TSharedPtr<FJsonObject> OutputObj = OutputVal->AsObject();
-				if (!OutputObj.IsValid()) continue;
+				for (const TSharedPtr<FJsonValue>& InputVal : *InputsArray)
+				{
+					const TSharedPtr<FJsonObject> InputObj = InputVal->AsObject();
+					if (!InputObj.IsValid()) continue;
 
-				FString RetName = OutputObj->GetStringField(TEXT("name"));
-				FString RetType = OutputObj->GetStringField(TEXT("type"));
+					FString ParamName;
+					FString ParamType;
+					TArray<FString> ParamErrors;
+					if (!UAgentFrameworkActionUtils::TryGetStringParam(InputObj, TEXT("name"), ParamName, ParamErrors, true) ||
+						!UAgentFrameworkActionUtils::TryGetStringParam(InputObj, TEXT("type"), ParamType, ParamErrors, true))
+					{
+						continue;
+					}
 
-				FEdGraphPinType PinType;
-				ResolvePinType(RetType, PinType);
+					FEdGraphPinType PinType;
+					ResolvePinType(ParamType, PinType);
 
-				ResultNode->Modify();
-				TSharedPtr<FUserPinInfo> PinInfo = MakeShared<FUserPinInfo>();
-				PinInfo->PinName = FName(*RetName);
-				PinInfo->PinType = PinType;
-				ResultNode->UserDefinedPins.Add(PinInfo);
+					EntryNode->Modify();
+					TSharedPtr<FUserPinInfo> PinInfo = MakeShared<FUserPinInfo>();
+					PinInfo->PinName = FName(*ParamName);
+					PinInfo->PinType = PinType;
+					EntryNode->UserDefinedPins.Add(PinInfo);
+				}
+				EntryNode->ReconstructNode();
 			}
-			ResultNode->ReconstructNode();
+		}
+
+		// Add typed outputs (return values) if provided
+		const TArray<TSharedPtr<FJsonValue>>* OutputsArray = nullptr;
+		TArray<FString> OutputsErrors;
+		if (UAgentFrameworkActionUtils::TryGetArrayParam(Params, TEXT("outputs"), OutputsArray, OutputsErrors, false) && OutputsArray)
+		{
+			UK2Node_FunctionResult* ResultNode = nullptr;
+			for (UEdGraphNode* Node : NewFunctionGraph->Nodes)
+			{
+				ResultNode = Cast<UK2Node_FunctionResult>(Node);
+				if (IsValid(ResultNode)) break;
+			}
+
+			if (IsValid(ResultNode))
+			{
+				for (const TSharedPtr<FJsonValue>& OutputVal : *OutputsArray)
+				{
+					const TSharedPtr<FJsonObject> OutputObj = OutputVal->AsObject();
+					if (!OutputObj.IsValid()) continue;
+
+					FString RetName;
+					FString RetType;
+					TArray<FString> RetErrors;
+					if (!UAgentFrameworkActionUtils::TryGetStringParam(OutputObj, TEXT("name"), RetName, RetErrors, true) ||
+						!UAgentFrameworkActionUtils::TryGetStringParam(OutputObj, TEXT("type"), RetType, RetErrors, true))
+					{
+						continue;
+					}
+
+					FEdGraphPinType PinType;
+					ResolvePinType(RetType, PinType);
+
+					ResultNode->Modify();
+					TSharedPtr<FUserPinInfo> PinInfo = MakeShared<FUserPinInfo>();
+					PinInfo->PinName = FName(*RetName);
+					PinInfo->PinType = PinType;
+					ResultNode->UserDefinedPins.Add(PinInfo);
+				}
+				ResultNode->ReconstructNode();
+			}
 		}
 	}
 
 	bool bCompileOk = CompileAndReport(Blueprint, Result, true);
-	Blueprint->GetOutermost()->MarkPackageDirty();
+	if (IsValid(Blueprint->GetOutermost()))
+	{
+		Blueprint->GetOutermost()->MarkPackageDirty();
+	}
 
 	Result.bSuccess = bCompileOk;
 	Result.ResultMessage = FString::Printf(
@@ -1311,11 +1549,18 @@ FAgentFrameworkActionResult FAgentFrameworkBlueprintActions::ExecuteAddFunction(
 
 FAgentFrameworkActionResult FAgentFrameworkBlueprintActions::ExecuteAddEventHandler(const TSharedRef<FJsonObject>& Params, FAgentFrameworkActionResult& Result)
 {
-	FString AssetPath  = Params->GetStringField(TEXT("asset_path"));
-	FString EventName  = Params->GetStringField(TEXT("event_name"));
+	FString AssetPath;
+	FString EventName;
+	TArray<FString> Errors;
+	if (!UAgentFrameworkActionUtils::TryGetStringParam(Params, TEXT("asset_path"), AssetPath, Errors, true) ||
+		!UAgentFrameworkActionUtils::TryGetStringParam(Params, TEXT("event_name"), EventName, Errors, true))
+	{
+		Result.Errors.Append(Errors);
+		return Result;
+	}
 
 	UBlueprint* Blueprint = LoadObject<UBlueprint>(nullptr, *AssetPath);
-	if (!Blueprint)
+	if (!IsValid(Blueprint))
 	{
 		Result.Errors.Add(FString::Printf(TEXT("Blueprint not found: '%s'"), *AssetPath));
 		return Result;
@@ -1335,7 +1580,7 @@ FAgentFrameworkActionResult FAgentFrameworkBlueprintActions::ExecuteAddEventHand
 
 	// Find the EventGraph
 	UEdGraph* EventGraph = FindOrCreateEventGraph(Blueprint, TEXT("EventGraph"));
-	if (!EventGraph)
+	if (!IsValid(EventGraph))
 	{
 		Result.Errors.Add(TEXT("Could not find or create EventGraph."));
 		return Result;
@@ -1345,7 +1590,7 @@ FAgentFrameworkActionResult FAgentFrameworkBlueprintActions::ExecuteAddEventHand
 	for (UEdGraphNode* Node : EventGraph->Nodes)
 	{
 		UK2Node_Event* ExistingEvent = Cast<UK2Node_Event>(Node);
-		if (ExistingEvent && ExistingEvent->GetFunctionName() == FunctionName)
+		if (IsValid(ExistingEvent) && ExistingEvent->GetFunctionName() == FunctionName)
 		{
 			int32 PosX = ExistingEvent->NodePosX;
 			int32 PosY = ExistingEvent->NodePosY;
@@ -1360,35 +1605,45 @@ FAgentFrameworkActionResult FAgentFrameworkBlueprintActions::ExecuteAddEventHand
 	// Find the desired Y position
 	int32 NodePosX = 0;
 	int32 NodePosY = 0;
-	Params->TryGetNumberField(TEXT("node_pos_x"), NodePosX);
-	Params->TryGetNumberField(TEXT("node_pos_y"), NodePosY);
+	TArray<FString> PosErrors;
+	UAgentFrameworkActionUtils::TryGetIntParam(Params, TEXT("node_pos_x"), NodePosX, PosErrors, false);
+	UAgentFrameworkActionUtils::TryGetIntParam(Params, TEXT("node_pos_y"), NodePosY, PosErrors, false);
 
 	// Auto Y: place below existing nodes
 	if (NodePosY == 0 && EventGraph->Nodes.Num() > 0)
 	{
 		for (const UEdGraphNode* ExistingNode : EventGraph->Nodes)
 		{
-			int32 Bottom = ExistingNode->NodePosY + 100;
-			if (Bottom > NodePosY) NodePosY = Bottom;
+			if (IsValid(ExistingNode))
+			{
+				int32 Bottom = ExistingNode->NodePosY + 100;
+				if (Bottom > NodePosY) NodePosY = Bottom;
+			}
 		}
 	}
 
 	// Create the event node via FGraphNodeCreator
 	FGraphNodeCreator<UK2Node_Event> EventCreator(*EventGraph);
 	UK2Node_Event* NewEventNode = EventCreator.CreateNode();
-	NewEventNode->EventReference.SetExternalMember(FunctionName, OwnerClass);
-	NewEventNode->bOverrideFunction = true;
-	NewEventNode->NodePosX = NodePosX;
-	NewEventNode->NodePosY = NodePosY;
-	EventCreator.Finalize();
+	if (IsValid(NewEventNode))
+	{
+		NewEventNode->EventReference.SetExternalMember(FunctionName, OwnerClass);
+		NewEventNode->bOverrideFunction = true;
+		NewEventNode->NodePosX = NodePosX;
+		NewEventNode->NodePosY = NodePosY;
+		EventCreator.Finalize();
+	}
 
 	Blueprint->Modify();
 	bool bCompileOk = CompileAndReport(Blueprint, Result, true);
-	Blueprint->GetOutermost()->MarkPackageDirty();
+	if (IsValid(Blueprint->GetOutermost()))
+	{
+		Blueprint->GetOutermost()->MarkPackageDirty();
+	}
 
 	// Return the internal node name so the AI can reference it in connect_blueprint_pins
 	// or in a subsequent T3D block. The node name is of the form "K2Node_Event_N".
-	FString NewNodeName = NewEventNode->GetName();
+	FString NewNodeName = IsValid(NewEventNode) ? NewEventNode->GetName() : TEXT("");
 
 	Result.bSuccess = bCompileOk;
 	Result.ResultMessage = FString::Printf(
@@ -1414,10 +1669,16 @@ FAgentFrameworkActionResult FAgentFrameworkBlueprintActions::ExecuteAddEventHand
 
 FAgentFrameworkActionResult FAgentFrameworkBlueprintActions::ExecuteCompileBlueprint(const TSharedRef<FJsonObject>& Params, FAgentFrameworkActionResult& Result)
 {
-	FString AssetPath = Params->GetStringField(TEXT("asset_path"));
+	FString AssetPath;
+	TArray<FString> Errors;
+	if (!UAgentFrameworkActionUtils::TryGetStringParam(Params, TEXT("asset_path"), AssetPath, Errors, true))
+	{
+		Result.Errors.Append(Errors);
+		return Result;
+	}
 
 	UBlueprint* Blueprint = LoadObject<UBlueprint>(nullptr, *AssetPath);
-	if (!Blueprint)
+	if (!IsValid(Blueprint))
 	{
 		Result.Errors.Add(FString::Printf(TEXT("Blueprint not found: '%s'"), *AssetPath));
 		return Result;
@@ -1442,10 +1703,16 @@ FAgentFrameworkActionResult FAgentFrameworkBlueprintActions::ExecuteCompileBluep
 
 FAgentFrameworkActionResult FAgentFrameworkBlueprintActions::ExecuteSetDefaults(const TSharedRef<FJsonObject>& Params, FAgentFrameworkActionResult& Result)
 {
-	FString AssetPath = Params->GetStringField(TEXT("asset_path"));
+	FString AssetPath;
+	TArray<FString> Errors;
+	if (!UAgentFrameworkActionUtils::TryGetStringParam(Params, TEXT("asset_path"), AssetPath, Errors, true))
+	{
+		Result.Errors.Append(Errors);
+		return Result;
+	}
 
 	UBlueprint* Blueprint = LoadObject<UBlueprint>(nullptr, *AssetPath);
-	if (!Blueprint)
+	if (!IsValid(Blueprint))
 	{
 		Result.Errors.Add(FString::Printf(TEXT("Blueprint not found: '%s'"), *AssetPath));
 		return Result;
@@ -1455,14 +1722,14 @@ FAgentFrameworkActionResult FAgentFrameworkBlueprintActions::ExecuteSetDefaults(
 	if (Blueprint->Status == BS_Dirty || Blueprint->Status == BS_Unknown)
 		FKismetEditorUtilities::CompileBlueprint(Blueprint, EBlueprintCompileOptions::SkipGarbageCollection);
 
-	if (!Blueprint->GeneratedClass)
+	if (!IsValid(Blueprint->GeneratedClass))
 	{
 		Result.Errors.Add(TEXT("Blueprint has no GeneratedClass — it must compile successfully before setting defaults."));
 		return Result;
 	}
 
 	UObject* CDO = Blueprint->GeneratedClass->GetDefaultObject();
-	if (!CDO)
+	if (!IsValid(CDO))
 	{
 		Result.Errors.Add(TEXT("Could not get Class Default Object."));
 		return Result;
@@ -1471,9 +1738,9 @@ FAgentFrameworkActionResult FAgentFrameworkBlueprintActions::ExecuteSetDefaults(
 	CDO->Modify();
 
 	const TSharedPtr<FJsonObject>* DefaultsObj = nullptr;
-	if (!Params->TryGetObjectField(TEXT("defaults"), DefaultsObj) || !DefaultsObj)
+	if (!UAgentFrameworkActionUtils::TryGetObjectParam(Params, TEXT("defaults"), DefaultsObj, Errors, true) || !DefaultsObj)
 	{
-		Result.Errors.Add(TEXT("Missing 'defaults' object field."));
+		Result.Errors.Append(Errors);
 		return Result;
 	}
 
@@ -1498,15 +1765,15 @@ FAgentFrameworkActionResult FAgentFrameworkBlueprintActions::ExecuteSetDefaults(
 			if (CompProp)
 			{
 				UObject* CompObject = CompProp->GetObjectPropertyValue_InContainer(CDO);
-				if (CompObject) TargetObject = CompObject;
+				if (IsValid(CompObject)) TargetObject = CompObject;
 			}
 			else
 			{
 				// Try finding via SCS component templates
-				if (Blueprint->SimpleConstructionScript)
+				if (IsValid(Blueprint->SimpleConstructionScript))
 				{
 					USCS_Node* SCSNode = FindSCSNodeByName(Blueprint, CompName);
-					if (SCSNode && SCSNode->ComponentTemplate)
+					if (IsValid(SCSNode) && IsValid(SCSNode->ComponentTemplate))
 					{
 						TargetObject = SCSNode->ComponentTemplate;
 					}
@@ -1514,7 +1781,7 @@ FAgentFrameworkActionResult FAgentFrameworkBlueprintActions::ExecuteSetDefaults(
 			}
 		}
 
-		if (!TargetObject)
+		if (!IsValid(TargetObject))
 		{
 			Result.Warnings.Add(FString::Printf(TEXT("Component or object '%s' not found on CDO."), *CompName));
 			continue;
@@ -1523,7 +1790,7 @@ FAgentFrameworkActionResult FAgentFrameworkBlueprintActions::ExecuteSetDefaults(
 		FProperty* Prop = TargetObject->GetClass()->FindPropertyByName(FName(*PropName));
 		if (!Prop)
 		{
-			Result.Warnings.Add(FString::Printf(TEXT("Property '%s' not found on '%s'. Property names are case-sensitive C++ names."), *PropName, *TargetObject->GetClass()->GetName()));
+			Result.Warnings.Add(FString::Printf(TEXT("Property '%s' not found on '%s'."), *PropName, *TargetObject->GetClass()->GetName()));
 			continue;
 		}
 
@@ -1541,7 +1808,10 @@ FAgentFrameworkActionResult FAgentFrameworkBlueprintActions::ExecuteSetDefaults(
 		}
 	}
 
-	Blueprint->GetOutermost()->MarkPackageDirty();
+	if (IsValid(Blueprint->GetOutermost()))
+	{
+		Blueprint->GetOutermost()->MarkPackageDirty();
+	}
 	Result.bSuccess = true;
 	Result.ResultMessage = TEXT("Blueprint defaults updated successfully.");
 	Result.ModifiedAssets.Add(AssetPath);
@@ -1554,18 +1824,25 @@ FAgentFrameworkActionResult FAgentFrameworkBlueprintActions::ExecuteSetDefaults(
 
 FAgentFrameworkActionResult FAgentFrameworkBlueprintActions::ExecuteSetComponentProperties(const TSharedRef<FJsonObject>& Params, FAgentFrameworkActionResult& Result)
 {
-	FString AssetPath     = Params->GetStringField(TEXT("asset_path"));
-	FString ComponentName = Params->GetStringField(TEXT("component_name"));
+	FString AssetPath;
+	FString ComponentName;
+	TArray<FString> Errors;
+	if (!UAgentFrameworkActionUtils::TryGetStringParam(Params, TEXT("asset_path"), AssetPath, Errors, true) ||
+		!UAgentFrameworkActionUtils::TryGetStringParam(Params, TEXT("component_name"), ComponentName, Errors, true))
+	{
+		Result.Errors.Append(Errors);
+		return Result;
+	}
 
 	UBlueprint* Blueprint = LoadObject<UBlueprint>(nullptr, *AssetPath);
-	if (!Blueprint)
+	if (!IsValid(Blueprint))
 	{
 		Result.Errors.Add(FString::Printf(TEXT("Blueprint not found: '%s'"), *AssetPath));
 		return Result;
 	}
 
 	USCS_Node* SCSNode = FindSCSNodeByName(Blueprint, ComponentName);
-	if (!SCSNode)
+	if (!IsValid(SCSNode))
 	{
 		Result.Errors.Add(FString::Printf(
 			TEXT("Component '%s' not found in SCS. Available components: use get_blueprint_info to list them."),
@@ -1574,7 +1851,7 @@ FAgentFrameworkActionResult FAgentFrameworkBlueprintActions::ExecuteSetComponent
 	}
 
 	UActorComponent* CompTemplate = SCSNode->ComponentTemplate;
-	if (!CompTemplate)
+	if (!IsValid(CompTemplate))
 	{
 		Result.Errors.Add(FString::Printf(TEXT("Component '%s' has no template object."), *ComponentName));
 		return Result;
@@ -1585,17 +1862,18 @@ FAgentFrameworkActionResult FAgentFrameworkBlueprintActions::ExecuteSetComponent
 
 	// --- Static Mesh ---
 	FString StaticMeshPath;
-	if (Params->TryGetStringField(TEXT("static_mesh"), StaticMeshPath) && !StaticMeshPath.IsEmpty())
+	TArray<FString> SMErrors;
+	if (UAgentFrameworkActionUtils::TryGetStringParam(Params, TEXT("static_mesh"), StaticMeshPath, SMErrors, false) && !StaticMeshPath.IsEmpty())
 	{
 		UStaticMeshComponent* SMC = Cast<UStaticMeshComponent>(CompTemplate);
-		if (!SMC)
+		if (!IsValid(SMC))
 		{
 			Result.Warnings.Add(FString::Printf(TEXT("Component '%s' is not a StaticMeshComponent — cannot assign static_mesh."), *ComponentName));
 		}
 		else
 		{
 			UStaticMesh* Mesh = LoadObject<UStaticMesh>(nullptr, *StaticMeshPath);
-			if (Mesh)
+			if (IsValid(Mesh))
 			{
 				SMC->SetStaticMesh(Mesh);
 				UE_LOG(LogAgentFramework, Log, TEXT("BlueprintActions: Set StaticMesh '%s' on component '%s'"), *StaticMeshPath, *ComponentName);
@@ -1609,17 +1887,18 @@ FAgentFrameworkActionResult FAgentFrameworkBlueprintActions::ExecuteSetComponent
 
 	// --- Skeletal Mesh ---
 	FString SkeletalMeshPath;
-	if (Params->TryGetStringField(TEXT("skeletal_mesh"), SkeletalMeshPath) && !SkeletalMeshPath.IsEmpty())
+	TArray<FString> SKErrors;
+	if (UAgentFrameworkActionUtils::TryGetStringParam(Params, TEXT("skeletal_mesh"), SkeletalMeshPath, SKErrors, false) && !SkeletalMeshPath.IsEmpty())
 	{
 		USkeletalMeshComponent* SKC = Cast<USkeletalMeshComponent>(CompTemplate);
-		if (!SKC)
+		if (!IsValid(SKC))
 		{
 			Result.Warnings.Add(FString::Printf(TEXT("Component '%s' is not a SkeletalMeshComponent — cannot assign skeletal_mesh."), *ComponentName));
 		}
 		else
 		{
 			USkeletalMesh* Mesh = LoadObject<USkeletalMesh>(nullptr, *SkeletalMeshPath);
-			if (Mesh)
+			if (IsValid(Mesh))
 			{
 				SKC->SetSkeletalMeshAsset(Mesh);
 				UE_LOG(LogAgentFramework, Log, TEXT("BlueprintActions: Set SkeletalMesh '%s' on component '%s'"), *SkeletalMeshPath, *ComponentName);
@@ -1633,55 +1912,62 @@ FAgentFrameworkActionResult FAgentFrameworkBlueprintActions::ExecuteSetComponent
 
 	// --- Transform: Relative Location ---
 	const TSharedPtr<FJsonObject>* RelLocObj = nullptr;
-	if (Params->TryGetObjectField(TEXT("relative_location"), RelLocObj))
+	TArray<FString> RelLocErrors;
+	if (UAgentFrameworkActionUtils::TryGetObjectParam(Params, TEXT("relative_location"), RelLocObj, RelLocErrors, false) && RelLocObj && (*RelLocObj).IsValid())
 	{
 		USceneComponent* SC = Cast<USceneComponent>(CompTemplate);
-		if (SC)
+		if (IsValid(SC))
 		{
 			double X = 0, Y = 0, Z = 0;
-			(*RelLocObj)->TryGetNumberField(TEXT("x"), X);
-			(*RelLocObj)->TryGetNumberField(TEXT("y"), Y);
-			(*RelLocObj)->TryGetNumberField(TEXT("z"), Z);
+			TArray<FString> ComponentErrors;
+			UAgentFrameworkActionUtils::TryGetDoubleParam(*RelLocObj, TEXT("x"), X, ComponentErrors, false);
+			UAgentFrameworkActionUtils::TryGetDoubleParam(*RelLocObj, TEXT("y"), Y, ComponentErrors, false);
+			UAgentFrameworkActionUtils::TryGetDoubleParam(*RelLocObj, TEXT("z"), Z, ComponentErrors, false);
 			SC->SetRelativeLocation(FVector(X, Y, Z));
 		}
 	}
 
 	// --- Transform: Relative Rotation ---
 	const TSharedPtr<FJsonObject>* RelRotObj = nullptr;
-	if (Params->TryGetObjectField(TEXT("relative_rotation"), RelRotObj))
+	TArray<FString> RelRotErrors;
+	if (UAgentFrameworkActionUtils::TryGetObjectParam(Params, TEXT("relative_rotation"), RelRotObj, RelRotErrors, false) && RelRotObj && (*RelRotObj).IsValid())
 	{
 		USceneComponent* SC = Cast<USceneComponent>(CompTemplate);
-		if (SC)
+		if (IsValid(SC))
 		{
 			double Pitch = 0, Yaw = 0, Roll = 0;
-			(*RelRotObj)->TryGetNumberField(TEXT("pitch"), Pitch);
-			(*RelRotObj)->TryGetNumberField(TEXT("yaw"), Yaw);
-			(*RelRotObj)->TryGetNumberField(TEXT("roll"), Roll);
+			TArray<FString> ComponentErrors;
+			UAgentFrameworkActionUtils::TryGetDoubleParam(*RelRotObj, TEXT("pitch"), Pitch, ComponentErrors, false);
+			UAgentFrameworkActionUtils::TryGetDoubleParam(*RelRotObj, TEXT("yaw"), Yaw, ComponentErrors, false);
+			UAgentFrameworkActionUtils::TryGetDoubleParam(*RelRotObj, TEXT("roll"), Roll, ComponentErrors, false);
 			SC->SetRelativeRotation(FRotator(Pitch, Yaw, Roll));
 		}
 	}
 
 	// --- Transform: Relative Scale ---
 	const TSharedPtr<FJsonObject>* RelScaleObj = nullptr;
-	if (Params->TryGetObjectField(TEXT("relative_scale"), RelScaleObj))
+	TArray<FString> RelScaleErrors;
+	if (UAgentFrameworkActionUtils::TryGetObjectParam(Params, TEXT("relative_scale"), RelScaleObj, RelScaleErrors, false) && RelScaleObj && (*RelScaleObj).IsValid())
 	{
 		USceneComponent* SC = Cast<USceneComponent>(CompTemplate);
-		if (SC)
+		if (IsValid(SC))
 		{
 			double X = 1, Y = 1, Z = 1;
-			(*RelScaleObj)->TryGetNumberField(TEXT("x"), X);
-			(*RelScaleObj)->TryGetNumberField(TEXT("y"), Y);
-			(*RelScaleObj)->TryGetNumberField(TEXT("z"), Z);
+			TArray<FString> ComponentErrors;
+			UAgentFrameworkActionUtils::TryGetDoubleParam(*RelScaleObj, TEXT("x"), X, ComponentErrors, false);
+			UAgentFrameworkActionUtils::TryGetDoubleParam(*RelScaleObj, TEXT("y"), Y, ComponentErrors, false);
+			UAgentFrameworkActionUtils::TryGetDoubleParam(*RelScaleObj, TEXT("z"), Z, ComponentErrors, false);
 			SC->SetRelativeScale3D(FVector(X, Y, Z));
 		}
 	}
 
 	// --- Collision Profile ---
 	FString CollisionProfile;
-	if (Params->TryGetStringField(TEXT("collision_profile"), CollisionProfile) && !CollisionProfile.IsEmpty())
+	TArray<FString> CPErrors;
+	if (UAgentFrameworkActionUtils::TryGetStringParam(Params, TEXT("collision_profile"), CollisionProfile, CPErrors, false) && !CollisionProfile.IsEmpty())
 	{
 		UPrimitiveComponent* PC = Cast<UPrimitiveComponent>(CompTemplate);
-		if (PC)
+		if (IsValid(PC))
 			PC->SetCollisionProfileName(FName(*CollisionProfile));
 		else
 			Result.Warnings.Add(FString::Printf(TEXT("Component '%s' is not a PrimitiveComponent — cannot set collision profile."), *ComponentName));
@@ -1689,7 +1975,8 @@ FAgentFrameworkActionResult FAgentFrameworkBlueprintActions::ExecuteSetComponent
 
 	// --- Generic reflection-based properties ---
 	const TSharedPtr<FJsonObject>* PropsObj = nullptr;
-	if (Params->TryGetObjectField(TEXT("properties"), PropsObj))
+	TArray<FString> PropsErrors;
+	if (UAgentFrameworkActionUtils::TryGetObjectParam(Params, TEXT("properties"), PropsObj, PropsErrors, false) && PropsObj && (*PropsObj).IsValid())
 	{
 		for (const auto& Pair : (*PropsObj)->Values)
 		{
@@ -1709,7 +1996,10 @@ FAgentFrameworkActionResult FAgentFrameworkBlueprintActions::ExecuteSetComponent
 	}
 
 	bool bCompileOk = CompileAndReport(Blueprint, Result, true);
-	Blueprint->GetOutermost()->MarkPackageDirty();
+	if (IsValid(Blueprint->GetOutermost()))
+	{
+		Blueprint->GetOutermost()->MarkPackageDirty();
+	}
 
 	Result.bSuccess = bCompileOk;
 	Result.ResultMessage = FString::Printf(TEXT("Updated component '%s' properties in '%s'. Compile: %s."),
@@ -1724,19 +2014,22 @@ FAgentFrameworkActionResult FAgentFrameworkBlueprintActions::ExecuteSetComponent
 
 FAgentFrameworkActionResult FAgentFrameworkBlueprintActions::ExecuteInjectNodesT3D(const TSharedRef<FJsonObject>& Params, FAgentFrameworkActionResult& Result)
 {
-	FString AssetPath = Params->GetStringField(TEXT("asset_path"));
+	FString AssetPath;
 	FString T3DText;
-	if (!Params->TryGetStringField(TEXT("t3d_text"), T3DText) || T3DText.IsEmpty())
+	TArray<FString> Errors;
+	if (!UAgentFrameworkActionUtils::TryGetStringParam(Params, TEXT("asset_path"), AssetPath, Errors, true) ||
+		!UAgentFrameworkActionUtils::TryGetStringParam(Params, TEXT("t3d_text"), T3DText, Errors, true))
 	{
-		Result.Errors.Add(TEXT("Missing required field: 't3d_text'. Provide T3D-formatted node block(s) as a string."));
+		Result.Errors.Append(Errors);
 		return Result;
 	}
 
 	FString GraphName = TEXT("EventGraph");
-	Params->TryGetStringField(TEXT("graph_name"), GraphName);
+	TArray<FString> GraphErrors;
+	UAgentFrameworkActionUtils::TryGetStringParam(Params, TEXT("graph_name"), GraphName, GraphErrors, false);
 
 	UBlueprint* Blueprint = LoadObject<UBlueprint>(nullptr, *AssetPath);
-	if (!Blueprint)
+	if (!IsValid(Blueprint))
 	{
 		Result.Errors.Add(FString::Printf(TEXT("Blueprint not found: '%s'"), *AssetPath));
 		return Result;
@@ -1744,12 +2037,12 @@ FAgentFrameworkActionResult FAgentFrameworkBlueprintActions::ExecuteInjectNodesT
 
 	// Find or create the target graph
 	UEdGraph* TargetGraph = FindOrCreateEventGraph(Blueprint, GraphName);
-	if (!TargetGraph)
+	if (!IsValid(TargetGraph))
 	{
 		// Try FunctionGraphs
 		for (UEdGraph* G : Blueprint->FunctionGraphs)
 		{
-			if (G && G->GetName() == GraphName)
+			if (IsValid(G) && G->GetName() == GraphName)
 			{
 				TargetGraph = G;
 				break;
@@ -1757,7 +2050,7 @@ FAgentFrameworkActionResult FAgentFrameworkBlueprintActions::ExecuteInjectNodesT
 		}
 	}
 
-	if (!TargetGraph)
+	if (!IsValid(TargetGraph))
 	{
 		Result.Errors.Add(FString::Printf(
 			TEXT("Graph '%s' not found in Blueprint '%s'. Use add_blueprint_function to create it first, or use 'EventGraph' for the main event graph."),
@@ -1898,11 +2191,11 @@ FAgentFrameworkActionResult FAgentFrameworkBlueprintActions::ExecuteInjectNodesT
 		}
 
 		TMap<FString, TSet<FString>> ExistingNodesAndPins;
-		if (TargetGraph)
+		if (IsValid(TargetGraph))
 		{
 			for (UEdGraphNode* GNode : TargetGraph->Nodes)
 			{
-				if (GNode)
+				if (IsValid(GNode))
 				{
 					FString GNodeNameLower = GNode->GetName().ToLower();
 					auto& PinSet = ExistingNodesAndPins.FindOrAdd(GNodeNameLower);
@@ -2098,7 +2391,8 @@ FAgentFrameworkActionResult FAgentFrameworkBlueprintActions::ExecuteInjectNodesT
 	Blueprint->Modify();
 
 	const TArray<TSharedPtr<FJsonValue>>* ConnectionsArray = nullptr;
-	if (Params->TryGetArrayField(TEXT("connections"), ConnectionsArray))
+	TArray<FString> ConnErrors;
+	if (UAgentFrameworkActionUtils::TryGetArrayParam(Params, TEXT("connections"), ConnectionsArray, ConnErrors, false) && ConnectionsArray)
 	{
 		for (const TSharedPtr<FJsonValue>& ConnVal : *ConnectionsArray)
 		{
@@ -2106,10 +2400,11 @@ FAgentFrameworkActionResult FAgentFrameworkBlueprintActions::ExecuteInjectNodesT
 			if (!ConnObj.IsValid()) continue;
 
 			FString SrcNodeName, SrcPinName, DstNodeName, DstPinName;
-			ConnObj->TryGetStringField(TEXT("source_node"), SrcNodeName);
-			ConnObj->TryGetStringField(TEXT("source_pin"), SrcPinName);
-			ConnObj->TryGetStringField(TEXT("target_node"), DstNodeName);
-			ConnObj->TryGetStringField(TEXT("target_pin"), DstPinName);
+			TArray<FString> ItemErrors;
+			UAgentFrameworkActionUtils::TryGetStringParam(ConnObj, TEXT("source_node"), SrcNodeName, ItemErrors, false);
+			UAgentFrameworkActionUtils::TryGetStringParam(ConnObj, TEXT("source_pin"), SrcPinName, ItemErrors, false);
+			UAgentFrameworkActionUtils::TryGetStringParam(ConnObj, TEXT("target_node"), DstNodeName, ItemErrors, false);
+			UAgentFrameworkActionUtils::TryGetStringParam(ConnObj, TEXT("target_pin"), DstPinName, ItemErrors, false);
 
 			if (!SrcNodeName.IsEmpty() && !SrcPinName.IsEmpty() && !DstNodeName.IsEmpty() && !DstPinName.IsEmpty())
 			{
@@ -2143,7 +2438,7 @@ FAgentFrameworkActionResult FAgentFrameworkBlueprintActions::ExecuteInjectNodesT
 		TSet<FString> GraphNodeNames;
 		for (UEdGraphNode* GNode : TargetGraph->Nodes)
 		{
-			if (GNode)
+			if (IsValid(GNode))
 			{
 				ValidGraphNodes.Add(GNode);
 				GraphNodeNames.Add(GNode->GetName());
@@ -2156,7 +2451,7 @@ FAgentFrameworkActionResult FAgentFrameworkBlueprintActions::ExecuteInjectNodesT
 		// Iterate ALL nodes in the graph, not just imported ones
 		for (UEdGraphNode* Node : TargetGraph->Nodes)
 		{
-			if (!Node) continue;
+			if (!IsValid(Node)) continue;
 
 			// Step 1: Remove null entries from the Pins array itself.
 			// This prevents check(Pin) assertion in ReconstructNode.
@@ -2182,7 +2477,7 @@ FAgentFrameworkActionResult FAgentFrameworkBlueprintActions::ExecuteInjectNodesT
 				{
 					if (!LinkedPin) return true;
 					UEdGraphNode* OwningNode = LinkedPin->GetOwningNodeUnchecked();
-					if (!OwningNode) return true;
+					if (!IsValid(OwningNode)) return true;
 					if (!ValidGraphNodes.Contains(OwningNode)) return true;
 					return false;
 				});
@@ -2224,7 +2519,8 @@ FAgentFrameworkActionResult FAgentFrameworkBlueprintActions::ExecuteInjectNodesT
 	// -----------------------------------------------------------------------
 	{
 		bool bAutoLayout = true;
-		Params->TryGetBoolField(TEXT("auto_layout"), bAutoLayout);
+		TArray<FString> LayoutErrors;
+		UAgentFrameworkActionUtils::TryGetBoolParam(Params, TEXT("auto_layout"), bAutoLayout, LayoutErrors, false);
 
 		if (bAutoLayout && ImportedNodes.Num() > 1)
 		{
@@ -2232,7 +2528,7 @@ FAgentFrameworkActionResult FAgentFrameworkBlueprintActions::ExecuteInjectNodesT
 			int32 MaxExistingY = 0;
 			for (UEdGraphNode* ExistingNode : TargetGraph->Nodes)
 			{
-				if (ExistingNode && !ImportedNodes.Contains(ExistingNode))
+				if (IsValid(ExistingNode) && !ImportedNodes.Contains(ExistingNode))
 				{
 					MaxExistingY = FMath::Max(MaxExistingY, ExistingNode->NodePosY + 200);
 				}
@@ -2251,13 +2547,16 @@ FAgentFrameworkActionResult FAgentFrameworkBlueprintActions::ExecuteInjectNodesT
 	FString PinAuditReport = BuildPinAuditReport(ImportedNodes);
 
 	bool bCompileOk = CompileAndReport(Blueprint, Result, true);
-	Blueprint->GetOutermost()->MarkPackageDirty();
+	if (IsValid(Blueprint->GetOutermost()))
+	{
+		Blueprint->GetOutermost()->MarkPackageDirty();
+	}
 
 	// Report node positions so AI can place subsequent nodes without overlap
 	FString NodePositions;
 	for (UEdGraphNode* Node : ImportedNodes)
 	{
-		if (Node)
+		if (IsValid(Node))
 		{
 			NodePositions += FString::Printf(TEXT("  %s @ (%d, %d)\n"), *Node->GetNodeTitle(ENodeTitleType::FullTitle).ToString(), Node->NodePosX, Node->NodePosY);
 		}
@@ -2290,27 +2589,34 @@ FAgentFrameworkActionResult FAgentFrameworkBlueprintActions::ExecuteInjectNodesT
 
 FAgentFrameworkActionResult FAgentFrameworkBlueprintActions::ExecuteGetBlueprintInfo(const TSharedRef<FJsonObject>& Params, FAgentFrameworkActionResult& Result)
 {
-	FString AssetPath = Params->GetStringField(TEXT("asset_path"));
+	FString AssetPath;
+	TArray<FString> Errors;
+	if (!UAgentFrameworkActionUtils::TryGetStringParam(Params, TEXT("asset_path"), AssetPath, Errors, true))
+	{
+		Result.Errors.Append(Errors);
+		return Result;
+	}
 
 	UBlueprint* Blueprint = LoadObject<UBlueprint>(nullptr, *AssetPath);
-	if (!Blueprint)
+	if (!IsValid(Blueprint))
 	{
 		Result.Errors.Add(FString::Printf(TEXT("Blueprint not found: '%s'"), *AssetPath));
 		return Result;
 	}
 
 	bool bExcludeVisualLayout = false;
-	Params->TryGetBoolField(TEXT("exclude_visual_layout"), bExcludeVisualLayout);
+	TArray<FString> OptErrors;
+	UAgentFrameworkActionUtils::TryGetBoolParam(Params, TEXT("exclude_visual_layout"), bExcludeVisualLayout, OptErrors, false);
 
 	FString QueryMode = TEXT("full");
-	Params->TryGetStringField(TEXT("query_mode"), QueryMode);
+	UAgentFrameworkActionUtils::TryGetStringParam(Params, TEXT("query_mode"), QueryMode, OptErrors, false);
 
 	FString ClientHash;
-	Params->TryGetStringField(TEXT("client_hash"), ClientHash);
+	UAgentFrameworkActionUtils::TryGetStringParam(Params, TEXT("client_hash"), ClientHash, OptErrors, false);
 
 	TArray<FString> NodeNames;
 	const TArray<TSharedPtr<FJsonValue>>* NodeNamesArray = nullptr;
-	if (Params->TryGetArrayField(TEXT("node_names"), NodeNamesArray))
+	if (UAgentFrameworkActionUtils::TryGetArrayParam(Params, TEXT("node_names"), NodeNamesArray, OptErrors, false) && NodeNamesArray)
 	{
 		for (const TSharedPtr<FJsonValue>& Val : *NodeNamesArray)
 		{
@@ -2319,10 +2625,16 @@ FAgentFrameworkActionResult FAgentFrameworkBlueprintActions::ExecuteGetBlueprint
 	}
 
 	int32 ModCount = AssetModificationCounts.FindOrAdd(AssetPath, 0);
+	bool bIsDirty = false;
+	if (IsValid(Blueprint->GetOutermost()))
+	{
+		bIsDirty = Blueprint->GetOutermost()->IsDirty();
+	}
+
 	FString CurrentHash = FString::Printf(TEXT("%d_%d_%d"),
 		ModCount,
 		(int32)Blueprint->Status,
-		Blueprint->GetOutermost()->IsDirty() ? 1 : 0);
+		bIsDirty ? 1 : 0);
 
 	TSharedPtr<FJsonObject> ResponseObj = MakeShared<FJsonObject>();
 	ResponseObj->SetStringField(TEXT("asset_path"), CompressBlueprintAssetPath(Blueprint->GetPathName()));
@@ -2349,12 +2661,12 @@ FAgentFrameworkActionResult FAgentFrameworkBlueprintActions::ExecuteGetBlueprint
 			FString GraphReadbacks;
 			auto ReportGraph = [&](UEdGraph* Graph, const FString& GraphType)
 			{
-				if (!Graph) return;
+				if (!IsValid(Graph)) return;
 
 				TSet<UEdGraphNode*> NodeSet;
 				for (UEdGraphNode* Node : Graph->Nodes)
 				{
-					if (Node)
+					if (IsValid(Node))
 					{
 						if (NodeNames.Num() > 0 && !NodeNames.Contains(Node->GetName())) continue;
 						NodeSet.Add(Node);
@@ -2365,9 +2677,9 @@ FAgentFrameworkActionResult FAgentFrameworkBlueprintActions::ExecuteGetBlueprint
 				GraphReadbacks += BuildCompactConnectionReport(NodeSet, Graph->GetName());
 			};
 
-			for (UEdGraph* G : Blueprint->UbergraphPages)   ReportGraph(G, TEXT("EventGraph"));
-			for (UEdGraph* G : Blueprint->FunctionGraphs)   ReportGraph(G, TEXT("Function"));
-			for (UEdGraph* G : Blueprint->MacroGraphs)      ReportGraph(G, TEXT("Macro"));
+			for (UEdGraph* G : Blueprint->UbergraphPages)   if (IsValid(G)) ReportGraph(G, TEXT("EventGraph"));
+			for (UEdGraph* G : Blueprint->FunctionGraphs)   if (IsValid(G)) ReportGraph(G, TEXT("Function"));
+			for (UEdGraph* G : Blueprint->MacroGraphs)      if (IsValid(G)) ReportGraph(G, TEXT("Macro"));
 
 			if (!GraphReadbacks.IsEmpty())
 			{
@@ -2391,38 +2703,45 @@ FAgentFrameworkActionResult FAgentFrameworkBlueprintActions::ExecuteGetBlueprint
 
 FAgentFrameworkActionResult FAgentFrameworkBlueprintActions::ExecuteAnalyzeBlueprintGraph(const TSharedRef<FJsonObject>& Params, FAgentFrameworkActionResult& Result)
 {
-	FString AssetPath = Params->GetStringField(TEXT("asset_path"));
+	FString AssetPath;
+	TArray<FString> Errors;
+	if (!UAgentFrameworkActionUtils::TryGetStringParam(Params, TEXT("asset_path"), AssetPath, Errors, true))
+	{
+		Result.Errors.Append(Errors);
+		return Result;
+	}
 
 	UBlueprint* Blueprint = LoadObject<UBlueprint>(nullptr, *AssetPath);
-	if (!Blueprint)
+	if (!IsValid(Blueprint))
 	{
 		Result.Errors.Add(FString::Printf(TEXT("Blueprint not found: '%s'"), *AssetPath));
 		return Result;
 	}
 
 	FString GraphNameFilter;
-	Params->TryGetStringField(TEXT("graph_name"), GraphNameFilter);
+	TArray<FString> FilterErrors;
+	UAgentFrameworkActionUtils::TryGetStringParam(Params, TEXT("graph_name"), GraphNameFilter, FilterErrors, false);
 
 	FString GraphReadbacks;
 
 	auto ReportGraph = [&](UEdGraph* Graph, const FString& GraphType)
 	{
-		if (!Graph) return;
+		if (!IsValid(Graph)) return;
 		if (!GraphNameFilter.IsEmpty() && Graph->GetName() != GraphNameFilter) return;
 
 		TSet<UEdGraphNode*> NodeSet;
 		for (UEdGraphNode* Node : Graph->Nodes)
 		{
-			if (Node) NodeSet.Add(Node);
+			if (IsValid(Node)) NodeSet.Add(Node);
 		}
 		if (NodeSet.IsEmpty()) return;
 
 		GraphReadbacks += BuildCompactConnectionReport(NodeSet, Graph->GetName());
 	};
 
-	for (UEdGraph* G : Blueprint->UbergraphPages)   ReportGraph(G, TEXT("EventGraph"));
-	for (UEdGraph* G : Blueprint->FunctionGraphs)   ReportGraph(G, TEXT("Function"));
-	for (UEdGraph* G : Blueprint->MacroGraphs)      ReportGraph(G, TEXT("Macro"));
+	for (UEdGraph* G : Blueprint->UbergraphPages)   if (IsValid(G)) ReportGraph(G, TEXT("EventGraph"));
+	for (UEdGraph* G : Blueprint->FunctionGraphs)   if (IsValid(G)) ReportGraph(G, TEXT("Function"));
+	for (UEdGraph* G : Blueprint->MacroGraphs)      if (IsValid(G)) ReportGraph(G, TEXT("Macro"));
 
 	if (GraphReadbacks.IsEmpty())
 	{
@@ -2430,26 +2749,26 @@ FAgentFrameworkActionResult FAgentFrameworkBlueprintActions::ExecuteAnalyzeBluep
 		{
 			// Check if the graph exists but is empty
 			UEdGraph* FoundGraph = nullptr;
-			for (UEdGraph* G : Blueprint->UbergraphPages)   { if (G && G->GetName() == GraphNameFilter) { FoundGraph = G; break; } }
+			for (UEdGraph* G : Blueprint->UbergraphPages)   { if (IsValid(G) && G->GetName() == GraphNameFilter) { FoundGraph = G; break; } }
 			if (!FoundGraph)
 			{
-				for (UEdGraph* G : Blueprint->FunctionGraphs)   { if (G && G->GetName() == GraphNameFilter) { FoundGraph = G; break; } }
+				for (UEdGraph* G : Blueprint->FunctionGraphs)   { if (IsValid(G) && G->GetName() == GraphNameFilter) { FoundGraph = G; break; } }
 			}
 			if (!FoundGraph)
 			{
-				for (UEdGraph* G : Blueprint->MacroGraphs)      { if (G && G->GetName() == GraphNameFilter) { FoundGraph = G; break; } }
+				for (UEdGraph* G : Blueprint->MacroGraphs)      { if (IsValid(G) && G->GetName() == GraphNameFilter) { FoundGraph = G; break; } }
 			}
 
-			if (FoundGraph)
+			if (IsValid(FoundGraph))
 			{
 				GraphReadbacks = FString::Printf(TEXT("Graph '%s' exists in Blueprint '%s' but contains no nodes."), *GraphNameFilter, *AssetPath);
 			}
 			else
 			{
 				TArray<FString> AvailableGraphs;
-				for (UEdGraph* G : Blueprint->UbergraphPages)   { if (G) AvailableGraphs.Add(G->GetName()); }
-				for (UEdGraph* G : Blueprint->FunctionGraphs)   { if (G) AvailableGraphs.Add(G->GetName()); }
-				for (UEdGraph* G : Blueprint->MacroGraphs)      { if (G) AvailableGraphs.Add(G->GetName()); }
+				for (UEdGraph* G : Blueprint->UbergraphPages)   { if (IsValid(G)) AvailableGraphs.Add(G->GetName()); }
+				for (UEdGraph* G : Blueprint->FunctionGraphs)   { if (IsValid(G)) AvailableGraphs.Add(G->GetName()); }
+				for (UEdGraph* G : Blueprint->MacroGraphs)      { if (IsValid(G)) AvailableGraphs.Add(G->GetName()); }
 
 				GraphReadbacks = FString::Printf(TEXT("Graph '%s' not found in Blueprint '%s'. Available graphs: %s"),
 					*GraphNameFilter, *AssetPath, *FString::Join(AvailableGraphs, TEXT(", ")));
@@ -2479,27 +2798,27 @@ bool FAgentFrameworkBlueprintActions::ConnectPinsHelper(
 	const FString& TargetPin,
 	FAgentFrameworkActionResult& Result)
 {
-	check(Blueprint);
-	check(TargetGraph);
+	if (!IsValid(Blueprint)) return false;
+	if (!IsValid(TargetGraph)) return false;
 
 	UEdGraphNode* SrcNode = nullptr;
 	UEdGraphNode* DstNode = nullptr;
 
 	for (UEdGraphNode* Node : TargetGraph->Nodes)
 	{
-		if (!Node) continue;
+		if (!IsValid(Node)) continue;
 		if (Node->GetName() == SourceNode) SrcNode = Node;
 		if (Node->GetName() == TargetNode) DstNode = Node;
 		if (SrcNode && DstNode) break;
 	}
 
-	if (!SrcNode)
+	if (!IsValid(SrcNode))
 	{
 		Result.Errors.Add(FString::Printf(TEXT("Source node '%s' not found in graph '%s'."), *SourceNode, *TargetGraph->GetName()));
 		return false;
 	}
 
-	if (!DstNode)
+	if (!IsValid(DstNode))
 	{
 		Result.Errors.Add(FString::Printf(TEXT("Target node '%s' not found in graph '%s'."), *TargetNode, *TargetGraph->GetName()));
 		return false;
@@ -2550,6 +2869,7 @@ bool FAgentFrameworkBlueprintActions::ConnectPinsHelper(
 	DstNode->Modify();
 
 	const UEdGraphSchema* Schema = TargetGraph->GetSchema();
+	if (!Schema) return false;
 	FPinConnectionResponse ConnResponse = Schema->CanCreateConnection(OutputPin, InputPin);
 
 	if (ConnResponse.Response == CONNECT_RESPONSE_DISALLOW)
@@ -2574,36 +2894,22 @@ FAgentFrameworkActionResult FAgentFrameworkBlueprintActions::ExecuteConnectPins(
 	FString SourcePin;
 	FString TargetNode;
 	FString TargetPin;
+	TArray<FString> Errors;
 
-	if (!Params->TryGetStringField(TEXT("asset_path"), AssetPath) || AssetPath.IsEmpty())
+	if (!UAgentFrameworkActionUtils::TryGetStringParam(Params, TEXT("asset_path"), AssetPath, Errors, true) ||
+		!UAgentFrameworkActionUtils::TryGetStringParam(Params, TEXT("source_node"), SourceNode, Errors, true) ||
+		!UAgentFrameworkActionUtils::TryGetStringParam(Params, TEXT("source_pin"), SourcePin, Errors, true) ||
+		!UAgentFrameworkActionUtils::TryGetStringParam(Params, TEXT("target_node"), TargetNode, Errors, true) ||
+		!UAgentFrameworkActionUtils::TryGetStringParam(Params, TEXT("target_pin"), TargetPin, Errors, true))
 	{
-		Result.Errors.Add(TEXT("Missing required field: asset_path"));
+		Result.Errors.Append(Errors);
 		return Result;
 	}
-	Params->TryGetStringField(TEXT("graph_name"), GraphName);
-	if (!Params->TryGetStringField(TEXT("source_node"), SourceNode) || SourceNode.IsEmpty())
-	{
-		Result.Errors.Add(TEXT("Missing required field: source_node. Provide the internal node name from get_blueprint_info or add_blueprint_event result."));
-		return Result;
-	}
-	if (!Params->TryGetStringField(TEXT("source_pin"), SourcePin) || SourcePin.IsEmpty())
-	{
-		Result.Errors.Add(TEXT("Missing required field: source_pin. Common exec output pins: \"then\", \"False\", \"True\". Common data output pins: \"ReturnValue\"."));
-		return Result;
-	}
-	if (!Params->TryGetStringField(TEXT("target_node"), TargetNode) || TargetNode.IsEmpty())
-	{
-		Result.Errors.Add(TEXT("Missing required field: target_node. Provide the internal node name from get_blueprint_info."));
-		return Result;
-	}
-	if (!Params->TryGetStringField(TEXT("target_pin"), TargetPin) || TargetPin.IsEmpty())
-	{
-		Result.Errors.Add(TEXT("Missing required field: target_pin. Common exec input pins: \"execute\". Common data input pins: \"Target\", \"Value\", \"Condition\"."));
-		return Result;
-	}
+	TArray<FString> OptErrors;
+	UAgentFrameworkActionUtils::TryGetStringParam(Params, TEXT("graph_name"), GraphName, OptErrors, false);
 
 	UBlueprint* Blueprint = LoadObject<UBlueprint>(nullptr, *AssetPath);
-	if (!Blueprint)
+	if (!IsValid(Blueprint))
 	{
 		Result.Errors.Add(FString::Printf(TEXT("Blueprint not found: '%s'"), *AssetPath));
 		return Result;
@@ -2613,24 +2919,24 @@ FAgentFrameworkActionResult FAgentFrameworkBlueprintActions::ExecuteConnectPins(
 	UEdGraph* TargetGraph = nullptr;
 	for (UEdGraph* G : Blueprint->UbergraphPages)
 	{
-		if (G && G->GetName() == GraphName)
+		if (IsValid(G) && G->GetName() == GraphName)
 		{
 			TargetGraph = G;
 			break;
 		}
 	}
-	if (!TargetGraph)
+	if (!IsValid(TargetGraph))
 	{
 		for (UEdGraph* G : Blueprint->FunctionGraphs)
 		{
-			if (G && G->GetName() == GraphName)
+			if (IsValid(G) && G->GetName() == GraphName)
 			{
 				TargetGraph = G;
 				break;
 			}
 		}
 	}
-	if (!TargetGraph)
+	if (!IsValid(TargetGraph))
 	{
 		Result.Errors.Add(FString::Printf(
 			TEXT("Graph '%s' not found in Blueprint '%s'. Use get_blueprint_info to list available graphs."),
@@ -2641,7 +2947,10 @@ FAgentFrameworkActionResult FAgentFrameworkBlueprintActions::ExecuteConnectPins(
 	if (ConnectPinsHelper(Blueprint, TargetGraph, SourceNode, SourcePin, TargetNode, TargetPin, Result))
 	{
 		bool bCompileOk = CompileAndReport(Blueprint, Result, true);
-		Blueprint->GetOutermost()->MarkPackageDirty();
+		if (IsValid(Blueprint->GetOutermost()))
+		{
+			Blueprint->GetOutermost()->MarkPackageDirty();
+		}
 
 		Result.bSuccess = bCompileOk;
 		Result.ResultMessage = FString::Printf(
@@ -3045,41 +3354,88 @@ void FAgentFrameworkBlueprintActions::ResolvePinType(const FString& TypeName, FE
 {
 	FString TrimmedType = TypeName.TrimStartAndEnd();
 
-	if (TrimmedType.StartsWith(TEXT("TArray<"), ESearchCase::IgnoreCase) && TrimmedType.EndsWith(TEXT(">")))
+	if ((TrimmedType.StartsWith(TEXT("TArray<"), ESearchCase::IgnoreCase) && TrimmedType.EndsWith(TEXT(">"))) ||
+		TrimmedType.StartsWith(TEXT("Array of "), ESearchCase::IgnoreCase))
 	{
-		FString InnerType = TrimmedType.Mid(7, TrimmedType.Len() - 8).TrimStartAndEnd();
+		FString InnerType;
+		if (TrimmedType.StartsWith(TEXT("TArray<"), ESearchCase::IgnoreCase))
+		{
+			InnerType = TrimmedType.Mid(7, TrimmedType.Len() - 8).TrimStartAndEnd();
+		}
+		else
+		{
+			InnerType = TrimmedType.Mid(9).TrimStartAndEnd();
+		}
 		ResolvePinType(InnerType, OutPinType);
 		OutPinType.ContainerType = EPinContainerType::Array;
 		return;
 	}
-	else if (TrimmedType.StartsWith(TEXT("TSet<"), ESearchCase::IgnoreCase) && TrimmedType.EndsWith(TEXT(">")))
+	else if ((TrimmedType.StartsWith(TEXT("TSet<"), ESearchCase::IgnoreCase) && TrimmedType.EndsWith(TEXT(">"))) ||
+		TrimmedType.StartsWith(TEXT("Set of "), ESearchCase::IgnoreCase))
 	{
-		FString InnerType = TrimmedType.Mid(5, TrimmedType.Len() - 6).TrimStartAndEnd();
+		FString InnerType;
+		if (TrimmedType.StartsWith(TEXT("TSet<"), ESearchCase::IgnoreCase))
+		{
+			InnerType = TrimmedType.Mid(5, TrimmedType.Len() - 6).TrimStartAndEnd();
+		}
+		else
+		{
+			InnerType = TrimmedType.Mid(7).TrimStartAndEnd();
+		}
 		ResolvePinType(InnerType, OutPinType);
 		OutPinType.ContainerType = EPinContainerType::Set;
 		return;
 	}
-	else if (TrimmedType.StartsWith(TEXT("TMap<"), ESearchCase::IgnoreCase) && TrimmedType.EndsWith(TEXT(">")))
+	else if ((TrimmedType.StartsWith(TEXT("TMap<"), ESearchCase::IgnoreCase) && TrimmedType.EndsWith(TEXT(">"))) ||
+		TrimmedType.StartsWith(TEXT("Map of "), ESearchCase::IgnoreCase))
 	{
-		int32 Depth = 0;
-		int32 CommaIdx = INDEX_NONE;
-		for (int32 i = 5; i < TrimmedType.Len() - 1; ++i)
+		FString KeyTypeStr;
+		FString ValueTypeStr;
+
+		if (TrimmedType.StartsWith(TEXT("TMap<"), ESearchCase::IgnoreCase))
 		{
-			TCHAR Ch = TrimmedType[i];
-			if (Ch == '<') Depth++;
-			else if (Ch == '>') Depth--;
-			else if (Ch == ',' && Depth == 0)
+			int32 Depth = 0;
+			int32 CommaIdx = INDEX_NONE;
+			for (int32 i = 5; i < TrimmedType.Len() - 1; ++i)
 			{
-				CommaIdx = i;
-				break;
+				TCHAR Ch = TrimmedType[i];
+				if (Ch == '<') Depth++;
+				else if (Ch == '>') Depth--;
+				else if (Ch == ',' && Depth == 0)
+				{
+					CommaIdx = i;
+					break;
+				}
+			}
+
+			if (CommaIdx != INDEX_NONE)
+			{
+				KeyTypeStr = TrimmedType.Mid(5, CommaIdx - 5).TrimStartAndEnd();
+				ValueTypeStr = TrimmedType.Mid(CommaIdx + 1, TrimmedType.Len() - 1 - (CommaIdx + 1)).TrimStartAndEnd();
+			}
+		}
+		else
+		{
+			FString Sub = TrimmedType.Mid(7).TrimStartAndEnd();
+			int32 ToIdx = Sub.Find(TEXT(" to "), ESearchCase::IgnoreCase);
+			if (ToIdx != INDEX_NONE)
+			{
+				KeyTypeStr = Sub.Left(ToIdx).TrimStartAndEnd();
+				ValueTypeStr = Sub.Mid(ToIdx + 4).TrimStartAndEnd();
+			}
+			else
+			{
+				int32 CommaPos = Sub.Find(TEXT(","));
+				if (CommaPos != INDEX_NONE)
+				{
+					KeyTypeStr = Sub.Left(CommaPos).TrimStartAndEnd();
+					ValueTypeStr = Sub.Mid(CommaPos + 1).TrimStartAndEnd();
+				}
 			}
 		}
 
-		if (CommaIdx != INDEX_NONE)
+		if (!KeyTypeStr.IsEmpty() && !ValueTypeStr.IsEmpty())
 		{
-			FString KeyTypeStr = TrimmedType.Mid(5, CommaIdx - 5).TrimStartAndEnd();
-			FString ValueTypeStr = TrimmedType.Mid(CommaIdx + 1, TrimmedType.Len() - 1 - (CommaIdx + 1)).TrimStartAndEnd();
-
 			ResolvePinType(KeyTypeStr, OutPinType);
 
 			FEdGraphPinType ValuePinType;
@@ -3107,7 +3463,7 @@ void FAgentFrameworkBlueprintActions::ResolvePinType(const FString& TypeName, FE
 	{
 		OutPinType.PinCategory = UEdGraphSchema_K2::PC_Int64;
 	}
-	else if (TypeLower == TEXT("float") || TypeLower == TEXT("single"))
+	else if (TypeLower == TEXT("float") || TypeLower == TEXT("single") || TypeLower == TEXT("real"))
 	{
 		OutPinType.PinCategory = UEdGraphSchema_K2::PC_Real;
 		OutPinType.PinSubCategory = UEdGraphSchema_K2::PC_Float;
@@ -3198,75 +3554,79 @@ void FAgentFrameworkBlueprintActions::ResolvePinType(const FString& TypeName, FE
 	// ExecuteAddEnhancedInputNode
 	// ============================================================================
 	
-	FAgentFrameworkActionResult FAgentFrameworkBlueprintActions::ExecuteAddEnhancedInputNode(
-		const TSharedRef<FJsonObject>& Params, FAgentFrameworkActionResult& Result)
+FAgentFrameworkActionResult FAgentFrameworkBlueprintActions::ExecuteAddEnhancedInputNode(
+	const TSharedRef<FJsonObject>& Params, FAgentFrameworkActionResult& Result)
+{
+	FString AssetPath;
+	FString InputActionPath;
+	TArray<FString> Errors;
+	if (!UAgentFrameworkActionUtils::TryGetStringParam(Params, TEXT("asset_path"), AssetPath, Errors, true) ||
+		!UAgentFrameworkActionUtils::TryGetStringParam(Params, TEXT("input_action"), InputActionPath, Errors, true))
 	{
-		FString AssetPath = Params->GetStringField(TEXT("asset_path"));
-		FString InputActionPath;
-		Params->TryGetStringField(TEXT("input_action"), InputActionPath);
-	
-		if (InputActionPath.IsEmpty())
-		{
-			Result.Errors.Add(TEXT("Missing required field: input_action. Provide the content path of the UInputAction asset (e.g. '/Game/ThirdPerson/Input/Actions/IA_Jump')."));
-			return Result;
-		}
-	
-		// Load Blueprint
-		UBlueprint* Blueprint = LoadObject<UBlueprint>(nullptr, *AssetPath);
-		if (!Blueprint)
-		{
-			Result.Errors.Add(FString::Printf(TEXT("Blueprint not found: '%s'"), *AssetPath));
-			return Result;
-		}
-	
-		// Load the Input Action asset
-		UInputAction* InputAction = LoadObject<UInputAction>(nullptr, *InputActionPath);
-		if (!InputAction)
-		{
-			Result.Errors.Add(FString::Printf(TEXT("Input Action asset not found: '%s'. Use search_assets to find the correct path."), *InputActionPath));
-			return Result;
-		}
-	
-		// Find or create the EventGraph
-		UEdGraph* EventGraph = FindOrCreateEventGraph(Blueprint);
-		if (!EventGraph)
-		{
-			Result.Errors.Add(TEXT("Could not find or create EventGraph."));
-			return Result;
-		}
-	
-		Blueprint->Modify();
-	
-		// Create the K2Node_EnhancedInputAction node
-		UK2Node_EnhancedInputAction* InputNode = NewObject<UK2Node_EnhancedInputAction>(EventGraph);
+		Result.Errors.Append(Errors);
+		return Result;
+	}
+
+	// Load Blueprint
+	UBlueprint* Blueprint = LoadObject<UBlueprint>(nullptr, *AssetPath);
+	if (!IsValid(Blueprint))
+	{
+		Result.Errors.Add(FString::Printf(TEXT("Blueprint not found: '%s'"), *AssetPath));
+		return Result;
+	}
+
+	// Load the Input Action asset
+	UInputAction* InputAction = LoadObject<UInputAction>(nullptr, *InputActionPath);
+	if (!IsValid(InputAction))
+	{
+		Result.Errors.Add(FString::Printf(TEXT("Input Action asset not found: '%s'. Use search_assets to find the correct path."), *InputActionPath));
+		return Result;
+	}
+
+	// Find or create the EventGraph
+	UEdGraph* EventGraph = FindOrCreateEventGraph(Blueprint);
+	if (!IsValid(EventGraph))
+	{
+		Result.Errors.Add(TEXT("Could not find or create EventGraph."));
+		return Result;
+	}
+
+	Blueprint->Modify();
+
+	// Create the K2Node_EnhancedInputAction node
+	UK2Node_EnhancedInputAction* InputNode = NewObject<UK2Node_EnhancedInputAction>(EventGraph);
+	if (IsValid(InputNode))
+	{
 		InputNode->SetFlags(RF_Transactional);
-	
-		// Set the InputAction property
 		InputNode->InputAction = InputAction;
-	
+
 		// Set position
 		int32 PosX = 0, PosY = 0;
-		Params->TryGetNumberField(TEXT("node_pos_x"), PosX);
-		Params->TryGetNumberField(TEXT("node_pos_y"), PosY);
+		TArray<FString> PosErrors;
+		UAgentFrameworkActionUtils::TryGetIntParam(Params, TEXT("node_pos_x"), PosX, PosErrors, false);
+		UAgentFrameworkActionUtils::TryGetIntParam(Params, TEXT("node_pos_y"), PosY, PosErrors, false);
 		InputNode->NodePosX = PosX;
 		InputNode->NodePosY = PosY;
-	
+
 		// Add to graph and allocate default pins
 		EventGraph->AddNode(InputNode, false, false);
 		InputNode->CreateNewGuid();
 		InputNode->PostPlacedNewNode();
 		InputNode->AllocateDefaultPins();
-	
+
 		// Notify the blueprint
 		FBlueprintEditorUtils::MarkBlueprintAsStructurallyModified(Blueprint);
-	
+
 		// Compile
 		bool bCompileOk = CompileAndReport(Blueprint, Result, true);
-		Blueprint->GetOutermost()->MarkPackageDirty();
-	
+		if (IsValid(Blueprint->GetOutermost()))
+		{
+			Blueprint->GetOutermost()->MarkPackageDirty();
+		}
+
 		FString NodeName = InputNode->GetName();
 		FString NodeTitle = InputNode->GetNodeTitle(ENodeTitleType::FullTitle).ToString();
-	
+
 		// Build result with pin info for the AI
 		FString PinInfo;
 		for (UEdGraphPin* Pin : InputNode->Pins)
@@ -3277,7 +3637,7 @@ void FAgentFrameworkBlueprintActions::ResolvePinType(const FString& TypeName, FE
 				PinInfo += FString::Printf(TEXT("  [%s] %s (%s)\n"), *Dir, *Pin->PinName.ToString(), *Pin->PinType.PinCategory.ToString());
 			}
 		}
-	
+
 		Result.bSuccess = true;
 		Result.ResultMessage = FString::Printf(
 			TEXT("Added Enhanced Input Action node '%s' (%s) for input action '%s'.\n"
@@ -3293,12 +3653,13 @@ void FAgentFrameworkBlueprintActions::ResolvePinType(const FString& TypeName, FE
 			*PinInfo,
 			bCompileOk ? TEXT("OK") : TEXT("with errors (see warnings)"));
 		Result.ModifiedAssets.Add(AssetPath);
-	
+
 		UE_LOG(LogAgentFramework, Log, TEXT("BlueprintActions: Added Enhanced Input node '%s' for IA '%s' in '%s'"),
 			*NodeName, *InputAction->GetName(), *AssetPath);
-		
-		return Result;
 	}
+
+	return Result;
+}
 	
 	// ============================================================================
 	// ExecuteVerifyConnections
@@ -3307,21 +3668,23 @@ void FAgentFrameworkBlueprintActions::ResolvePinType(const FString& TypeName, FE
 	FAgentFrameworkActionResult FAgentFrameworkBlueprintActions::ExecuteVerifyConnections(const TSharedRef<FJsonObject>& Params, FAgentFrameworkActionResult& Result)
 	{
 		FString AssetPath;
-		if (!Params->TryGetStringField(TEXT("asset_path"), AssetPath))
+		TArray<FString> Errors;
+		if (!UAgentFrameworkActionUtils::TryGetStringParam(Params, TEXT("asset_path"), AssetPath, Errors, true))
 		{
-			Result.Errors.Add(TEXT("Missing required parameter: asset_path"));
+			Result.Errors.Append(Errors);
 			return Result;
 		}
 	
 		FString FilterGraphName;
-		Params->TryGetStringField(TEXT("graph_name"), FilterGraphName);
+		TArray<FString> OptErrors;
+		UAgentFrameworkActionUtils::TryGetStringParam(Params, TEXT("graph_name"), FilterGraphName, OptErrors, false);
 	
 		// -------------------------------------------------------------------------
 		// Load Blueprint
 		// -------------------------------------------------------------------------
 		UBlueprint* Blueprint = Cast<UBlueprint>(
 			StaticLoadObject(UBlueprint::StaticClass(), nullptr, *AssetPath));
-		if (!Blueprint)
+		if (!IsValid(Blueprint))
 		{
 			Result.Errors.Add(FString::Printf(TEXT("Could not load Blueprint at '%s'"), *AssetPath));
 			return Result;
@@ -3338,7 +3701,7 @@ void FAgentFrameworkBlueprintActions::ResolvePinType(const FString& TypeName, FE
 			// Specific graph requested
 			for (UEdGraph* G : Blueprint->UbergraphPages)
 			{
-				if (G && G->GetName() == FilterGraphName)
+				if (IsValid(G) && G->GetName() == FilterGraphName)
 				{
 					GraphsToCheck.Add(G);
 					break;
@@ -3346,7 +3709,7 @@ void FAgentFrameworkBlueprintActions::ResolvePinType(const FString& TypeName, FE
 			}
 			for (UEdGraph* G : Blueprint->FunctionGraphs)
 			{
-				if (G && G->GetName() == FilterGraphName)
+				if (IsValid(G) && G->GetName() == FilterGraphName)
 				{
 					GraphsToCheck.Add(G);
 					break;
@@ -3360,8 +3723,8 @@ void FAgentFrameworkBlueprintActions::ResolvePinType(const FString& TypeName, FE
 		}
 		else
 		{
-			for (UEdGraph* G : Blueprint->UbergraphPages) { if (G) GraphsToCheck.Add(G); }
-			for (UEdGraph* G : Blueprint->FunctionGraphs) { if (G) GraphsToCheck.Add(G); }
+			for (UEdGraph* G : Blueprint->UbergraphPages) { if (IsValid(G)) GraphsToCheck.Add(G); }
+			for (UEdGraph* G : Blueprint->FunctionGraphs) { if (IsValid(G)) GraphsToCheck.Add(G); }
 		}
 	
 		// -------------------------------------------------------------------------
@@ -3387,18 +3750,18 @@ void FAgentFrameworkBlueprintActions::ResolvePinType(const FString& TypeName, FE
 		// -------------------------------------------------------------------------
 		for (UEdGraph* Graph : GraphsToCheck)
 		{
-			if (!Graph) continue;
+			if (!IsValid(Graph)) continue;
 	
 			// Build current node name set for stale-link detection
 			TSet<FString> NodeNamesInGraph;
 			for (UEdGraphNode* GNode : Graph->Nodes)
 			{
-				if (GNode) NodeNamesInGraph.Add(GNode->GetName());
+				if (IsValid(GNode)) NodeNamesInGraph.Add(GNode->GetName());
 			}
 	
 			for (UEdGraphNode* Node : Graph->Nodes)
 			{
-				if (!Node) continue;
+				if (!IsValid(Node)) continue;
 	
 				for (UEdGraphPin* Pin : Node->Pins)
 				{
@@ -3409,7 +3772,7 @@ void FAgentFrameworkBlueprintActions::ResolvePinType(const FString& TypeName, FE
 					{
 						if (!LP) return true;
 						UEdGraphNode* Owner = LP->GetOwningNodeUnchecked();
-						if (!Owner) return true;
+						if (!IsValid(Owner)) return true;
 						if (!NodeNamesInGraph.Contains(Owner->GetName())) return true;
 						return false;
 					});
@@ -3477,12 +3840,12 @@ void FAgentFrameworkBlueprintActions::ResolvePinType(const FString& TypeName, FE
 		// -------------------------------------------------------------------------
 		for (UEdGraph* Graph : GraphsToCheck)
 		{
-			if (!Graph) continue;
+			if (!IsValid(Graph)) continue;
 	
 			// Collect FunctionEntry nodes with disconnected exec-out
 			for (UEdGraphNode* Node : Graph->Nodes)
 			{
-				if (!Node) continue;
+				if (!IsValid(Node)) continue;
 				if (!Node->IsA<UK2Node_FunctionEntry>()) continue;
 	
 				UEdGraphPin* ExecOutPin = nullptr;
@@ -3503,7 +3866,7 @@ void FAgentFrameworkBlueprintActions::ResolvePinType(const FString& TypeName, FE
 				TArray<UEdGraphNode*> CandidateTargets;
 				for (UEdGraphNode* TargetNode : Graph->Nodes)
 				{
-					if (!TargetNode || TargetNode == Node) continue;
+					if (!IsValid(TargetNode) || TargetNode == Node) continue;
 					if (!TargetNode->IsA<UK2Node_CallFunction>()) continue;
 	
 					for (UEdGraphPin* TargetPin : TargetNode->Pins)
@@ -3536,7 +3899,7 @@ void FAgentFrameworkBlueprintActions::ResolvePinType(const FString& TypeName, FE
 						}
 					}
 	
-					if (TargetExecIn)
+					if (TargetExecIn && Schema)
 					{
 						FPinConnectionResponse ConnResponse = Schema->CanCreateConnection(ExecOutPin, TargetExecIn);
 						if (ConnResponse.Response == CONNECT_RESPONSE_MAKE
@@ -3579,11 +3942,11 @@ void FAgentFrameworkBlueprintActions::ResolvePinType(const FString& TypeName, FE
 		{
 			for (UEdGraph* Graph : GraphsToCheck)
 			{
-				if (!Graph) continue;
+				if (!IsValid(Graph)) continue;
 				TSet<UEdGraphNode*> NodeSet;
 				for (UEdGraphNode* Node : Graph->Nodes)
 				{
-					if (Node) NodeSet.Add(Node);
+					if (IsValid(Node)) NodeSet.Add(Node);
 				}
 				FString GraphAudit = BuildPinAuditReport(NodeSet);
 				if (!GraphAudit.IsEmpty())
@@ -3602,14 +3965,14 @@ void FAgentFrameworkBlueprintActions::ResolvePinType(const FString& TypeName, FE
 		{
 			for (UEdGraph* Graph : GraphsToCheck)
 			{
-				if (!Graph) continue;
+				if (!IsValid(Graph)) continue;
 				TSet<UEdGraphNode*> NodeSet;
 				for (UEdGraphNode* Node : Graph->Nodes)
 				{
-					if (Node) NodeSet.Add(Node);
+					if (IsValid(Node)) NodeSet.Add(Node);
 				}
 				if (NodeSet.IsEmpty()) continue;
-
+	
 				GraphReadbacks += BuildCompactConnectionReport(NodeSet, Graph->GetName());
 			}
 		}
@@ -3626,7 +3989,10 @@ void FAgentFrameworkBlueprintActions::ResolvePinType(const FString& TypeName, FE
 		if (bHadRepairs)
 		{
 			bCompileOk = CompileAndReport(Blueprint, Result, true);
-			Blueprint->GetOutermost()->MarkPackageDirty();
+			if (IsValid(Blueprint->GetOutermost()))
+			{
+				Blueprint->GetOutermost()->MarkPackageDirty();
+			}
 		}
 	
 		FString Report;
@@ -3923,34 +4289,27 @@ bool FAgentFrameworkBlueprintActions::PreFlightValidateT3D(
 
 FAgentFrameworkActionResult FAgentFrameworkBlueprintActions::ExecuteSetNodePinDefault(const TSharedRef<FJsonObject>& Params, FAgentFrameworkActionResult& Result)
 {
-	FString AssetPath = Params->GetStringField(TEXT("asset_path"));
+	FString AssetPath;
 	FString NodeName;
-	if (!Params->TryGetStringField(TEXT("node_name"), NodeName) || NodeName.IsEmpty())
-	{
-		Result.Errors.Add(TEXT("Missing required field: 'node_name'. Provide the internal node name (e.g. 'K2Node_CallFunction_0'). Use get_blueprint_info to find node names."));
-		return Result;
-	}
-
 	FString PinName;
-	if (!Params->TryGetStringField(TEXT("pin_name"), PinName) || PinName.IsEmpty())
-	{
-		Result.Errors.Add(TEXT("Missing required field: 'pin_name'. Provide the input pin name (e.g. 'InString', 'LevelName'). Use get_blueprint_info to find pin names."));
-		return Result;
-	}
-
 	FString Value;
-	if (!Params->TryGetStringField(TEXT("value"), Value))
+	TArray<FString> Errors;
+	if (!UAgentFrameworkActionUtils::TryGetStringParam(Params, TEXT("asset_path"), AssetPath, Errors, true) ||
+		!UAgentFrameworkActionUtils::TryGetStringParam(Params, TEXT("node_name"), NodeName, Errors, true) ||
+		!UAgentFrameworkActionUtils::TryGetStringParam(Params, TEXT("pin_name"), PinName, Errors, true) ||
+		!UAgentFrameworkActionUtils::TryGetStringParam(Params, TEXT("value"), Value, Errors, true))
 	{
-		Result.Errors.Add(TEXT("Missing required field: 'value'. Provide the default value string."));
+		Result.Errors.Append(Errors);
 		return Result;
 	}
 
 	FString GraphName = TEXT("EventGraph");
-	Params->TryGetStringField(TEXT("graph_name"), GraphName);
+	TArray<FString> GraphErrors;
+	UAgentFrameworkActionUtils::TryGetStringParam(Params, TEXT("graph_name"), GraphName, GraphErrors, false);
 
 	// Load Blueprint
 	UBlueprint* Blueprint = LoadObject<UBlueprint>(nullptr, *AssetPath);
-	if (!Blueprint)
+	if (!IsValid(Blueprint))
 	{
 		Result.Errors.Add(FString::Printf(TEXT("Blueprint not found: '%s'"), *AssetPath));
 		return Result;
@@ -3962,14 +4321,14 @@ FAgentFrameworkActionResult FAgentFrameworkBlueprintActions::ExecuteSetNodePinDe
 	Blueprint->GetAllGraphs(AllGraphs);
 	for (UEdGraph* Graph : AllGraphs)
 	{
-		if (Graph && Graph->GetName().Equals(GraphName, ESearchCase::IgnoreCase))
+		if (IsValid(Graph) && Graph->GetName().Equals(GraphName, ESearchCase::IgnoreCase))
 		{
 			TargetGraph = Graph;
 			break;
 		}
 	}
 
-	if (!TargetGraph)
+	if (!IsValid(TargetGraph))
 	{
 		Result.Errors.Add(FString::Printf(TEXT("Graph '%s' not found in Blueprint '%s'."), *GraphName, *AssetPath));
 		return Result;
@@ -3979,21 +4338,21 @@ FAgentFrameworkActionResult FAgentFrameworkBlueprintActions::ExecuteSetNodePinDe
 	UEdGraphNode* TargetNode = nullptr;
 	for (UEdGraphNode* Node : TargetGraph->Nodes)
 	{
-		if (Node && Node->GetName().Equals(NodeName, ESearchCase::IgnoreCase))
+		if (IsValid(Node) && Node->GetName().Equals(NodeName, ESearchCase::IgnoreCase))
 		{
 			TargetNode = Node;
 			break;
 		}
 	}
 
-	if (!TargetNode)
+	if (!IsValid(TargetNode))
 	{
 		// Build a list of available node names for the error message
 		FString AvailableNodes;
 		int32 Count = 0;
 		for (UEdGraphNode* Node : TargetGraph->Nodes)
 		{
-			if (Node && Count < 20)
+			if (IsValid(Node) && Count < 20)
 			{
 				if (Count > 0) AvailableNodes += TEXT(", ");
 				AvailableNodes += Node->GetName();
@@ -4050,6 +4409,7 @@ FAgentFrameworkActionResult FAgentFrameworkBlueprintActions::ExecuteSetNodePinDe
 	TargetNode->Modify();
 
 	const UEdGraphSchema_K2* K2Schema = GetDefault<UEdGraphSchema_K2>();
+	if (!K2Schema) return Result;
 	FString PinCategory = TargetPin->PinType.PinCategory.ToString();
 	FString DispatchMethod;
 
@@ -4073,11 +4433,11 @@ FAgentFrameworkActionResult FAgentFrameworkBlueprintActions::ExecuteSetNodePinDe
 			else if (TargetPin->PinType.PinSubCategoryObject.IsValid())
 			{
 				UClass* SubClass = Cast<UClass>(TargetPin->PinType.PinSubCategoryObject.Get());
-				if (SubClass) ExpectedClass = SubClass;
+				if (IsValid(SubClass)) ExpectedClass = SubClass;
 			}
 
 			LoadedAsset = StaticLoadObject(ExpectedClass, nullptr, *Value);
-			if (!LoadedAsset)
+			if (!IsValid(LoadedAsset))
 			{
 				Result.Warnings.Add(FString::Printf(
 					TEXT("Could not load object at path '%s' (expected class: %s). Setting pin to null."),
@@ -4115,11 +4475,14 @@ FAgentFrameworkActionResult FAgentFrameworkBlueprintActions::ExecuteSetNodePinDe
 
 	// Compile to bake the new default into bytecode
 	bool bCompileOk = CompileAndReport(Blueprint, Result, true);
-	Blueprint->GetOutermost()->MarkPackageDirty();
+	if (IsValid(Blueprint->GetOutermost()))
+	{
+		Blueprint->GetOutermost()->MarkPackageDirty();
+	}
 
 	// Read back the actual value to confirm it was set
 	FString ActualValue = TargetPin->DefaultValue;
-	FString ActualObject = TargetPin->DefaultObject ? TargetPin->DefaultObject->GetPathName() : TEXT("");
+	FString ActualObject = IsValid(TargetPin->DefaultObject) ? TargetPin->DefaultObject->GetPathName() : TEXT("");
 	FString ActualText = TargetPin->DefaultTextValue.ToString();
 
 	FString ConfirmValue;
@@ -4146,15 +4509,23 @@ FAgentFrameworkActionResult FAgentFrameworkBlueprintActions::ExecuteSetNodePinDe
 
 FAgentFrameworkActionResult FAgentFrameworkBlueprintActions::ExecuteDeleteNodes(const TSharedRef<FJsonObject>& Params, FAgentFrameworkActionResult& Result)
 {
-	FString AssetPath = Params->GetStringField(TEXT("asset_path"));
+	FString AssetPath;
+	TArray<FString> Errors;
+	if (!UAgentFrameworkActionUtils::TryGetStringParam(Params, TEXT("asset_path"), AssetPath, Errors, true))
+	{
+		Result.Errors.Append(Errors);
+		return Result;
+	}
+
 	FString GraphName = TEXT("EventGraph");
-	Params->TryGetStringField(TEXT("graph_name"), GraphName);
+	TArray<FString> GraphErrors;
+	UAgentFrameworkActionUtils::TryGetStringParam(Params, TEXT("graph_name"), GraphName, GraphErrors, false);
 
 	// Parse node_names array
 	const TArray<TSharedPtr<FJsonValue>>* NodeNamesArray = nullptr;
-	if (!Params->TryGetArrayField(TEXT("node_names"), NodeNamesArray) || !NodeNamesArray || NodeNamesArray->Num() == 0)
+	if (!UAgentFrameworkActionUtils::TryGetArrayParam(Params, TEXT("node_names"), NodeNamesArray, Errors, true) || !NodeNamesArray || NodeNamesArray->Num() == 0)
 	{
-		Result.Errors.Add(TEXT("Missing required field: 'node_names'. Provide an array of internal node names to delete (e.g. [\"K2Node_CallFunction_3\", \"K2Node_Event_1\"])."));
+		Result.Errors.Append(Errors);
 		return Result;
 	}
 
@@ -4179,7 +4550,7 @@ FAgentFrameworkActionResult FAgentFrameworkBlueprintActions::ExecuteDeleteNodes(
 
 	// Load Blueprint
 	UBlueprint* Blueprint = LoadObject<UBlueprint>(nullptr, *AssetPath);
-	if (!Blueprint)
+	if (!IsValid(Blueprint))
 	{
 		Result.Errors.Add(FString::Printf(TEXT("Blueprint not found: '%s'"), *AssetPath));
 		return Result;
@@ -4187,18 +4558,18 @@ FAgentFrameworkActionResult FAgentFrameworkBlueprintActions::ExecuteDeleteNodes(
 
 	// Find graph
 	UEdGraph* TargetGraph = FindOrCreateEventGraph(Blueprint, GraphName);
-	if (!TargetGraph)
+	if (!IsValid(TargetGraph))
 	{
 		for (UEdGraph* G : Blueprint->FunctionGraphs)
 		{
-			if (G && G->GetName() == GraphName)
+			if (IsValid(G) && G->GetName() == GraphName)
 			{
 				TargetGraph = G;
 				break;
 			}
 		}
 	}
-	if (!TargetGraph)
+	if (!IsValid(TargetGraph))
 	{
 		Result.Errors.Add(FString::Printf(
 			TEXT("Graph '%s' not found in Blueprint '%s'. Use get_blueprint_info to list available graphs."),
@@ -4217,7 +4588,7 @@ FAgentFrameworkActionResult FAgentFrameworkBlueprintActions::ExecuteDeleteNodes(
 	TArray<UEdGraphNode*> NodesToRemove;
 	for (UEdGraphNode* Node : TargetGraph->Nodes)
 	{
-		if (Node && NamesToDeleteSet.Contains(Node->GetName()))
+		if (IsValid(Node) && NamesToDeleteSet.Contains(Node->GetName()))
 		{
 			NodesToRemove.Add(Node);
 		}
@@ -4227,7 +4598,7 @@ FAgentFrameworkActionResult FAgentFrameworkBlueprintActions::ExecuteDeleteNodes(
 	TSet<FString> FoundNames;
 	for (UEdGraphNode* Node : NodesToRemove)
 	{
-		FoundNames.Add(Node->GetName());
+		if (IsValid(Node)) FoundNames.Add(Node->GetName());
 	}
 
 	for (const FString& Name : NamesToDelete)
@@ -4241,6 +4612,7 @@ FAgentFrameworkActionResult FAgentFrameworkBlueprintActions::ExecuteDeleteNodes(
 	// Delete nodes: break all pin connections first, then remove from graph
 	for (UEdGraphNode* Node : NodesToRemove)
 	{
+		if (!IsValid(Node)) continue;
 		FString NodeTitle = Node->GetNodeTitle(ENodeTitleType::FullTitle).ToString();
 		FString NodeName = Node->GetName();
 
@@ -4271,7 +4643,10 @@ FAgentFrameworkActionResult FAgentFrameworkBlueprintActions::ExecuteDeleteNodes(
 
 	// Compile
 	bool bCompileOk = CompileAndReport(Blueprint, Result, true);
-	Blueprint->GetOutermost()->MarkPackageDirty();
+	if (IsValid(Blueprint->GetOutermost()))
+	{
+		Blueprint->GetOutermost()->MarkPackageDirty();
+	}
 
 	// Build result message
 	FString DeletedList = FString::Join(Deleted, TEXT("\n  "));
@@ -4300,14 +4675,15 @@ FAgentFrameworkActionResult FAgentFrameworkBlueprintActions::ExecuteDeleteNodes(
 FAgentFrameworkActionResult FAgentFrameworkBlueprintActions::ExecuteExportBlueprintSummary(const TSharedRef<FJsonObject>& Params, FAgentFrameworkActionResult& Result)
 {
 	FString AssetPath;
-	if (!Params->TryGetStringField(TEXT("asset_path"), AssetPath))
+	TArray<FString> Errors;
+	if (!UAgentFrameworkActionUtils::TryGetStringParam(Params, TEXT("asset_path"), AssetPath, Errors, true))
 	{
-		Result.Errors.Add(TEXT("Missing required parameter: 'asset_path'"));
+		Result.Errors.Append(Errors);
 		return Result;
 	}
 
 	UBlueprint* Blueprint = LoadObject<UBlueprint>(nullptr, *AssetPath);
-	if (!Blueprint)
+	if (!IsValid(Blueprint))
 	{
 		Result.Errors.Add(FString::Printf(TEXT("Failed to load blueprint at %s"), *AssetPath));
 		return Result;
@@ -4315,7 +4691,7 @@ FAgentFrameworkActionResult FAgentFrameworkBlueprintActions::ExecuteExportBluepr
 
 	TSharedPtr<FJsonObject> RootObject = MakeShared<FJsonObject>();
 	RootObject->SetStringField(TEXT("asset_path"), AssetPath);
-	RootObject->SetStringField(TEXT("parent_class"), Blueprint->ParentClass ? Blueprint->ParentClass->GetName() : TEXT("None"));
+	RootObject->SetStringField(TEXT("parent_class"), IsValid(Blueprint->ParentClass) ? Blueprint->ParentClass->GetName() : TEXT("None"));
 	RootObject->SetStringField(TEXT("compile_status"), Blueprint->Status == BS_UpToDate ? TEXT("Valid") : TEXT("Dirty/Error"));
 
 	TArray<TSharedPtr<FJsonValue>> VariablesArray;
@@ -4330,17 +4706,17 @@ FAgentFrameworkActionResult FAgentFrameworkBlueprintActions::ExecuteExportBluepr
 	RootObject->SetArrayField(TEXT("variables"), VariablesArray);
 
 	TArray<TSharedPtr<FJsonValue>> ComponentsArray;
-	if (Blueprint->SimpleConstructionScript)
+	if (IsValid(Blueprint->SimpleConstructionScript))
 	{
 		for (USCS_Node* Node : Blueprint->SimpleConstructionScript->GetAllNodes())
 		{
-			if (!Node || !Node->ComponentTemplate) continue;
+			if (!IsValid(Node) || !IsValid(Node->ComponentTemplate)) continue;
 			TSharedPtr<FJsonObject> CompObj = MakeShared<FJsonObject>();
 			CompObj->SetStringField(TEXT("name"), Node->GetVariableName().ToString());
 			CompObj->SetStringField(TEXT("class"), Node->ComponentTemplate->GetClass()->GetName());
 			
 			USCS_Node* ParentNode = Blueprint->SimpleConstructionScript->FindParentNode(Node);
-			CompObj->SetStringField(TEXT("parent"), ParentNode ? ParentNode->GetVariableName().ToString() : TEXT("DefaultSceneRoot"));
+			CompObj->SetStringField(TEXT("parent"), IsValid(ParentNode) ? ParentNode->GetVariableName().ToString() : TEXT("DefaultSceneRoot"));
 			
 			ComponentsArray.Add(MakeShared<FJsonValueObject>(CompObj));
 		}
@@ -4352,12 +4728,16 @@ FAgentFrameworkActionResult FAgentFrameworkBlueprintActions::ExecuteExportBluepr
 	{
 		for (UEdGraph* Graph : Graphs)
 		{
-			if (!Graph) continue;
+			if (!IsValid(Graph)) continue;
 			TSharedPtr<FJsonObject> GraphObj = MakeShared<FJsonObject>();
 			GraphObj->SetStringField(TEXT("name"), Graph->GetName());
 			GraphObj->SetNumberField(TEXT("node_count"), Graph->Nodes.Num());
 
-			TSet<UEdGraphNode*> NodeSet(Graph->Nodes);
+			TSet<UEdGraphNode*> NodeSet;
+			for (UEdGraphNode* GNode : Graph->Nodes)
+			{
+				if (IsValid(GNode)) NodeSet.Add(GNode);
+			}
 			FString LogicSummary = BuildCompactConnectionReport(NodeSet, Graph->GetName());
 			GraphObj->SetStringField(TEXT("logic_summary"), LogicSummary);
 
@@ -4373,7 +4753,7 @@ FAgentFrameworkActionResult FAgentFrameworkBlueprintActions::ExecuteExportBluepr
 	TArray<TSharedPtr<FJsonValue>> InterfacesArray;
 	for (const FBPInterfaceDescription& Interface : Blueprint->ImplementedInterfaces)
 	{
-		if (Interface.Interface)
+		if (IsValid(Interface.Interface))
 		{
 			InterfacesArray.Add(MakeShared<FJsonValueString>(Interface.Interface->GetName()));
 		}
@@ -4395,19 +4775,25 @@ FAgentFrameworkActionResult FAgentFrameworkBlueprintActions::ExecuteExportBluepr
 
 FAgentFrameworkActionResult FAgentFrameworkBlueprintActions::ExecuteBatchOperations(const TSharedRef<FJsonObject>& Params, FAgentFrameworkActionResult& Result)
 {
-	FString AssetPath = Params->GetStringField(TEXT("asset_path"));
+	FString AssetPath;
+	TArray<FString> Errors;
+	if (!UAgentFrameworkActionUtils::TryGetStringParam(Params, TEXT("asset_path"), AssetPath, Errors, true))
+	{
+		Result.Errors.Append(Errors);
+		return Result;
+	}
 
 	UBlueprint* Blueprint = LoadObject<UBlueprint>(nullptr, *AssetPath);
-	if (!Blueprint)
+	if (!IsValid(Blueprint))
 	{
 		Result.Errors.Add(FString::Printf(TEXT("Blueprint not found: '%s'"), *AssetPath));
 		return Result;
 	}
 
 	const TArray<TSharedPtr<FJsonValue>>* OperationsArray = nullptr;
-	if (!Params->TryGetArrayField(TEXT("operations"), OperationsArray))
+	if (!UAgentFrameworkActionUtils::TryGetArrayParam(Params, TEXT("operations"), OperationsArray, Errors, true) || !OperationsArray)
 	{
-		Result.Errors.Add(TEXT("Missing required operations array field."));
+		Result.Errors.Append(Errors);
 		return Result;
 	}
 
@@ -4422,7 +4808,8 @@ FAgentFrameworkActionResult FAgentFrameworkBlueprintActions::ExecuteBatchOperati
 		if (!OpObj.IsValid()) continue;
 
 		FString ToolName;
-		if (!OpObj->TryGetStringField(TEXT("tool_name"), ToolName) || ToolName.IsEmpty())
+		TArray<FString> OpErrors;
+		if (!UAgentFrameworkActionUtils::TryGetStringParam(OpObj.ToSharedRef(), TEXT("tool_name"), ToolName, OpErrors, true) || ToolName.IsEmpty())
 		{
 			Result.Errors.Add(FString::Printf(TEXT("Operation at index %d has no tool_name."), OpIndex));
 			Result.bSuccess = false;
@@ -4430,9 +4817,10 @@ FAgentFrameworkActionResult FAgentFrameworkBlueprintActions::ExecuteBatchOperati
 		}
 
 		TSharedPtr<FJsonObject> ArgsObj;
-		if (OpObj->HasTypedField<EJson::Object>(TEXT("arguments")))
+		const TSharedPtr<FJsonObject>* TmpArgs = nullptr;
+		if (UAgentFrameworkActionUtils::TryGetObjectParam(OpObj.ToSharedRef(), TEXT("arguments"), TmpArgs, OpErrors, false) && TmpArgs)
 		{
-			ArgsObj = OpObj->GetObjectField(TEXT("arguments"));
+			ArgsObj = *TmpArgs;
 		}
 		else
 		{
@@ -4442,9 +4830,12 @@ FAgentFrameworkActionResult FAgentFrameworkBlueprintActions::ExecuteBatchOperati
 		// Prepare sub-parameters
 		TSharedRef<FJsonObject> SubParams = MakeShared<FJsonObject>();
 		// Copy arguments
-		for (auto& Pair : ArgsObj->Values)
+		if (ArgsObj.IsValid())
 		{
-			SubParams->SetField(Pair.Key, Pair.Value);
+			for (auto& Pair : ArgsObj->Values)
+			{
+				SubParams->SetField(Pair.Key, Pair.Value);
+			}
 		}
 		SubParams->SetStringField(TEXT("_tool_name"), ToolName);
 		if (!SubParams->HasField(TEXT("asset_path")))
@@ -4477,7 +4868,10 @@ FAgentFrameworkActionResult FAgentFrameworkBlueprintActions::ExecuteBatchOperati
 
 	// Single compile at the end of the batch
 	bool bCompileOk = CompileAndReport(Blueprint, Result, true);
-	Blueprint->GetOutermost()->MarkPackageDirty();
+	if (IsValid(Blueprint->GetOutermost()))
+	{
+		Blueprint->GetOutermost()->MarkPackageDirty();
+	}
 
 	if (!bCompileOk)
 	{
@@ -4537,10 +4931,15 @@ void FAgentFrameworkBlueprintActions::HandleGetExtraObjectTags(FAssetRegistryTag
 FAgentFrameworkActionResult FAgentFrameworkBlueprintActions::ExecuteGetBlueprintSchema(const TSharedRef<FJsonObject>& Params, FAgentFrameworkActionResult& Result)
 {
 	FString AssetPath;
-	if (!Params->TryGetStringField(TEXT("asset_path"), AssetPath) || AssetPath.IsEmpty())
+	TArray<FString> Errors;
+	if (!UAgentFrameworkActionUtils::TryGetStringParam(Params, TEXT("asset_path"), AssetPath, Errors, true) || AssetPath.IsEmpty())
 	{
 		Result.bSuccess = false;
-		Result.Errors.Add(TEXT("Missing or empty required field: asset_path"));
+		Result.Errors.Append(Errors);
+		if (AssetPath.IsEmpty() && Result.Errors.Num() == 0)
+		{
+			Result.Errors.Add(TEXT("Missing or empty required field: asset_path"));
+		}
 		return Result;
 	}
 
@@ -4598,13 +4997,13 @@ FAgentFrameworkActionResult FAgentFrameworkBlueprintActions::ExecuteGetBlueprint
 	{
 		bLoadedFallback = true;
 		UBlueprint* Blueprint = LoadObject<UBlueprint>(nullptr, *ObjectPathStr);
-		if (!Blueprint)
+		if (!IsValid(Blueprint))
 		{
 			Result.Errors.Add(FString::Printf(TEXT("Failed to load Blueprint fallback: '%s'"), *AssetPath));
 			return Result;
 		}
 
-		ParentClass = Blueprint->ParentClass ? Blueprint->ParentClass->GetName() : TEXT("None");
+		ParentClass = IsValid(Blueprint->ParentClass) ? Blueprint->ParentClass->GetName() : TEXT("None");
 
 		for (const FBPVariableDescription& Var : Blueprint->NewVariables)
 		{
@@ -4617,12 +5016,15 @@ FAgentFrameworkActionResult FAgentFrameworkBlueprintActions::ExecuteGetBlueprint
 
 		for (UEdGraph* Graph : Blueprint->UbergraphPages)
 		{
-			if (!Graph) continue;
+			if (!IsValid(Graph)) continue;
 			for (UEdGraphNode* Node : Graph->Nodes)
 			{
-				if (UK2Node_CustomEvent* CustomEventNode = Cast<UK2Node_CustomEvent>(Node))
+				if (IsValid(Node))
 				{
-					CustomEvents.Add(MakeShared<FJsonValueString>(CustomEventNode->GetFunctionName().ToString()));
+					if (UK2Node_CustomEvent* CustomEventNode = Cast<UK2Node_CustomEvent>(Node))
+					{
+						CustomEvents.Add(MakeShared<FJsonValueString>(CustomEventNode->GetFunctionName().ToString()));
+					}
 				}
 			}
 		}
@@ -4652,18 +5054,24 @@ FAgentFrameworkActionResult FAgentFrameworkBlueprintActions::ExecuteGetBlueprint
 
 FAgentFrameworkActionResult FAgentFrameworkBlueprintActions::ExecuteCheckAssetState(const TSharedRef<FJsonObject>& Params, FAgentFrameworkActionResult& Result)
 {
-	FString AssetPath = Params->GetStringField(TEXT("asset_path"));
+	FString AssetPath;
+	TArray<FString> Errors;
+	if (!UAgentFrameworkActionUtils::TryGetStringParam(Params, TEXT("asset_path"), AssetPath, Errors, true))
+	{
+		Result.Errors.Append(Errors);
+		return Result;
+	}
 	AssetPath = ExpandBlueprintAssetPath(AssetPath);
 
 	UPackage* Package = FindPackage(nullptr, *AssetPath);
-	bool bIsDirty = Package ? Package->IsDirty() : false;
+	bool bIsDirty = IsValid(Package) ? Package->IsDirty() : false;
 
 	bool bIsOpen = false;
 	UObject* Asset = LoadObject<UObject>(nullptr, *AssetPath);
-	if (Asset && GEditor)
+	if (IsValid(Asset) && GEditor)
 	{
 		UAssetEditorSubsystem* AssetEditorSubsystem = GEditor->GetEditorSubsystem<UAssetEditorSubsystem>();
-		if (AssetEditorSubsystem)
+		if (IsValid(AssetEditorSubsystem))
 		{
 			bIsOpen = (AssetEditorSubsystem->FindEditorForAsset(Asset, false) != nullptr);
 		}
@@ -4703,6 +5111,609 @@ FAgentFrameworkActionResult FAgentFrameworkBlueprintActions::ExecuteModifyBluepr
 	}
 	Result.bSuccess = true;
 	Result.ResultMessage = TEXT("modify_blueprint called with no operations; compilation and checks succeeded.");
+	return Result;
+}
+
+FAgentFrameworkActionResult FAgentFrameworkBlueprintActions::ExecuteDisconnectPins(const TSharedRef<FJsonObject>& Params, FAgentFrameworkActionResult& Result)
+{
+	Result.bSuccess = false;
+
+	FString AssetPath;
+	if (!Params->TryGetStringField(TEXT("asset_path"), AssetPath))
+	{
+		Params->TryGetStringField(TEXT("TargetAsset"), AssetPath);
+	}
+	AssetPath = ExpandBlueprintAssetPath(AssetPath);
+
+	UBlueprint* Blueprint = LoadObject<UBlueprint>(nullptr, *AssetPath);
+	if (!Blueprint)
+	{
+		Result.Errors.Add(FString::Printf(TEXT("Failed to load Blueprint asset: %s"), *AssetPath));
+		return Result;
+	}
+
+	FString NodeGuidOrName;
+	if (!Params->TryGetStringField(TEXT("node_guid"), NodeGuidOrName))
+	{
+		if (!Params->TryGetStringField(TEXT("NodeGuid"), NodeGuidOrName))
+		{
+			if (!Params->TryGetStringField(TEXT("node_name"), NodeGuidOrName))
+			{
+				Params->TryGetStringField(TEXT("source_node"), NodeGuidOrName);
+			}
+		}
+	}
+
+	FString PinName;
+	if (!Params->TryGetStringField(TEXT("pin_name"), PinName))
+	{
+		Params->TryGetStringField(TEXT("PinName"), PinName);
+	}
+
+	FString TargetNodeGuidOrName;
+	if (!Params->TryGetStringField(TEXT("target_node_guid"), TargetNodeGuidOrName))
+	{
+		if (!Params->TryGetStringField(TEXT("TargetNodeGuid"), TargetNodeGuidOrName))
+		{
+			if (!Params->TryGetStringField(TEXT("target_node_name"), TargetNodeGuidOrName))
+			{
+				Params->TryGetStringField(TEXT("target_node"), TargetNodeGuidOrName);
+			}
+		}
+	}
+
+	FString TargetPinName;
+	if (!Params->TryGetStringField(TEXT("target_pin_name"), TargetPinName))
+	{
+		Params->TryGetStringField(TEXT("TargetPinName"), TargetPinName);
+	}
+
+	bool bDisconnectAll = false;
+	if (!Params->TryGetBoolField(TEXT("b_disconnect_all"), bDisconnectAll))
+	{
+		Params->TryGetBoolField(TEXT("bDisconnectAll"), bDisconnectAll);
+	}
+
+	if (!bDisconnectAll && TargetNodeGuidOrName.IsEmpty() && TargetPinName.IsEmpty())
+	{
+		bDisconnectAll = true;
+	}
+
+	FString GraphName;
+	if (!Params->TryGetStringField(TEXT("graph_name"), GraphName))
+	{
+		Params->TryGetStringField(TEXT("GraphName"), GraphName);
+	}
+
+	UEdGraphNode* FoundNode = nullptr;
+	UEdGraph* TargetGraph = nullptr;
+
+	auto SearchGraphForNode = [&NodeGuidOrName](UEdGraph* Graph) -> UEdGraphNode*
+	{
+		if (!Graph) return nullptr;
+		for (UEdGraphNode* Node : Graph->Nodes)
+		{
+			if (!Node) continue;
+			FString GuidStrHex = Node->NodeGuid.ToString(EGuidFormats::Digits);
+			FString GuidStrHyphen = Node->NodeGuid.ToString(EGuidFormats::DigitsWithHyphens);
+			FString NodeNameStr = Node->GetName();
+
+			if (GuidStrHex.Equals(NodeGuidOrName, ESearchCase::IgnoreCase) ||
+				GuidStrHyphen.Equals(NodeGuidOrName, ESearchCase::IgnoreCase) ||
+				NodeNameStr.Equals(NodeGuidOrName, ESearchCase::IgnoreCase))
+			{
+				return Node;
+			}
+		}
+		return nullptr;
+	};
+
+	if (!GraphName.IsEmpty())
+	{
+		TargetGraph = FindOrCreateEventGraph(Blueprint, GraphName);
+		if (TargetGraph)
+		{
+			FoundNode = SearchGraphForNode(TargetGraph);
+		}
+	}
+
+	if (!FoundNode)
+	{
+		TArray<UEdGraph*> AllGraphs;
+		Blueprint->GetAllGraphs(AllGraphs);
+		for (UEdGraph* Graph : AllGraphs)
+		{
+			FoundNode = SearchGraphForNode(Graph);
+			if (FoundNode)
+			{
+				TargetGraph = Graph;
+				break;
+			}
+		}
+	}
+
+	if (!FoundNode)
+	{
+		Result.Errors.Add(FString::Printf(TEXT("Node '%s' not found in Blueprint '%s'."), *NodeGuidOrName, *AssetPath));
+		return Result;
+	}
+
+	UEdGraphPin* FoundPin = nullptr;
+	for (UEdGraphPin* Pin : FoundNode->Pins)
+	{
+		if (!Pin) continue;
+		if (Pin->PinName.ToString().Equals(PinName, ESearchCase::IgnoreCase) ||
+			Pin->PinFriendlyName.ToString().Equals(PinName, ESearchCase::IgnoreCase))
+		{
+			FoundPin = Pin;
+			break;
+		}
+	}
+
+	if (!FoundPin)
+	{
+		Result.Errors.Add(FString::Printf(TEXT("Pin '%s' not found on node '%s' in Blueprint '%s'."), *PinName, *NodeGuidOrName, *AssetPath));
+		return Result;
+	}
+
+	int32 DisconnectedCount = 0;
+	FoundNode->Modify();
+	Blueprint->Modify();
+
+	if (bDisconnectAll || (TargetNodeGuidOrName.IsEmpty() && TargetPinName.IsEmpty()))
+	{
+		DisconnectedCount = FoundPin->LinkedTo.Num();
+		FoundPin->BreakAllPinLinks();
+	}
+	else
+	{
+		TArray<UEdGraphPin*> LinksToBreak;
+		for (UEdGraphPin* LinkedPin : FoundPin->LinkedTo)
+		{
+			if (!LinkedPin || !LinkedPin->GetOwningNode()) continue;
+			UEdGraphNode* LinkedNode = LinkedPin->GetOwningNode();
+
+			bool bNodeMatch = TargetNodeGuidOrName.IsEmpty() ||
+				LinkedNode->NodeGuid.ToString(EGuidFormats::Digits).Equals(TargetNodeGuidOrName, ESearchCase::IgnoreCase) ||
+				LinkedNode->NodeGuid.ToString(EGuidFormats::DigitsWithHyphens).Equals(TargetNodeGuidOrName, ESearchCase::IgnoreCase) ||
+				LinkedNode->GetName().Equals(TargetNodeGuidOrName, ESearchCase::IgnoreCase);
+
+			bool bPinMatch = TargetPinName.IsEmpty() ||
+				LinkedPin->PinName.ToString().Equals(TargetPinName, ESearchCase::IgnoreCase) ||
+				LinkedPin->PinFriendlyName.ToString().Equals(TargetPinName, ESearchCase::IgnoreCase);
+
+			if (bNodeMatch && bPinMatch)
+			{
+				LinksToBreak.Add(LinkedPin);
+			}
+		}
+
+		for (UEdGraphPin* TargetPinToBreak : LinksToBreak)
+		{
+			if (TargetPinToBreak->GetOwningNode())
+			{
+				TargetPinToBreak->GetOwningNode()->Modify();
+			}
+			FoundPin->BreakLinkTo(TargetPinToBreak);
+			DisconnectedCount++;
+		}
+	}
+
+	FBlueprintEditorUtils::MarkBlueprintAsModified(Blueprint);
+	FAgentFrameworkActionsModule::AgentDirtiedPackages.Add(FName(*AssetPath));
+	CompileAndReport(Blueprint, Result, true);
+
+	Result.bSuccess = true;
+	Result.ResultMessage = FString::Printf(TEXT("Successfully disconnected %d link(s) on pin '%s' of node '%s' in Blueprint '%s'."),
+		DisconnectedCount, *PinName, *NodeGuidOrName, *AssetPath);
+	return Result;
+}
+
+FAgentFrameworkActionResult FAgentFrameworkBlueprintActions::ExecuteModifySubobject(const TSharedRef<FJsonObject>& Params, FAgentFrameworkActionResult& Result)
+{
+	Result.bSuccess = false;
+
+	FString AssetPath;
+	if (!Params->TryGetStringField(TEXT("asset_path"), AssetPath))
+	{
+		if (!Params->TryGetStringField(TEXT("AssetPath"), AssetPath))
+		{
+			Params->TryGetStringField(TEXT("TargetAsset"), AssetPath);
+		}
+	}
+	AssetPath = ExpandBlueprintAssetPath(AssetPath);
+
+	UBlueprint* Blueprint = LoadObject<UBlueprint>(nullptr, *AssetPath);
+	if (!Blueprint)
+	{
+		Result.Errors.Add(FString::Printf(TEXT("Failed to load Blueprint asset: %s"), *AssetPath));
+		return Result;
+	}
+
+	FString SubObjectPath;
+	if (!Params->TryGetStringField(TEXT("subobject_path"), SubObjectPath))
+	{
+		Params->TryGetStringField(TEXT("SubObjectPath"), SubObjectPath);
+	}
+
+	const TSharedPtr<FJsonObject>* PropertiesObj = nullptr;
+	if (!Params->TryGetObjectField(TEXT("properties"), PropertiesObj))
+	{
+		Params->TryGetObjectField(TEXT("Properties"), PropertiesObj);
+	}
+
+	if (!PropertiesObj || !PropertiesObj->IsValid())
+	{
+		Result.Errors.Add(TEXT("Missing or invalid 'properties' object for modify_blueprint_subobject."));
+		return Result;
+	}
+
+	FString CleanPath = SubObjectPath;
+	if (CleanPath.StartsWith(TEXT("WidgetTree."), ESearchCase::IgnoreCase))
+	{
+		CleanPath = CleanPath.Mid(11);
+	}
+
+	UObject* SubObjectToModify = nullptr;
+
+	if (UWidgetBlueprint* WidgetBP = Cast<UWidgetBlueprint>(Blueprint))
+	{
+		if (WidgetBP->WidgetTree)
+		{
+			FString WidgetName = CleanPath;
+			bool bTargetSlot = false;
+			if (WidgetName.EndsWith(TEXT(".Slot"), ESearchCase::IgnoreCase))
+			{
+				WidgetName = WidgetName.LeftChop(5);
+				bTargetSlot = true;
+			}
+			else if (WidgetName.EndsWith(TEXT(".slot"), ESearchCase::IgnoreCase))
+			{
+				WidgetName = WidgetName.LeftChop(5);
+				bTargetSlot = true;
+			}
+
+			UWidget* FoundWidget = WidgetBP->WidgetTree->FindWidget(FName(*WidgetName));
+			if (FoundWidget)
+			{
+				if (bTargetSlot)
+				{
+					SubObjectToModify = FoundWidget->Slot;
+				}
+				else
+				{
+					SubObjectToModify = FoundWidget;
+				}
+			}
+		}
+	}
+
+	if (!SubObjectToModify)
+	{
+		USCS_Node* SCSNode = FindSCSNodeByName(Blueprint, CleanPath);
+		if (SCSNode && SCSNode->ComponentTemplate)
+		{
+			SubObjectToModify = SCSNode->ComponentTemplate;
+		}
+	}
+
+	if (!SubObjectToModify && Blueprint->GeneratedClass)
+	{
+		UObject* CDO = Blueprint->GeneratedClass->GetDefaultObject();
+		if (CDO)
+		{
+			FObjectPropertyBase* ObjProp = FindFProperty<FObjectPropertyBase>(Blueprint->GeneratedClass, FName(*CleanPath));
+			if (ObjProp)
+			{
+				SubObjectToModify = ObjProp->GetObjectPropertyValue_InContainer(CDO);
+			}
+		}
+	}
+
+	if (!SubObjectToModify)
+	{
+		FString PackageName = FPackageName::ObjectPathToPackageName(AssetPath);
+		FString AssetName = FPaths::GetBaseFilename(AssetPath);
+		FString FullSubObjPath = FString::Printf(TEXT("%s.%s:%s"), *PackageName, *AssetName, *SubObjectPath);
+		SubObjectToModify = StaticLoadObject(UObject::StaticClass(), nullptr, *FullSubObjPath);
+	}
+
+	if (!SubObjectToModify)
+	{
+		Result.Errors.Add(FString::Printf(TEXT("Could not resolve sub-object '%s' in Blueprint '%s'."), *SubObjectPath, *AssetPath));
+		return Result;
+	}
+
+	SubObjectToModify->Modify();
+	int32 ModifiedCount = 0;
+
+	for (const auto& Pair : (*PropertiesObj)->Values)
+	{
+		FString PropName = FString(Pair.Key);
+		TSharedPtr<FJsonValue> JsonVal = Pair.Value;
+
+		UObject* TargetObjectForProp = SubObjectToModify;
+		if (PropName.StartsWith(TEXT("Slot."), ESearchCase::IgnoreCase) || PropName.StartsWith(TEXT("slot."), ESearchCase::IgnoreCase))
+		{
+			if (UWidget* WidgetObj = Cast<UWidget>(SubObjectToModify))
+			{
+				if (WidgetObj->Slot)
+				{
+					TargetObjectForProp = WidgetObj->Slot;
+					PropName = PropName.Mid(5);
+				}
+			}
+		}
+
+		FProperty* Prop = TargetObjectForProp->GetClass()->FindPropertyByName(FName(*PropName));
+		if (!Prop)
+		{
+			for (TFieldIterator<FProperty> It(TargetObjectForProp->GetClass()); It; ++It)
+			{
+				if (It->GetName().Equals(PropName, ESearchCase::IgnoreCase))
+				{
+					Prop = *It;
+					break;
+				}
+			}
+		}
+
+		if (!Prop)
+		{
+			Result.Warnings.Add(FString::Printf(TEXT("Property '%s' not found on class '%s'."), *PropName, *TargetObjectForProp->GetClass()->GetName()));
+			continue;
+		}
+
+		FString ValueString;
+		if (JsonVal->Type == EJson::String)
+		{
+			ValueString = JsonVal->AsString();
+		}
+		else if (JsonVal->Type == EJson::Number)
+		{
+			ValueString = FString::Printf(TEXT("%f"), JsonVal->AsNumber());
+		}
+		else if (JsonVal->Type == EJson::Boolean)
+		{
+			ValueString = JsonVal->AsBool() ? TEXT("True") : TEXT("False");
+		}
+		else if (JsonVal->Type == EJson::Object)
+		{
+			ValueString = FormatJsonObjectToUnrealText(JsonVal->AsObject());
+		}
+
+		TargetObjectForProp->PreEditChange(Prop);
+		void* ValuePtr = Prop->ContainerPtrToValuePtr<void>(TargetObjectForProp);
+		const TCHAR* ImportResult = Prop->ImportText_Direct(*ValueString, ValuePtr, TargetObjectForProp, PPF_None);
+		FPropertyChangedEvent ChangeEvent(Prop);
+		TargetObjectForProp->PostEditChangeProperty(ChangeEvent);
+
+		if (ImportResult != nullptr)
+		{
+			ModifiedCount++;
+		}
+		else
+		{
+			Result.Warnings.Add(FString::Printf(TEXT("Failed to import text '%s' for property '%s'."), *ValueString, *PropName));
+		}
+	}
+
+	if (UWidgetBlueprint* WidgetBP = Cast<UWidgetBlueprint>(Blueprint))
+	{
+		FBlueprintEditorUtils::MarkBlueprintAsStructurallyModified(WidgetBP);
+	}
+	else
+	{
+		FBlueprintEditorUtils::MarkBlueprintAsModified(Blueprint);
+	}
+	FAgentFrameworkActionsModule::AgentDirtiedPackages.Add(FName(*AssetPath));
+	CompileAndReport(Blueprint, Result, true);
+
+	Result.bSuccess = true;
+	Result.ResultMessage = FString::Printf(TEXT("Successfully modified %d property(ies) on sub-object '%s' (class '%s') in Blueprint '%s'."),
+		ModifiedCount, *SubObjectPath, *SubObjectToModify->GetClass()->GetName(), *AssetPath);
+	return Result;
+}
+
+FAgentFrameworkActionResult FAgentFrameworkBlueprintActions::ExecuteConfigureActorReplication(const TSharedRef<FJsonObject>& Params, FAgentFrameworkActionResult& Result)
+{
+	Result.bSuccess = false;
+
+	FString AssetPath;
+	if (!Params->TryGetStringField(TEXT("asset_path"), AssetPath))
+	{
+		Params->TryGetStringField(TEXT("TargetAsset"), AssetPath);
+	}
+	AssetPath = ExpandBlueprintAssetPath(AssetPath);
+
+	UBlueprint* Blueprint = LoadObject<UBlueprint>(nullptr, *AssetPath);
+	if (!Blueprint)
+	{
+		Result.Errors.Add(FString::Printf(TEXT("Failed to load Blueprint asset: %s"), *AssetPath));
+		return Result;
+	}
+
+	if (!Blueprint->ParentClass || !Blueprint->ParentClass->IsChildOf(AActor::StaticClass()))
+	{
+		Result.Errors.Add(FString::Printf(TEXT("Blueprint '%s' is not an Actor Blueprint (Parent class: %s). configure_actor_replication requires an Actor Blueprint."),
+			*AssetPath, Blueprint->ParentClass ? *Blueprint->ParentClass->GetName() : TEXT("None")));
+		return Result;
+	}
+
+	if (!Blueprint->GeneratedClass)
+	{
+		FKismetEditorUtilities::CompileBlueprint(Blueprint);
+	}
+
+	AActor* ActorCDO = Cast<AActor>(Blueprint->GeneratedClass ? Blueprint->GeneratedClass->GetDefaultObject() : nullptr);
+	if (!ActorCDO)
+	{
+		Result.Errors.Add(FString::Printf(TEXT("Failed to retrieve CDO for Actor Blueprint '%s'."), *AssetPath));
+		return Result;
+	}
+
+	bool bReplicates = true;
+	if (!Params->TryGetBoolField(TEXT("b_replicates"), bReplicates))
+	{
+		Params->TryGetBoolField(TEXT("bReplicates"), bReplicates);
+	}
+
+	bool bReplicateMovement = true;
+	if (!Params->TryGetBoolField(TEXT("b_replicate_movement"), bReplicateMovement))
+	{
+		Params->TryGetBoolField(TEXT("bReplicateMovement"), bReplicateMovement);
+	}
+
+	FString NetDormancyStr = TEXT("DORM_Never");
+	if (!Params->TryGetStringField(TEXT("net_dormancy"), NetDormancyStr))
+	{
+		Params->TryGetStringField(TEXT("NetDormancy"), NetDormancyStr);
+	}
+
+	double NetUpdateFrequency = 100.0;
+	if (!Params->TryGetNumberField(TEXT("net_update_frequency"), NetUpdateFrequency))
+	{
+		Params->TryGetNumberField(TEXT("NetUpdateFrequency"), NetUpdateFrequency);
+	}
+
+	double NetPriority = 1.0;
+	if (!Params->TryGetNumberField(TEXT("net_priority"), NetPriority))
+	{
+		Params->TryGetNumberField(TEXT("NetPriority"), NetPriority);
+	}
+
+	ActorCDO->Modify();
+	Blueprint->Modify();
+
+	ActorCDO->SetReplicates(bReplicates);
+	ActorCDO->SetReplicateMovement(bReplicateMovement);
+
+	if (NetDormancyStr.Equals(TEXT("DORM_Awake"), ESearchCase::IgnoreCase))             ActorCDO->NetDormancy = DORM_Awake;
+	else if (NetDormancyStr.Equals(TEXT("DORM_DormantAll"), ESearchCase::IgnoreCase))   ActorCDO->NetDormancy = DORM_DormantAll;
+	else if (NetDormancyStr.Equals(TEXT("DORM_DormantPartial"), ESearchCase::IgnoreCase))ActorCDO->NetDormancy = DORM_DormantPartial;
+	else if (NetDormancyStr.Equals(TEXT("DORM_Initial"), ESearchCase::IgnoreCase))       ActorCDO->NetDormancy = DORM_Initial;
+	else                                                                                 ActorCDO->NetDormancy = DORM_Never;
+
+	ActorCDO->NetUpdateFrequency = static_cast<float>(NetUpdateFrequency);
+	ActorCDO->NetPriority = static_cast<float>(NetPriority);
+
+	FBlueprintEditorUtils::MarkBlueprintAsModified(Blueprint);
+	FAgentFrameworkActionsModule::AgentDirtiedPackages.Add(FName(*AssetPath));
+	CompileAndReport(Blueprint, Result, true);
+
+	Result.bSuccess = true;
+	Result.ResultMessage = FString::Printf(TEXT("Successfully configured replication for Actor Blueprint '%s': bReplicates=%s, bReplicateMovement=%s, NetDormancy=%s, NetUpdateFrequency=%.1f, NetPriority=%.1f"),
+		*AssetPath, bReplicates ? TEXT("True") : TEXT("False"), bReplicateMovement ? TEXT("True") : TEXT("False"), *NetDormancyStr, NetUpdateFrequency, NetPriority);
+	return Result;
+}
+
+FAgentFrameworkActionResult FAgentFrameworkBlueprintActions::ExecuteSetVariableReplication(const TSharedRef<FJsonObject>& Params, FAgentFrameworkActionResult& Result)
+{
+	Result.bSuccess = false;
+
+	FString AssetPath;
+	if (!Params->TryGetStringField(TEXT("asset_path"), AssetPath))
+	{
+		Params->TryGetStringField(TEXT("TargetAsset"), AssetPath);
+	}
+	AssetPath = ExpandBlueprintAssetPath(AssetPath);
+
+	UBlueprint* Blueprint = LoadObject<UBlueprint>(nullptr, *AssetPath);
+	if (!Blueprint)
+	{
+		Result.Errors.Add(FString::Printf(TEXT("Failed to load Blueprint asset: %s"), *AssetPath));
+		return Result;
+	}
+
+	FString VarName;
+	if (!Params->TryGetStringField(TEXT("variable_name"), VarName))
+	{
+		Params->TryGetStringField(TEXT("VariableName"), VarName);
+	}
+
+	FString RepTypeStr = TEXT("Replicated");
+	if (!Params->TryGetStringField(TEXT("replication_type"), RepTypeStr))
+	{
+		Params->TryGetStringField(TEXT("ReplicationType"), RepTypeStr);
+	}
+
+	FString RepNotifyFuncStr;
+	if (!Params->TryGetStringField(TEXT("rep_notify_func"), RepNotifyFuncStr))
+	{
+		Params->TryGetStringField(TEXT("RepNotifyFunc"), RepNotifyFuncStr);
+	}
+
+	FString RepConditionStr;
+	if (!Params->TryGetStringField(TEXT("replication_condition"), RepConditionStr))
+	{
+		Params->TryGetStringField(TEXT("ReplicationCondition"), RepConditionStr);
+	}
+
+	FBPVariableDescription* TargetVarDesc = nullptr;
+	for (FBPVariableDescription& VarDesc : Blueprint->NewVariables)
+	{
+		if (VarDesc.VarName.ToString().Equals(VarName, ESearchCase::IgnoreCase))
+		{
+			TargetVarDesc = &VarDesc;
+			break;
+		}
+	}
+
+	if (!TargetVarDesc)
+	{
+		Result.Errors.Add(FString::Printf(TEXT("Variable '%s' not found in Blueprint '%s'. Note: Inherited C++ variables cannot be modified via Blueprint variable description."),
+			*VarName, *AssetPath));
+		return Result;
+	}
+
+	Blueprint->Modify();
+
+	if (RepTypeStr.Equals(TEXT("None"), ESearchCase::IgnoreCase))
+	{
+		TargetVarDesc->PropertyFlags &= ~(CPF_Net | CPF_RepNotify);
+		TargetVarDesc->RepNotifyFunc = NAME_None;
+	}
+	else if (RepTypeStr.Equals(TEXT("Replicated"), ESearchCase::IgnoreCase))
+	{
+		TargetVarDesc->PropertyFlags |= CPF_Net;
+		TargetVarDesc->PropertyFlags &= ~CPF_RepNotify;
+		TargetVarDesc->RepNotifyFunc = NAME_None;
+	}
+	else if (RepTypeStr.Equals(TEXT("RepNotify"), ESearchCase::IgnoreCase))
+	{
+		TargetVarDesc->PropertyFlags |= (CPF_Net | CPF_RepNotify);
+
+		FName RepNotifyFuncName;
+		if (!RepNotifyFuncStr.IsEmpty())
+		{
+			RepNotifyFuncName = FName(*RepNotifyFuncStr);
+		}
+		else
+		{
+			RepNotifyFuncName = FName(*FString::Printf(TEXT("OnRep_%s"), *TargetVarDesc->VarName.ToString()));
+		}
+		TargetVarDesc->RepNotifyFunc = RepNotifyFuncName;
+
+		UEdGraph* FuncGraph = FindObject<UEdGraph>(Blueprint, *RepNotifyFuncName.ToString());
+		if (!FuncGraph)
+		{
+			FuncGraph = FBlueprintEditorUtils::CreateNewGraph(Blueprint, RepNotifyFuncName, UEdGraph::StaticClass(), UEdGraphSchema_K2::StaticClass());
+			FBlueprintEditorUtils::AddFunctionGraph<UClass>(Blueprint, FuncGraph, false, nullptr);
+		}
+	}
+
+	if (!RepConditionStr.IsEmpty())
+	{
+		FBlueprintEditorUtils::SetBlueprintVariableMetaData(Blueprint, TargetVarDesc->VarName, nullptr, FName(TEXT("ReplicationCondition")), RepConditionStr);
+	}
+
+	FBlueprintEditorUtils::MarkBlueprintAsStructurallyModified(Blueprint);
+	FAgentFrameworkActionsModule::AgentDirtiedPackages.Add(FName(*AssetPath));
+	CompileAndReport(Blueprint, Result, true);
+
+	Result.bSuccess = true;
+	Result.ResultMessage = FString::Printf(TEXT("Successfully updated replication for variable '%s' in Blueprint '%s': ReplicationType=%s, RepNotifyFunc='%s'"),
+		*VarName, *AssetPath, *RepTypeStr, TargetVarDesc->RepNotifyFunc != NAME_None ? *TargetVarDesc->RepNotifyFunc.ToString() : TEXT("None"));
 	return Result;
 }
 

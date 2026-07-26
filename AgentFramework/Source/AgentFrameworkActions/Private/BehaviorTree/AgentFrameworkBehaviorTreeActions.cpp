@@ -2,7 +2,8 @@
 
 #include "BehaviorTree/AgentFrameworkBehaviorTreeActions.h"
 #include "AgentFrameworkCoreModule.h"
-#include "AgentFrameworkSettings.h"
+#include "AgentFrameworkActionUtils.h"
+#include "Sound/SoundBase.h"
 #include "BehaviorTree/BehaviorTree.h"
 #include "BehaviorTree/BlackboardData.h"
 #include "BehaviorTree/Blackboard/BlackboardKeyType_Bool.h"
@@ -21,10 +22,6 @@
 #include "BehaviorTree/Composites/BTComposite_SimpleParallel.h"
 #include "BehaviorTree/Tasks/BTTask_Wait.h"
 #include "BehaviorTree/Tasks/BTTask_MoveTo.h"
-#include "BehaviorTree/Tasks/BTTask_RunBehavior.h"
-#include "BehaviorTree/Decorators/BTDecorator_Blackboard.h"
-#include "BehaviorTree/Decorators/BTDecorator_Cooldown.h"
-#include "BehaviorTree/Services/BTService_DefaultFocus.h"
 #include "NavigationSystem.h"
 #include "NavMesh/NavMeshBoundsVolume.h"
 #include "AssetToolsModule.h"
@@ -41,12 +38,8 @@
 
 // Mass Entity & Crowd
 #include "MassEntityTraitBase.h"
-#include "MassProcessor.h"
 #include "MassCrowdSubsystem.h"
 #include "MassSpawner.h"
-#include "MassEntityTemplateRegistry.h"
-#include "MassExecutionContext.h"
-#include "BehaviorTree/AgentFrameworkBehaviorTreeTypes.h"
 
 // Smart Objects
 #include "SmartObjectSubsystem.h"
@@ -99,31 +92,51 @@ FAgentFrameworkActionResult FAgentFrameworkBehaviorTreeActions::ExecuteAction(co
 	Result.bSuccess = false;
 
 	FString Action;
-	if (!Params->TryGetStringField(TEXT("action"), Action) || Action.IsEmpty())
-		Params->TryGetStringField(TEXT("tool_name"), Action);
+	TArray<FString> TempErrors;
+	if (!UAgentFrameworkActionUtils::TryGetStringParam(Params, TEXT("action"), Action, TempErrors, false) || Action.IsEmpty())
+	{
+		UAgentFrameworkActionUtils::TryGetStringParam(Params, TEXT("tool_name"), Action, TempErrors, false);
+	}
 
 	if (Action == TEXT("create_blackboard"))
-		return ExecuteCreateBlackboard(Params, Result);
+		Result = ExecuteCreateBlackboard(Params, Result);
 	else if (Action == TEXT("create_behavior_tree"))
-		return ExecuteCreateBehaviorTree(Params, Result);
+		Result = ExecuteCreateBehaviorTree(Params, Result);
 	else if (Action == TEXT("inject_bt_nodes"))
-		return ExecuteInjectBTNodes(Params, Result);
+		Result = ExecuteInjectBTNodes(Params, Result);
 	else if (Action == TEXT("configure_navmesh"))
-		return ExecuteConfigureNavMesh(Params, Result);
+		Result = ExecuteConfigureNavMesh(Params, Result);
 	else if (Action == TEXT("create_state_tree"))
-		return ExecuteCreateStateTree(Params, Result);
+		Result = ExecuteCreateStateTree(Params, Result);
 	else if (Action == TEXT("setup_mass_spawner"))
-		return ExecuteSetupMassSpawner(Params, Result);
+		Result = ExecuteSetupMassSpawner(Params, Result);
 	else if (Action == TEXT("configure_mass_trait"))
-		return ExecuteConfigureMassTrait(Params, Result);
+		Result = ExecuteConfigureMassTrait(Params, Result);
 	else if (Action == TEXT("setup_mass_crowd"))
-		return ExecuteSetupMassCrowd(Params, Result);
+		Result = ExecuteSetupMassCrowd(Params, Result);
 	else if (Action == TEXT("query_smart_objects"))
-		return ExecuteQuerySmartObjects(Params, Result);
+		Result = ExecuteQuerySmartObjects(Params, Result);
 	else if (Action == TEXT("run_eqs"))
-		return ExecuteRunEQS(Params, Result);
+		Result = ExecuteRunEQS(Params, Result);
+	else
+	{
+		Result.Errors.Add(TEXT("Unknown BT action."));
+	}
 
-	Result.Errors.Add(TEXT("Unknown BT action."));
+	if (Result.bSuccess)
+	{
+#if WITH_EDITOR
+		if (GEditor)
+		{
+			USoundBase* SuccessSound = LoadObject<USoundBase>(nullptr, TEXT("/Engine/EditorSounds/Notifications/CompileSuccess.CompileSuccess"));
+			if (IsValid(SuccessSound))
+			{
+				GEditor->PlayEditorSound(SuccessSound);
+			}
+		}
+#endif
+	}
+
 	return Result;
 }
 
@@ -135,9 +148,8 @@ FAgentFrameworkActionResult FAgentFrameworkBehaviorTreeActions::ExecuteCreateBla
 	const TSharedRef<FJsonObject>& Params, FAgentFrameworkActionResult& Result)
 {
 	FString AssetPath;
-	if (!Params->TryGetStringField(TEXT("asset_path"), AssetPath))
+	if (!UAgentFrameworkActionUtils::TryGetStringParam(Params, TEXT("asset_path"), AssetPath, Result.Errors, true))
 	{
-		Result.Errors.Add(TEXT("Missing required field: 'asset_path'"));
 		return Result;
 	}
 
@@ -154,20 +166,26 @@ FAgentFrameworkActionResult FAgentFrameworkBehaviorTreeActions::ExecuteCreateBla
 	}
 
 	UBlackboardData* Blackboard = Cast<UBlackboardData>(NewAsset);
+	if (!IsValid(Blackboard))
+	{
+		Result.Errors.Add(TEXT("Failed to cast created asset to BlackboardData."));
+		return Result;
+	}
 
 	// Add keys from JSON array
-	const TArray<TSharedPtr<FJsonValue>>* KeysArray;
-	if (Params->TryGetArrayField(TEXT("keys"), KeysArray))
+	const TArray<TSharedPtr<FJsonValue>>* KeysArray = nullptr;
+	if (UAgentFrameworkActionUtils::TryGetArrayParam(Params, TEXT("keys"), KeysArray, Result.Errors, false) && KeysArray)
 	{
 		for (const TSharedPtr<FJsonValue>& KeyVal : *KeysArray)
 		{
-			const TSharedPtr<FJsonObject>* KeyObjPtr;
-			if (!KeyVal->TryGetObject(KeyObjPtr)) continue;
+			if (!KeyVal.IsValid()) continue;
+			const TSharedPtr<FJsonObject>* KeyObjPtr = nullptr;
+			if (!KeyVal->TryGetObject(KeyObjPtr) || !KeyObjPtr || !KeyObjPtr->IsValid()) continue;
 			const TSharedPtr<FJsonObject>& KeyObj = *KeyObjPtr;
 
 			FString KeyName, KeyType;
-			KeyObj->TryGetStringField(TEXT("name"), KeyName);
-			KeyObj->TryGetStringField(TEXT("type"), KeyType);
+			UAgentFrameworkActionUtils::TryGetStringParam(KeyObj, TEXT("name"), KeyName, Result.Errors, false);
+			UAgentFrameworkActionUtils::TryGetStringParam(KeyObj, TEXT("type"), KeyType, Result.Errors, false);
 
 			if (KeyName.IsEmpty() || KeyType.IsEmpty()) continue;
 
@@ -202,7 +220,10 @@ FAgentFrameworkActionResult FAgentFrameworkBehaviorTreeActions::ExecuteCreateBla
 				Entry.KeyType = NewObject<UBlackboardKeyType_Object>(Blackboard);
 			}
 
-			Blackboard->Keys.Add(Entry);
+			if (IsValid(Entry.KeyType))
+			{
+				Blackboard->Keys.Add(Entry);
+			}
 		}
 	}
 
@@ -223,9 +244,8 @@ FAgentFrameworkActionResult FAgentFrameworkBehaviorTreeActions::ExecuteCreateBeh
 	const TSharedRef<FJsonObject>& Params, FAgentFrameworkActionResult& Result)
 {
 	FString AssetPath;
-	if (!Params->TryGetStringField(TEXT("asset_path"), AssetPath))
+	if (!UAgentFrameworkActionUtils::TryGetStringParam(Params, TEXT("asset_path"), AssetPath, Result.Errors, true))
 	{
-		Result.Errors.Add(TEXT("Missing required field: 'asset_path'"));
 		return Result;
 	}
 
@@ -242,13 +262,19 @@ FAgentFrameworkActionResult FAgentFrameworkBehaviorTreeActions::ExecuteCreateBeh
 	}
 
 	UBehaviorTree* BT = Cast<UBehaviorTree>(NewAsset);
+	if (!IsValid(BT))
+	{
+		Result.Errors.Add(TEXT("Failed to cast created asset to Behavior Tree."));
+		return Result;
+	}
 
 	// Assign blackboard if specified
 	FString BlackboardPath;
-	if (Params->TryGetStringField(TEXT("blackboard_asset"), BlackboardPath))
+	UAgentFrameworkActionUtils::TryGetStringParam(Params, TEXT("blackboard_asset"), BlackboardPath, Result.Errors, false);
+	if (!BlackboardPath.IsEmpty())
 	{
 		UBlackboardData* BB = LoadObject<UBlackboardData>(nullptr, *BlackboardPath);
-		if (BB)
+		if (IsValid(BB))
 		{
 			BT->BlackboardAsset = BB;
 		}
@@ -277,24 +303,22 @@ FAgentFrameworkActionResult FAgentFrameworkBehaviorTreeActions::ExecuteInjectBTN
 	const TSharedRef<FJsonObject>& Params, FAgentFrameworkActionResult& Result)
 {
 	FString AssetPath;
-	if (!Params->TryGetStringField(TEXT("asset_path"), AssetPath))
+	if (!UAgentFrameworkActionUtils::TryGetStringParam(Params, TEXT("asset_path"), AssetPath, Result.Errors, true))
 	{
-		Result.Errors.Add(TEXT("Missing required field: 'asset_path'"));
 		return Result;
 	}
 
 	UBehaviorTree* BT = LoadObject<UBehaviorTree>(nullptr, *AssetPath);
-	if (!BT)
+	if (!IsValid(BT))
 	{
 		Result.Errors.Add(FString::Printf(TEXT("Behavior Tree not found at '%s'."), *AssetPath));
 		return Result;
 	}
 
 	// Parse nodes array
-	const TArray<TSharedPtr<FJsonValue>>* NodesArray;
-	if (!Params->TryGetArrayField(TEXT("nodes"), NodesArray))
+	const TArray<TSharedPtr<FJsonValue>>* NodesArray = nullptr;
+	if (!UAgentFrameworkActionUtils::TryGetArrayParam(Params, TEXT("nodes"), NodesArray, Result.Errors, true) || !NodesArray)
 	{
-		Result.Errors.Add(TEXT("Missing required field: 'nodes' â€” array of node definitions"));
 		return Result;
 	}
 
@@ -305,16 +329,17 @@ FAgentFrameworkActionResult FAgentFrameworkBehaviorTreeActions::ExecuteInjectBTN
 	// More complex hierarchies can be built via multiple inject_bt_nodes calls
 	for (const TSharedPtr<FJsonValue>& NodeVal : *NodesArray)
 	{
-		const TSharedPtr<FJsonObject>* NodeObjPtr;
-		if (!NodeVal->TryGetObject(NodeObjPtr)) continue;
+		if (!NodeVal.IsValid()) continue;
+		const TSharedPtr<FJsonObject>* NodeObjPtr = nullptr;
+		if (!NodeVal->TryGetObject(NodeObjPtr) || !NodeObjPtr || !NodeObjPtr->IsValid()) continue;
 		const TSharedPtr<FJsonObject>& NodeObj = *NodeObjPtr;
 
 		FString NodeType;
-		NodeObj->TryGetStringField(TEXT("type"), NodeType);
+		UAgentFrameworkActionUtils::TryGetStringParam(NodeObj, TEXT("type"), NodeType, Result.Errors, false);
 		NodeType = NodeType.ToLower();
 
 		FString NodeName;
-		NodeObj->TryGetStringField(TEXT("name"), NodeName);
+		UAgentFrameworkActionUtils::TryGetStringParam(NodeObj, TEXT("name"), NodeName, Result.Errors, false);
 
 		if (NodeType == TEXT("selector") || NodeType == TEXT("sequence") || NodeType == TEXT("parallel"))
 		{
@@ -328,12 +353,12 @@ FAgentFrameworkActionResult FAgentFrameworkBehaviorTreeActions::ExecuteInjectBTN
 			else if (NodeType == TEXT("parallel"))
 				Composite = NewObject<UBTComposite_SimpleParallel>(BT);
 
-			if (Composite)
+			if (IsValid(Composite))
 			{
 				Composite->NodeName = NodeName.IsEmpty() ? NodeType : NodeName;
 
 				// If this is the first composite and BT has no root, set as root
-				if (!BT->RootNode)
+				if (!IsValid(BT->RootNode))
 				{
 					BT->RootNode = Composite;
 					Report += FString::Printf(TEXT("Set root node: %s (%s)\n"), *Composite->NodeName, *NodeType);
@@ -352,35 +377,41 @@ FAgentFrameworkActionResult FAgentFrameworkBehaviorTreeActions::ExecuteInjectBTN
 		else if (NodeType == TEXT("wait"))
 		{
 			UBTTask_Wait* WaitTask = NewObject<UBTTask_Wait>(BT);
-			float WaitTime = 5.0f;
-			NodeObj->TryGetNumberField(TEXT("wait_time"), WaitTime);
-			WaitTask->WaitTime = WaitTime;
-			WaitTask->NodeName = NodeName.IsEmpty() ? TEXT("Wait") : NodeName;
-
-			if (BT->RootNode)
+			if (IsValid(WaitTask))
 			{
-				FBTCompositeChild Child;
-				Child.ChildTask = WaitTask;
-				BT->RootNode->Children.Add(Child);
-				Report += FString::Printf(TEXT("Added Wait task: %.1fs\n"), WaitTime);
-				NodesAdded++;
+				float WaitTime = 5.0f;
+				UAgentFrameworkActionUtils::TryGetFloatParam(NodeObj, TEXT("wait_time"), WaitTime, Result.Errors, false);
+				WaitTask->WaitTime = WaitTime;
+				WaitTask->NodeName = NodeName.IsEmpty() ? TEXT("Wait") : NodeName;
+
+				if (IsValid(BT->RootNode))
+				{
+					FBTCompositeChild Child;
+					Child.ChildTask = WaitTask;
+					BT->RootNode->Children.Add(Child);
+					Report += FString::Printf(TEXT("Added Wait task: %.1fs\n"), WaitTime);
+					NodesAdded++;
+				}
 			}
 		}
 		else if (NodeType == TEXT("moveto") || NodeType == TEXT("move_to"))
 		{
 			UBTTask_MoveTo* MoveTask = NewObject<UBTTask_MoveTo>(BT);
-			MoveTask->NodeName = NodeName.IsEmpty() ? TEXT("MoveTo") : NodeName;
-			float AcceptRadius = 50.0f;
-			NodeObj->TryGetNumberField(TEXT("acceptable_radius"), AcceptRadius);
-			MoveTask->AcceptableRadius = AcceptRadius;
-
-			if (BT->RootNode)
+			if (IsValid(MoveTask))
 			{
-				FBTCompositeChild Child;
-				Child.ChildTask = MoveTask;
-				BT->RootNode->Children.Add(Child);
-				Report += FString::Printf(TEXT("Added MoveTo task (radius: %.0f)\n"), AcceptRadius);
-				NodesAdded++;
+				MoveTask->NodeName = NodeName.IsEmpty() ? TEXT("MoveTo") : NodeName;
+				float AcceptRadius = 50.0f;
+				UAgentFrameworkActionUtils::TryGetFloatParam(NodeObj, TEXT("acceptable_radius"), AcceptRadius, Result.Errors, false);
+				MoveTask->AcceptableRadius = AcceptRadius;
+
+				if (IsValid(BT->RootNode))
+				{
+					FBTCompositeChild Child;
+					Child.ChildTask = MoveTask;
+					BT->RootNode->Children.Add(Child);
+					Report += FString::Printf(TEXT("Added MoveTo task (radius: %.0f)\n"), AcceptRadius);
+					NodesAdded++;
+				}
 			}
 		}
 		else
@@ -413,7 +444,7 @@ FAgentFrameworkActionResult FAgentFrameworkBehaviorTreeActions::ExecuteConfigure
 	const TSharedRef<FJsonObject>& Params, FAgentFrameworkActionResult& Result)
 {
 	UWorld* World = GEditor ? GEditor->GetEditorWorldContext().World() : nullptr;
-	if (!World)
+	if (!IsValid(World))
 	{
 		Result.Errors.Add(TEXT("No editor world available."));
 		return Result;
@@ -435,20 +466,20 @@ FAgentFrameworkActionResult FAgentFrameworkBehaviorTreeActions::ExecuteConfigure
 		FVector Location(0.0f, 0.0f, 0.0f);
 		FVector Scale(50.0f, 50.0f, 10.0f);  // Each unit = 200 UU, so 50 = 10000 UU = ~100m
 
-		const TSharedPtr<FJsonObject>* LocationObj;
-		if (Params->TryGetObjectField(TEXT("location"), LocationObj))
+		const TSharedPtr<FJsonObject>* LocationObj = nullptr;
+		if (UAgentFrameworkActionUtils::TryGetObjectParam(Params, TEXT("location"), LocationObj, Result.Errors, false) && LocationObj && LocationObj->IsValid())
 		{
-			(*LocationObj)->TryGetNumberField(TEXT("x"), Location.X);
-			(*LocationObj)->TryGetNumberField(TEXT("y"), Location.Y);
-			(*LocationObj)->TryGetNumberField(TEXT("z"), Location.Z);
+			UAgentFrameworkActionUtils::TryGetDoubleParam(*LocationObj, TEXT("x"), Location.X, Result.Errors, false);
+			UAgentFrameworkActionUtils::TryGetDoubleParam(*LocationObj, TEXT("y"), Location.Y, Result.Errors, false);
+			UAgentFrameworkActionUtils::TryGetDoubleParam(*LocationObj, TEXT("z"), Location.Z, Result.Errors, false);
 		}
 
-		const TSharedPtr<FJsonObject>* ScaleObj;
-		if (Params->TryGetObjectField(TEXT("scale"), ScaleObj))
+		const TSharedPtr<FJsonObject>* ScaleObj = nullptr;
+		if (UAgentFrameworkActionUtils::TryGetObjectParam(Params, TEXT("scale"), ScaleObj, Result.Errors, false) && ScaleObj && ScaleObj->IsValid())
 		{
-			(*ScaleObj)->TryGetNumberField(TEXT("x"), Scale.X);
-			(*ScaleObj)->TryGetNumberField(TEXT("y"), Scale.Y);
-			(*ScaleObj)->TryGetNumberField(TEXT("z"), Scale.Z);
+			UAgentFrameworkActionUtils::TryGetDoubleParam(*ScaleObj, TEXT("x"), Scale.X, Result.Errors, false);
+			UAgentFrameworkActionUtils::TryGetDoubleParam(*ScaleObj, TEXT("y"), Scale.Y, Result.Errors, false);
+			UAgentFrameworkActionUtils::TryGetDoubleParam(*ScaleObj, TEXT("z"), Scale.Z, Result.Errors, false);
 		}
 
 		// Spawn the NavMeshBoundsVolume
@@ -460,7 +491,7 @@ FAgentFrameworkActionResult FAgentFrameworkBehaviorTreeActions::ExecuteConfigure
 			FTransform(FRotator::ZeroRotator, Location, Scale),
 			SpawnParams);
 
-		if (NavVolume)
+		if (IsValid(NavVolume))
 		{
 			Report += FString::Printf(TEXT("Spawned NavMeshBoundsVolume at (%s) with scale (%s)\n"),
 				*Location.ToString(), *Scale.ToString());
@@ -478,12 +509,12 @@ FAgentFrameworkActionResult FAgentFrameworkBehaviorTreeActions::ExecuteConfigure
 
 	// Trigger NavMesh rebuild
 	bool bRebuild = true;
-	Params->TryGetBoolField(TEXT("rebuild"), bRebuild);
+	UAgentFrameworkActionUtils::TryGetBoolParam(Params, TEXT("rebuild"), bRebuild, Result.Errors, false);
 
 	if (bRebuild)
 	{
 		UNavigationSystemV1* NavSys = FNavigationSystem::GetCurrent<UNavigationSystemV1>(World);
-		if (NavSys)
+		if (IsValid(NavSys))
 		{
 			NavSys->Build();
 			Report += TEXT("NavMesh rebuild triggered.\n");
@@ -501,27 +532,34 @@ FAgentFrameworkActionResult FAgentFrameworkBehaviorTreeActions::ExecuteConfigure
 
 FAgentFrameworkActionResult FAgentFrameworkBehaviorTreeActions::ExecuteCreateStateTree(const TSharedRef<FJsonObject>& Params, FAgentFrameworkActionResult& Result)
 {
-	FString AssetPath = Params->GetStringField(TEXT("asset_path"));
+	FString AssetPath;
+	if (!UAgentFrameworkActionUtils::TryGetStringParam(Params, TEXT("asset_path"), AssetPath, Result.Errors, true))
+	{
+		return Result;
+	}
 
 	FString PackagePath = FPackageName::GetLongPackagePath(AssetPath);
 	FString AssetName = FPackageName::GetShortName(AssetPath);
 	IAssetTools& AssetTools = FModuleManager::LoadModuleChecked<FAssetToolsModule>("AssetTools").Get();
 	UStateTree* StateTree = Cast<UStateTree>(AssetTools.CreateAsset(AssetName, PackagePath, UStateTree::StaticClass(), nullptr));
 
-	if (!StateTree)
+	if (!IsValid(StateTree))
 	{
 		Result.Errors.Add(FString::Printf(TEXT("Failed to create State Tree at '%s'."), *AssetPath));
 		return Result;
 	}
 
 	UPackage* Package = StateTree->GetOutermost();
-	Package->MarkPackageDirty();
-	FString PackageFilename;
-	if (FPackageName::TryConvertLongPackageNameToFilename(Package->GetName(), PackageFilename, FPackageName::GetAssetPackageExtension()))
+	if (IsValid(Package))
 	{
-		FSavePackageArgs SaveArgs;
-		SaveArgs.TopLevelFlags = RF_Standalone;
-		UPackage::SavePackage(Package, StateTree, *PackageFilename, SaveArgs);
+		Package->MarkPackageDirty();
+		FString PackageFilename;
+		if (FPackageName::TryConvertLongPackageNameToFilename(Package->GetName(), PackageFilename, FPackageName::GetAssetPackageExtension()))
+		{
+			FSavePackageArgs SaveArgs;
+			SaveArgs.TopLevelFlags = RF_Standalone;
+			UPackage::SavePackage(Package, StateTree, *PackageFilename, SaveArgs);
+		}
 	}
 	FAssetRegistryModule::AssetCreated(StateTree);
 
@@ -534,14 +572,14 @@ FAgentFrameworkActionResult FAgentFrameworkBehaviorTreeActions::ExecuteCreateSta
 FAgentFrameworkActionResult FAgentFrameworkBehaviorTreeActions::ExecuteSetupMassSpawner(const TSharedRef<FJsonObject>& Params, FAgentFrameworkActionResult& Result)
 {
 	UWorld* World = GEditor ? GEditor->GetEditorWorldContext().World() : nullptr;
-	if (!World)
+	if (!IsValid(World))
 	{
 		Result.Errors.Add(TEXT("No active editor world found."));
 		return Result;
 	}
 
 	AMassSpawner* Spawner = World->SpawnActor<AMassSpawner>();
-	if (!Spawner)
+	if (!IsValid(Spawner))
 	{
 		Result.Errors.Add(TEXT("Failed to spawn AMassSpawner."));
 		return Result;
@@ -558,14 +596,12 @@ FAgentFrameworkActionResult FAgentFrameworkBehaviorTreeActions::ExecuteSetupMass
 
 FAgentFrameworkActionResult FAgentFrameworkBehaviorTreeActions::ExecuteConfigureMassTrait(const TSharedRef<FJsonObject>& Params, FAgentFrameworkActionResult& Result)
 {
-	UWorld* World = GEditor ? GEditor->GetEditorWorldContext().World() : nullptr;
-	if (!World)
+	UClass* TraitClass = UMassEntityTraitBase::StaticClass();
+	if (!IsValid(TraitClass))
 	{
-		Result.Errors.Add(TEXT("No active editor world found."));
+		Result.Errors.Add(TEXT("Mass Entity Trait class is invalid."));
 		return Result;
 	}
-
-	UClass* TraitClass = UMassEntityTraitBase::StaticClass();
 	Result.bSuccess = true;
 	Result.ResultMessage = FString::Printf(TEXT("Successfully located and verified Mass Entity Trait class: %s"), *TraitClass->GetName());
 	return Result;
@@ -574,14 +610,14 @@ FAgentFrameworkActionResult FAgentFrameworkBehaviorTreeActions::ExecuteConfigure
 FAgentFrameworkActionResult FAgentFrameworkBehaviorTreeActions::ExecuteSetupMassCrowd(const TSharedRef<FJsonObject>& Params, FAgentFrameworkActionResult& Result)
 {
 	UWorld* World = GEditor ? GEditor->GetEditorWorldContext().World() : nullptr;
-	if (!World)
+	if (!IsValid(World))
 	{
 		Result.Errors.Add(TEXT("No active editor world found."));
 		return Result;
 	}
 
 	UMassCrowdSubsystem* CrowdSubsystem = World->GetSubsystem<UMassCrowdSubsystem>();
-	if (!CrowdSubsystem)
+	if (!IsValid(CrowdSubsystem))
 	{
 		Result.Errors.Add(TEXT("MassCrowdSubsystem is not available in the active world."));
 		return Result;
@@ -595,14 +631,14 @@ FAgentFrameworkActionResult FAgentFrameworkBehaviorTreeActions::ExecuteSetupMass
 FAgentFrameworkActionResult FAgentFrameworkBehaviorTreeActions::ExecuteQuerySmartObjects(const TSharedRef<FJsonObject>& Params, FAgentFrameworkActionResult& Result)
 {
 	UWorld* World = GEditor ? GEditor->GetEditorWorldContext().World() : nullptr;
-	if (!World)
+	if (!IsValid(World))
 	{
 		Result.Errors.Add(TEXT("No active editor world found."));
 		return Result;
 	}
 
 	USmartObjectSubsystem* SOSubsystem = World->GetSubsystem<USmartObjectSubsystem>();
-	if (!SOSubsystem)
+	if (!IsValid(SOSubsystem))
 	{
 		Result.Errors.Add(TEXT("USmartObjectSubsystem is not available in the active world."));
 		return Result;
@@ -620,17 +656,21 @@ FAgentFrameworkActionResult FAgentFrameworkBehaviorTreeActions::ExecuteQuerySmar
 
 FAgentFrameworkActionResult FAgentFrameworkBehaviorTreeActions::ExecuteRunEQS(const TSharedRef<FJsonObject>& Params, FAgentFrameworkActionResult& Result)
 {
-	FString QueryTemplatePath = Params->GetStringField(TEXT("query_template_path"));
+	FString QueryTemplatePath;
+	if (!UAgentFrameworkActionUtils::TryGetStringParam(Params, TEXT("query_template_path"), QueryTemplatePath, Result.Errors, true))
+	{
+		return Result;
+	}
 
 	UEnvQuery* QueryTemplate = LoadObject<UEnvQuery>(nullptr, *QueryTemplatePath);
-	if (!QueryTemplate)
+	if (!IsValid(QueryTemplate))
 	{
 		Result.Errors.Add(FString::Printf(TEXT("EQS Query template not found at '%s'."), *QueryTemplatePath));
 		return Result;
 	}
 
 	UWorld* World = GEditor ? GEditor->GetEditorWorldContext().World() : nullptr;
-	if (!World)
+	if (!IsValid(World))
 	{
 		Result.Errors.Add(TEXT("No active editor world found."));
 		return Result;

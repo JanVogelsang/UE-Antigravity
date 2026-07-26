@@ -5,7 +5,7 @@
 $ErrorActionPreference = "Stop"
 
 # Resolve project path dynamically
-$project_path = "$env:USERPROFILE\Documents\Unreal Projects\tau-game\Tau.uproject"
+$project_path = "$env:USERPROFILE\Documents\Unreal Projects\AgentFrameworkTest\AgentFrameworkTest.uproject"
 
 # Resolve Python dynamically
 $python_exe = "$env:USERPROFILE\AppData\Local\Microsoft\WindowsApps\python.exe"
@@ -110,7 +110,7 @@ $cpp_exit_code = $process.ExitCode
 if ($cpp_exit_code -ne 0) {
     Write-Host "`n[-] C++ Automation Tests FAILED with exit code: $cpp_exit_code" -ForegroundColor Red
     $project_dir = Split-Path -Parent $project_path
-    Write-Host "Check the project logs at: $project_dir\Saved\Logs\Tau.log" -ForegroundColor Yellow
+    Write-Host "Check the project logs at: $project_dir\Saved\Logs\AgentFrameworkTest.log" -ForegroundColor Yellow
     exit $cpp_exit_code
 } else {
     Write-Host "`n[+] C++ Headless Automation Tests PASSED successfully!" -ForegroundColor Green

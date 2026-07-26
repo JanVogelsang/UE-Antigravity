@@ -2,6 +2,7 @@
 
 #include "AIAssistant/AgentFrameworkAIAssistantActions.h"
 #include "AIAssistant/AIAssistantBridge.h"
+#include "AgentFrameworkActionUtils.h"
 #include "Modules/ModuleManager.h"
 
 TStrongObjectPtr<UAIAssistantBridge> FAgentFrameworkAIAssistantActions::BridgeInstance = nullptr;
@@ -32,12 +33,7 @@ TArray<FString> FAgentFrameworkAIAssistantActions::GetSupportedToolNames() const
 bool FAgentFrameworkAIAssistantActions::ValidateParams(const TSharedRef<FJsonObject>& Params, TArray<FString>& OutErrors) const
 {
 	FString Prompt;
-	if (!Params->TryGetStringField(TEXT("prompt"), Prompt) || Prompt.IsEmpty())
-	{
-		OutErrors.Add(TEXT("Parameter 'prompt' is required and must not be empty."));
-		return false;
-	}
-	return true;
+	return UAgentFrameworkActionUtils::TryGetStringParam(Params, TEXT("prompt"), Prompt, OutErrors, true);
 }
 
 UAIAssistantBridge* FAgentFrameworkAIAssistantActions::GetBridgeInstance()
@@ -45,9 +41,12 @@ UAIAssistantBridge* FAgentFrameworkAIAssistantActions::GetBridgeInstance()
 	if (!BridgeInstance.IsValid())
 	{
 		UAIAssistantBridge* NewBridge = NewObject<UAIAssistantBridge>();
-		BridgeInstance = TStrongObjectPtr<UAIAssistantBridge>(NewBridge);
+		if (IsValid(NewBridge))
+		{
+			BridgeInstance = TStrongObjectPtr<UAIAssistantBridge>(NewBridge);
+		}
 	}
-	return BridgeInstance.Get();
+	return BridgeInstance.IsValid() ? BridgeInstance.Get() : nullptr;
 }
 
 FAgentFrameworkActionResult FAgentFrameworkAIAssistantActions::ExecuteAction(const TSharedRef<FJsonObject>& Params)
@@ -62,10 +61,15 @@ FAgentFrameworkActionResult FAgentFrameworkAIAssistantActions::ExecuteAction(con
 	}
 
 	FString Prompt;
-	Params->TryGetStringField(TEXT("prompt"), Prompt);
+	TArray<FString> Errors;
+	if (!UAgentFrameworkActionUtils::TryGetStringParam(Params, TEXT("prompt"), Prompt, Errors, false))
+	{
+		Result.Errors.Append(Errors);
+		return Result;
+	}
 
 	UAIAssistantBridge* Bridge = GetBridgeInstance();
-	if (!Bridge)
+	if (!IsValid(Bridge))
 	{
 		Result.Errors.Add(TEXT("Failed to create AIAssistant bridge instance."));
 		return Result;
@@ -83,3 +87,4 @@ FAgentFrameworkActionResult FAgentFrameworkAIAssistantActions::ExecuteAction(con
 	Result.ResultMessage = TEXT("PENDING");
 	return Result;
 }
+

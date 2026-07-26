@@ -2,19 +2,18 @@
 
 #include "Cpp/AgentFrameworkCppActions.h"
 #include "AgentFrameworkCoreModule.h"
-#include "AgentFrameworkSettings.h"
+#include "AgentFrameworkActionUtils.h"
 
 #include "Misc/FileHelper.h"
 #include "Misc/Paths.h"
-#include "HAL/PlatformProcess.h"
-#include "HAL/PlatformFileManager.h"
 #include "DesktopPlatformModule.h"
-#include "Interfaces/IMainFrameModule.h"
 #include "UObject/Class.h"
 #include "UObject/UnrealType.h"
 #include "UObject/MetaData.h"
 #include "Serialization/JsonSerializer.h"
 #include "Serialization/JsonWriter.h"
+#include "Editor.h"
+#include "Sound/SoundBase.h"
 
 #if WITH_LIVE_CODING
 #include "ILiveCodingModule.h"
@@ -39,71 +38,100 @@ TArray<FString> FAgentFrameworkCppActions::GetSupportedToolNames() const
 
 bool FAgentFrameworkCppActions::ValidateParams(const TSharedRef<FJsonObject>& Params, TArray<FString>& OutErrors) const
 {
+	TSharedPtr<FJsonObject> ParamsPtr = Params;
 	FString ToolName;
-	Params->TryGetStringField(TEXT("_tool_name"), ToolName);
+	if (!UAgentFrameworkActionUtils::TryGetStringParam(ParamsPtr, TEXT("_tool_name"), ToolName, OutErrors, false))
+	{
+		UAgentFrameworkActionUtils::TryGetStringParam(ParamsPtr, TEXT("tool_name"), ToolName, OutErrors, false);
+	}
 
 	if (ToolName == TEXT("create_cpp_class"))
 	{
-		if (!Params->HasField(TEXT("class_name")) || !Params->HasField(TEXT("header_code")))
+		FString ClassName;
+		FString HeaderCode;
+		if (!UAgentFrameworkActionUtils::TryGetStringParam(ParamsPtr, TEXT("class_name"), ClassName, OutErrors, true) ||
+			!UAgentFrameworkActionUtils::TryGetStringParam(ParamsPtr, TEXT("header_code"), HeaderCode, OutErrors, true))
 		{
-			OutErrors.Add(TEXT("Missing required field(s) for create_cpp_class: class_name, header_code"));
 			return false;
 		}
 	}
 	else if (ToolName == TEXT("modify_cpp_file"))
 	{
-		if (!Params->HasField(TEXT("file_path")) || !Params->HasField(TEXT("content")))
+		FString FilePath;
+		FString Content;
+		if (!UAgentFrameworkActionUtils::TryGetStringParam(ParamsPtr, TEXT("file_path"), FilePath, OutErrors, true) ||
+			!UAgentFrameworkActionUtils::TryGetStringParam(ParamsPtr, TEXT("content"), Content, OutErrors, true))
 		{
-			OutErrors.Add(TEXT("Missing required field(s) for modify_cpp_file: file_path, content"));
 			return false;
 		}
 	}
 	else if (ToolName == TEXT("macro_create_cpp_class"))
 	{
-		if (!Params->HasField(TEXT("class_name")) || !Params->HasField(TEXT("parent_class")) || !Params->HasField(TEXT("module_name")))
+		FString ClassName;
+		FString ParentClass;
+		FString ModuleName;
+		if (!UAgentFrameworkActionUtils::TryGetStringParam(ParamsPtr, TEXT("class_name"), ClassName, OutErrors, true) ||
+			!UAgentFrameworkActionUtils::TryGetStringParam(ParamsPtr, TEXT("parent_class"), ParentClass, OutErrors, true) ||
+			!UAgentFrameworkActionUtils::TryGetStringParam(ParamsPtr, TEXT("module_name"), ModuleName, OutErrors, true))
 		{
-			OutErrors.Add(TEXT("Missing required field(s) for macro_create_cpp_class: class_name, parent_class, module_name"));
 			return false;
 		}
 	}
 	else if (ToolName == TEXT("get_cpp_reflection_info"))
 	{
-		if (!Params->HasField(TEXT("class_name")))
+		FString ClassName;
+		if (!UAgentFrameworkActionUtils::TryGetStringParam(ParamsPtr, TEXT("class_name"), ClassName, OutErrors, true))
 		{
-			OutErrors.Add(TEXT("Missing required field for get_cpp_reflection_info: class_name"));
 			return false;
 		}
 	}
 
 	// For code gen, validate that the code doesn't contain dangerous patterns
-	FString HeaderCode, CppCode, Content;
-	if (Params->TryGetStringField(TEXT("header_code"), HeaderCode))
+	FString HeaderCode;
+	UAgentFrameworkActionUtils::TryGetStringParam(ParamsPtr, TEXT("header_code"), HeaderCode, OutErrors, false);
+	if (!HeaderCode.IsEmpty())
 	{
 		TArray<FString> Violations;
 		if (!ValidateCodeSafety(HeaderCode, Violations))
 		{
-			for (const FString& V : Violations) OutErrors.Add(FString::Printf(TEXT("Header: %s"), *V));
+			for (const FString& V : Violations)
+			{
+				OutErrors.Add(FString::Printf(TEXT("Header: %s"), *V));
+			}
 			return false;
 		}
 	}
-	if (Params->TryGetStringField(TEXT("cpp_code"), CppCode))
+
+	FString CppCode;
+	UAgentFrameworkActionUtils::TryGetStringParam(ParamsPtr, TEXT("cpp_code"), CppCode, OutErrors, false);
+	if (!CppCode.IsEmpty())
 	{
 		TArray<FString> Violations;
 		if (!ValidateCodeSafety(CppCode, Violations))
 		{
-			for (const FString& V : Violations) OutErrors.Add(FString::Printf(TEXT("Cpp: %s"), *V));
+			for (const FString& V : Violations)
+			{
+				OutErrors.Add(FString::Printf(TEXT("Cpp: %s"), *V));
+			}
 			return false;
 		}
 	}
-	if (Params->TryGetStringField(TEXT("content"), Content))
+
+	FString Content;
+	UAgentFrameworkActionUtils::TryGetStringParam(ParamsPtr, TEXT("content"), Content, OutErrors, false);
+	if (!Content.IsEmpty())
 	{
 		TArray<FString> Violations;
 		if (!ValidateCodeSafety(Content, Violations))
 		{
-			for (const FString& V : Violations) OutErrors.Add(FString::Printf(TEXT("Content: %s"), *V));
+			for (const FString& V : Violations)
+			{
+				OutErrors.Add(FString::Printf(TEXT("Content: %s"), *V));
+			}
 			return false;
 		}
 	}
+
 	return true;
 }
 
@@ -112,46 +140,75 @@ FAgentFrameworkActionResult FAgentFrameworkCppActions::ExecuteAction(const TShar
 	FAgentFrameworkActionResult Result;
 	Result.bSuccess = false;
 
+	TSharedPtr<FJsonObject> ParamsPtr = Params;
 	FString ToolName;
-	if (Params->TryGetStringField(TEXT("_tool_name"), ToolName) || Params->TryGetStringField(TEXT("tool_name"), ToolName))
+	if (!UAgentFrameworkActionUtils::TryGetStringParam(ParamsPtr, TEXT("_tool_name"), ToolName, Result.Errors, false))
 	{
-		if (ToolName == TEXT("macro_create_cpp_class"))
-		{
-			return ExecuteMacroCreateCppClass(Params, Result);
-		}
-		else if (ToolName == TEXT("get_cpp_reflection_info"))
-		{
-			return ExecuteGetCppReflectionInfo(Params, Result);
-		}
+		UAgentFrameworkActionUtils::TryGetStringParam(ParamsPtr, TEXT("tool_name"), ToolName, Result.Errors, false);
 	}
 
-	if (Params->HasField(TEXT("class_name")) && Params->HasField(TEXT("header_code")))
+	if (ToolName == TEXT("macro_create_cpp_class"))
 	{
-		return ExecuteCreateCppClass(Params, Result);
+		ExecuteMacroCreateCppClass(Params, Result);
 	}
-	else if (Params->HasField(TEXT("file_path")) && Params->HasField(TEXT("content")))
+	else if (ToolName == TEXT("get_cpp_reflection_info"))
 	{
-		return ExecuteModifyCppFile(Params, Result);
+		ExecuteGetCppReflectionInfo(Params, Result);
 	}
-	else if (Params->HasField(TEXT("compile")) && Params->GetBoolField(TEXT("compile")))
+	else if (ToolName == TEXT("create_cpp_class") || (Params->HasField(TEXT("class_name")) && Params->HasField(TEXT("header_code"))))
 	{
-		return ExecuteTriggerCompile(Result);
+		ExecuteCreateCppClass(Params, Result);
+	}
+	else if (ToolName == TEXT("modify_cpp_file") || (Params->HasField(TEXT("file_path")) && Params->HasField(TEXT("content"))))
+	{
+		ExecuteModifyCppFile(Params, Result);
+	}
+	else if (ToolName == TEXT("trigger_compile"))
+	{
+		ExecuteTriggerCompile(Result);
+	}
+	else if (ToolName == TEXT("regenerate_project_files"))
+	{
+		ExecuteRegenerateProjectFiles(Result);
+	}
+	else if (Params->HasField(TEXT("compile")))
+	{
+		bool bCompile = false;
+		if (UAgentFrameworkActionUtils::TryGetBoolParam(ParamsPtr, TEXT("compile"), bCompile, Result.Errors, false) && bCompile)
+		{
+			ExecuteTriggerCompile(Result);
+		}
 	}
 	else if (Params->HasField(TEXT("regenerate_project")))
 	{
-		return ExecuteRegenerateProjectFiles(Result);
+		ExecuteRegenerateProjectFiles(Result);
+	}
+	else
+	{
+		Result.Errors.Add(TEXT("Could not determine C++ action from parameters."));
 	}
 
-	Result.Errors.Add(TEXT("Could not determine C++ action from parameters."));
+	if (Result.bSuccess)
+	{
+		PlaySuccessSound();
+	}
+
 	return Result;
 }
 
 FAgentFrameworkActionResult FAgentFrameworkCppActions::ExecuteCreateCppClass(const TSharedRef<FJsonObject>& Params, FAgentFrameworkActionResult& Result)
 {
-	FString ClassName = Params->GetStringField(TEXT("class_name"));
-	FString HeaderCode = Params->GetStringField(TEXT("header_code"));
+	TSharedPtr<FJsonObject> ParamsPtr = Params;
+	FString ClassName;
+	FString HeaderCode;
+	if (!UAgentFrameworkActionUtils::TryGetStringParam(ParamsPtr, TEXT("class_name"), ClassName, Result.Errors, true) ||
+		!UAgentFrameworkActionUtils::TryGetStringParam(ParamsPtr, TEXT("header_code"), HeaderCode, Result.Errors, true))
+	{
+		return Result;
+	}
+
 	FString CppCode;
-	Params->TryGetStringField(TEXT("cpp_code"), CppCode);
+	UAgentFrameworkActionUtils::TryGetStringParam(ParamsPtr, TEXT("cpp_code"), CppCode, Result.Errors, false);
 
 	// Validate code safety
 	TArray<FString> Violations;
@@ -163,11 +220,6 @@ FAgentFrameworkActionResult FAgentFrameworkCppActions::ExecuteCreateCppClass(con
 	}
 
 	// CRITICAL: Detect structural header changes that Live Coding CANNOT handle.
-	// Live Coding is great for .cpp implementation changes, but CANNOT handle:
-	// - New UCLASS / USTRUCT / UENUM macros in headers
-	// - New UPROPERTY / UFUNCTION declarations
-	// - Changes to the UObject reflection system
-	// Attempting to Live Code these will crash or fail silently.
 	bool bHasStructuralHeaderChanges = false;
 	if (HeaderCode.Contains(TEXT("UCLASS(")) ||
 		HeaderCode.Contains(TEXT("USTRUCT(")) ||
@@ -189,7 +241,8 @@ FAgentFrameworkActionResult FAgentFrameworkCppActions::ExecuteCreateCppClass(con
 
 	// Allow custom subdirectory
 	FString SubDir;
-	if (Params->TryGetStringField(TEXT("subdirectory"), SubDir))
+	UAgentFrameworkActionUtils::TryGetStringParam(ParamsPtr, TEXT("subdirectory"), SubDir, Result.Errors, false);
+	if (!SubDir.IsEmpty())
 	{
 		PublicDir = FPaths::Combine(PublicDir, SubDir);
 		PrivateDir = FPaths::Combine(PrivateDir, SubDir);
@@ -225,7 +278,7 @@ FAgentFrameworkActionResult FAgentFrameworkCppActions::ExecuteCreateCppClass(con
 
 	// Auto-trigger compilation if requested — but BLOCK if structural header changes detected
 	bool bAutoCompile = false;
-	Params->TryGetBoolField(TEXT("auto_compile"), bAutoCompile);
+	UAgentFrameworkActionUtils::TryGetBoolParam(ParamsPtr, TEXT("auto_compile"), bAutoCompile, Result.Errors, false);
 	if (bAutoCompile)
 	{
 		if (bHasStructuralHeaderChanges)
@@ -253,8 +306,14 @@ FAgentFrameworkActionResult FAgentFrameworkCppActions::ExecuteCreateCppClass(con
 
 FAgentFrameworkActionResult FAgentFrameworkCppActions::ExecuteModifyCppFile(const TSharedRef<FJsonObject>& Params, FAgentFrameworkActionResult& Result)
 {
-	FString FilePath = Params->GetStringField(TEXT("file_path"));
-	FString Content = Params->GetStringField(TEXT("content"));
+	TSharedPtr<FJsonObject> ParamsPtr = Params;
+	FString FilePath;
+	FString Content;
+	if (!UAgentFrameworkActionUtils::TryGetStringParam(ParamsPtr, TEXT("file_path"), FilePath, Result.Errors, true) ||
+		!UAgentFrameworkActionUtils::TryGetStringParam(ParamsPtr, TEXT("content"), Content, Result.Errors, true))
+	{
+		return Result;
+	}
 
 	FPaths::NormalizeFilename(FilePath);
 
@@ -398,16 +457,20 @@ bool FAgentFrameworkCppActions::WriteFileWithBackup(const FString& FilePath, con
 
 FAgentFrameworkActionResult FAgentFrameworkCppActions::ExecuteMacroCreateCppClass(const TSharedRef<FJsonObject>& Params, FAgentFrameworkActionResult& Result)
 {
-	FString ClassName = Params->GetStringField(TEXT("class_name"));
-	FString ParentClass = Params->GetStringField(TEXT("parent_class"));
-	FString ModuleName = Params->GetStringField(TEXT("module_name"));
+	TSharedPtr<FJsonObject> ParamsPtr = Params;
+	FString ClassName;
+	FString ParentClass;
+	FString ModuleName;
+	if (!UAgentFrameworkActionUtils::TryGetStringParam(ParamsPtr, TEXT("class_name"), ClassName, Result.Errors, true) ||
+		!UAgentFrameworkActionUtils::TryGetStringParam(ParamsPtr, TEXT("parent_class"), ParentClass, Result.Errors, true) ||
+		!UAgentFrameworkActionUtils::TryGetStringParam(ParamsPtr, TEXT("module_name"), ModuleName, Result.Errors, true))
+	{
+		return Result;
+	}
 	
 	FString ParentHeader;
-	if (Params->TryGetStringField(TEXT("parent_class_header"), ParentHeader))
-	{
-		// Provided by user
-	}
-	else
+	UAgentFrameworkActionUtils::TryGetStringParam(ParamsPtr, TEXT("parent_class_header"), ParentHeader, Result.Errors, false);
+	if (ParentHeader.IsEmpty())
 	{
 		// Default mappings
 		if (ParentClass == TEXT("AActor")) ParentHeader = TEXT("GameFramework/Actor.h");
@@ -506,41 +569,32 @@ FAgentFrameworkActionResult FAgentFrameworkCppActions::ExecuteMacroCreateCppClas
 	return Result;
 }
 
-#if WITH_EDITOR
-template<typename T>
-const TMap<FName, FString>* GetMetaMapForObject(T* MetaData, const UObject* Object)
-{
-	return MetaData ? MetaData->GetMapForObject(Object) : nullptr;
-}
-
-template<typename T>
-const TMap<FName, FString>* GetMetaMapForObject(T& MetaData, const UObject* Object)
-{
-	return MetaData.GetMapForObject(Object);
-}
-#endif
-
 FAgentFrameworkActionResult FAgentFrameworkCppActions::ExecuteGetCppReflectionInfo(const TSharedRef<FJsonObject>& Params, FAgentFrameworkActionResult& Result)
 {
-	FString ClassName = Params->GetStringField(TEXT("class_name"));
+	TSharedPtr<FJsonObject> ParamsPtr = Params;
+	FString ClassName;
+	if (!UAgentFrameworkActionUtils::TryGetStringParam(ParamsPtr, TEXT("class_name"), ClassName, Result.Errors, true))
+	{
+		return Result;
+	}
 
 	bool bIncludeProperties = true;
-	Params->TryGetBoolField(TEXT("include_properties"), bIncludeProperties);
+	UAgentFrameworkActionUtils::TryGetBoolParam(ParamsPtr, TEXT("include_properties"), bIncludeProperties, Result.Errors, false);
 	bool bIncludeFunctions = true;
-	Params->TryGetBoolField(TEXT("include_functions"), bIncludeFunctions);
+	UAgentFrameworkActionUtils::TryGetBoolParam(ParamsPtr, TEXT("include_functions"), bIncludeFunctions, Result.Errors, false);
 	bool bIncludeInterfaces = true;
-	Params->TryGetBoolField(TEXT("include_interfaces"), bIncludeInterfaces);
+	UAgentFrameworkActionUtils::TryGetBoolParam(ParamsPtr, TEXT("include_interfaces"), bIncludeInterfaces, Result.Errors, false);
 	bool bIncludeMetadata = true;
-	Params->TryGetBoolField(TEXT("include_metadata"), bIncludeMetadata);
+	UAgentFrameworkActionUtils::TryGetBoolParam(ParamsPtr, TEXT("include_metadata"), bIncludeMetadata, Result.Errors, false);
 
 	// Locate class, handling prefixes A/U
 	UClass* Class = FindFirstObject<UClass>(*ClassName);
-	if (!Class && ClassName.Len() > 1 && (ClassName.StartsWith(TEXT("A")) || ClassName.StartsWith(TEXT("U")) || ClassName.StartsWith(TEXT("I"))))
+	if (!IsValid(Class) && ClassName.Len() > 1 && (ClassName.StartsWith(TEXT("A")) || ClassName.StartsWith(TEXT("U")) || ClassName.StartsWith(TEXT("I"))))
 	{
 		Class = FindFirstObject<UClass>(*ClassName.RightChop(1));
 	}
 
-	if (!Class)
+	if (!IsValid(Class))
 	{
 		Result.bSuccess = false;
 		Result.Errors.Add(FString::Printf(TEXT("Class '%s' not found in Unreal reflection system."), *ClassName));
@@ -549,7 +603,7 @@ FAgentFrameworkActionResult FAgentFrameworkCppActions::ExecuteGetCppReflectionIn
 
 	TSharedRef<FJsonObject> ResponseObj = MakeShared<FJsonObject>();
 	ResponseObj->SetStringField(TEXT("class_name"), Class->GetName());
-	ResponseObj->SetStringField(TEXT("parent_class"), Class->GetSuperClass() ? Class->GetSuperClass()->GetName() : TEXT("None"));
+	ResponseObj->SetStringField(TEXT("parent_class"), IsValid(Class->GetSuperClass()) ? Class->GetSuperClass()->GetName() : TEXT("None"));
 	ResponseObj->SetBoolField(TEXT("is_abstract"), Class->HasAnyClassFlags(CLASS_Abstract));
 
 	bool bBlueprintSpawnable = false;
@@ -563,16 +617,12 @@ FAgentFrameworkActionResult FAgentFrameworkCppActions::ExecuteGetCppReflectionIn
 	{
 		TSharedRef<FJsonObject> MetaObj = MakeShared<FJsonObject>();
 #if WITH_EDITOR
-		UPackage* Package = Class->GetOutermost();
-		if (Package)
+		const TMap<FName, FString>* MetaMap = FMetaData::GetMapForObject(Class);
+		if (MetaMap)
 		{
-			const TMap<FName, FString>* MetaMap = GetMetaMapForObject(Package->GetMetaData(), Class);
-			if (MetaMap)
+			for (const auto& MetaPair : *MetaMap)
 			{
-				for (const auto& MetaPair : *MetaMap)
-				{
-					MetaObj->SetStringField(MetaPair.Key.ToString(), MetaPair.Value);
-				}
+				MetaObj->SetStringField(MetaPair.Key.ToString(), MetaPair.Value);
 			}
 		}
 #endif
@@ -585,7 +635,7 @@ FAgentFrameworkActionResult FAgentFrameworkCppActions::ExecuteGetCppReflectionIn
 		TArray<TSharedPtr<FJsonValue>> InterfaceList;
 		for (const FImplementedInterface& Interface : Class->Interfaces)
 		{
-			if (Interface.Class)
+			if (IsValid(Interface.Class))
 			{
 				InterfaceList.Add(MakeShared<FJsonValueString>(Interface.Class->GetName()));
 			}
@@ -600,35 +650,38 @@ FAgentFrameworkActionResult FAgentFrameworkCppActions::ExecuteGetCppReflectionIn
 		for (TFieldIterator<FProperty> PropIt(Class, EFieldIteratorFlags::ExcludeSuper); PropIt; ++PropIt)
 		{
 			FProperty* Prop = *PropIt;
-			TSharedRef<FJsonObject> PropObj = MakeShared<FJsonObject>();
-			PropObj->SetStringField(TEXT("name"), Prop->GetName());
-			PropObj->SetStringField(TEXT("type"), Prop->GetCPPType());
-
-			// Map Property Flags to Readable Strings
-			TArray<TSharedPtr<FJsonValue>> FlagsList;
-			uint64 Flags = Prop->GetPropertyFlags();
-			if (Flags & CPF_BlueprintVisible) FlagsList.Add(MakeShared<FJsonValueString>(TEXT("CPF_BlueprintVisible")));
-			if (Flags & CPF_Edit)             FlagsList.Add(MakeShared<FJsonValueString>(TEXT("CPF_Edit")));
-			if (Flags & CPF_BlueprintReadOnly)FlagsList.Add(MakeShared<FJsonValueString>(TEXT("CPF_BlueprintReadOnly")));
-			if (Flags & CPF_EditConst)        FlagsList.Add(MakeShared<FJsonValueString>(TEXT("CPF_EditConst")));
-			if (Flags & CPF_Net)              FlagsList.Add(MakeShared<FJsonValueString>(TEXT("CPF_Net")));
-			PropObj->SetArrayField(TEXT("flags"), FlagsList);
-
-			if (bIncludeMetadata)
+			if (Prop)
 			{
-				TSharedRef<FJsonObject> PropMeta = MakeShared<FJsonObject>();
-#if WITH_EDITOR
-				if (const TMap<FName, FString>* MetaMap = Prop->GetMetaDataMap())
+				TSharedRef<FJsonObject> PropObj = MakeShared<FJsonObject>();
+				PropObj->SetStringField(TEXT("name"), Prop->GetName());
+				PropObj->SetStringField(TEXT("type"), Prop->GetCPPType());
+
+				// Map Property Flags to Readable Strings
+				TArray<TSharedPtr<FJsonValue>> FlagsList;
+				uint64 Flags = Prop->GetPropertyFlags();
+				if (Flags & CPF_BlueprintVisible) FlagsList.Add(MakeShared<FJsonValueString>(TEXT("CPF_BlueprintVisible")));
+				if (Flags & CPF_Edit)             FlagsList.Add(MakeShared<FJsonValueString>(TEXT("CPF_Edit")));
+				if (Flags & CPF_BlueprintReadOnly)FlagsList.Add(MakeShared<FJsonValueString>(TEXT("CPF_BlueprintReadOnly")));
+				if (Flags & CPF_EditConst)        FlagsList.Add(MakeShared<FJsonValueString>(TEXT("CPF_EditConst")));
+				if (Flags & CPF_Net)              FlagsList.Add(MakeShared<FJsonValueString>(TEXT("CPF_Net")));
+				PropObj->SetArrayField(TEXT("flags"), FlagsList);
+
+				if (bIncludeMetadata)
 				{
-					for (const auto& MetaPair : *MetaMap)
+					TSharedRef<FJsonObject> PropMeta = MakeShared<FJsonObject>();
+#if WITH_EDITOR
+					if (const TMap<FName, FString>* MetaMap = Prop->GetMetaDataMap())
 					{
-						PropMeta->SetStringField(MetaPair.Key.ToString(), MetaPair.Value);
+						for (const auto& MetaPair : *MetaMap)
+						{
+							PropMeta->SetStringField(MetaPair.Key.ToString(), MetaPair.Value);
+						}
 					}
-				}
 #endif
-				PropObj->SetObjectField(TEXT("metadata"), PropMeta);
+					PropObj->SetObjectField(TEXT("metadata"), PropMeta);
+				}
+				PropList.Add(MakeShared<FJsonValueObject>(PropObj));
 			}
-			PropList.Add(MakeShared<FJsonValueObject>(PropObj));
 		}
 		ResponseObj->SetArrayField(TEXT("properties"), PropList);
 	}
@@ -640,26 +693,25 @@ FAgentFrameworkActionResult FAgentFrameworkCppActions::ExecuteGetCppReflectionIn
 		for (TFieldIterator<UFunction> FuncIt(Class, EFieldIteratorFlags::ExcludeSuper); FuncIt; ++FuncIt)
 		{
 			UFunction* Func = *FuncIt;
-			TSharedRef<FJsonObject> FuncObj = MakeShared<FJsonObject>();
-			FuncObj->SetStringField(TEXT("name"), Func->GetName());
-			FuncObj->SetBoolField(TEXT("is_pure"), (Func->FunctionFlags & FUNC_BlueprintPure) != 0);
-
-			TArray<TSharedPtr<FJsonValue>> FlagsList;
-			uint32 Flags = Func->FunctionFlags;
-			if (Flags & FUNC_BlueprintCallable)FlagsList.Add(MakeShared<FJsonValueString>(TEXT("FUNC_BlueprintCallable")));
-			if (Flags & FUNC_BlueprintPure)    FlagsList.Add(MakeShared<FJsonValueString>(TEXT("FUNC_BlueprintPure")));
-			if (Flags & FUNC_Net)              FlagsList.Add(MakeShared<FJsonValueString>(TEXT("FUNC_Net")));
-			if (Flags & FUNC_Static)           FlagsList.Add(MakeShared<FJsonValueString>(TEXT("FUNC_Static")));
-			FuncObj->SetArrayField(TEXT("flags"), FlagsList);
-
-			if (bIncludeMetadata)
+			if (IsValid(Func))
 			{
-				TSharedRef<FJsonObject> FuncMeta = MakeShared<FJsonObject>();
-#if WITH_EDITOR
-				UPackage* Package = Func->GetOutermost();
-				if (Package)
+				TSharedRef<FJsonObject> FuncObj = MakeShared<FJsonObject>();
+				FuncObj->SetStringField(TEXT("name"), Func->GetName());
+				FuncObj->SetBoolField(TEXT("is_pure"), (Func->FunctionFlags & FUNC_BlueprintPure) != 0);
+
+				TArray<TSharedPtr<FJsonValue>> FlagsList;
+				uint32 Flags = Func->FunctionFlags;
+				if (Flags & FUNC_BlueprintCallable)FlagsList.Add(MakeShared<FJsonValueString>(TEXT("FUNC_BlueprintCallable")));
+				if (Flags & FUNC_BlueprintPure)    FlagsList.Add(MakeShared<FJsonValueString>(TEXT("FUNC_BlueprintPure")));
+				if (Flags & FUNC_Net)              FlagsList.Add(MakeShared<FJsonValueString>(TEXT("FUNC_Net")));
+				if (Flags & FUNC_Static)           FlagsList.Add(MakeShared<FJsonValueString>(TEXT("FUNC_Static")));
+				FuncObj->SetArrayField(TEXT("flags"), FlagsList);
+
+				if (bIncludeMetadata)
 				{
-					const TMap<FName, FString>* MetaMap = GetMetaMapForObject(Package->GetMetaData(), Func);
+					TSharedRef<FJsonObject> FuncMeta = MakeShared<FJsonObject>();
+#if WITH_EDITOR
+					const TMap<FName, FString>* MetaMap = FMetaData::GetMapForObject(Func);
 					if (MetaMap)
 					{
 						for (const auto& MetaPair : *MetaMap)
@@ -667,35 +719,34 @@ FAgentFrameworkActionResult FAgentFrameworkCppActions::ExecuteGetCppReflectionIn
 							FuncMeta->SetStringField(MetaPair.Key.ToString(), MetaPair.Value);
 						}
 					}
-				}
 #endif
-				FuncObj->SetObjectField(TEXT("metadata"), FuncMeta);
-			}
-
-			// Extract Function Parameters
-			TArray<TSharedPtr<FJsonValue>> ParamList;
-			for (TFieldIterator<FProperty> ParamIt(Func); ParamIt; ++ParamIt)
-			{
-				FProperty* Param = *ParamIt;
-				if (!Param->HasAnyPropertyFlags(CPF_Parm))
-				{
-					continue;
+					FuncObj->SetObjectField(TEXT("metadata"), FuncMeta);
 				}
-				TSharedRef<FJsonObject> ParamObj = MakeShared<FJsonObject>();
-				ParamObj->SetStringField(TEXT("name"), Param->GetName());
-				ParamObj->SetStringField(TEXT("type"), Param->GetCPPType());
 
-				TArray<TSharedPtr<FJsonValue>> ParamFlagsList;
-				uint64 PFlags = Param->GetPropertyFlags();
-				if (PFlags & CPF_Parm)      ParamFlagsList.Add(MakeShared<FJsonValueString>(TEXT("CPF_Parm")));
-				if (PFlags & CPF_OutParm)   ParamFlagsList.Add(MakeShared<FJsonValueString>(TEXT("CPF_OutParm")));
-				if (PFlags & CPF_ReturnParm)ParamFlagsList.Add(MakeShared<FJsonValueString>(TEXT("CPF_ReturnParm")));
-				ParamObj->SetArrayField(TEXT("flags"), ParamFlagsList);
+				// Extract Function Parameters
+				TArray<TSharedPtr<FJsonValue>> ParamList;
+				for (TFieldIterator<FProperty> ParamIt(Func); ParamIt; ++ParamIt)
+				{
+					FProperty* Param = *ParamIt;
+					if (Param && Param->HasAnyPropertyFlags(CPF_Parm))
+					{
+						TSharedRef<FJsonObject> ParamObj = MakeShared<FJsonObject>();
+						ParamObj->SetStringField(TEXT("name"), Param->GetName());
+						ParamObj->SetStringField(TEXT("type"), Param->GetCPPType());
 
-				ParamList.Add(MakeShared<FJsonValueObject>(ParamObj));
+						TArray<TSharedPtr<FJsonValue>> ParamFlagsList;
+						uint64 PFlags = Param->GetPropertyFlags();
+						if (PFlags & CPF_Parm)      ParamFlagsList.Add(MakeShared<FJsonValueString>(TEXT("CPF_Parm")));
+						if (PFlags & CPF_OutParm)   ParamFlagsList.Add(MakeShared<FJsonValueString>(TEXT("CPF_OutParm")));
+						if (PFlags & CPF_ReturnParm)ParamFlagsList.Add(MakeShared<FJsonValueString>(TEXT("CPF_ReturnParm")));
+						ParamObj->SetArrayField(TEXT("flags"), ParamFlagsList);
+
+						ParamList.Add(MakeShared<FJsonValueObject>(ParamObj));
+					}
+				}
+				FuncObj->SetArrayField(TEXT("parameters"), ParamList);
+				FuncList.Add(MakeShared<FJsonValueObject>(FuncObj));
 			}
-			FuncObj->SetArrayField(TEXT("parameters"), ParamList);
-			FuncList.Add(MakeShared<FJsonValueObject>(FuncObj));
 		}
 		ResponseObj->SetArrayField(TEXT("functions"), FuncList);
 	}
@@ -708,4 +759,18 @@ FAgentFrameworkActionResult FAgentFrameworkCppActions::ExecuteGetCppReflectionIn
 	Result.bSuccess = true;
 	Result.ResultMessage = ResponseString;
 	return Result;
+}
+
+void FAgentFrameworkCppActions::PlaySuccessSound()
+{
+#if WITH_EDITOR
+	if (IsValid(GEditor))
+	{
+		USoundBase* SuccessSound = LoadObject<USoundBase>(nullptr, TEXT("/Engine/EditorSounds/Notifications/CompileSuccess.CompileSuccess"));
+		if (IsValid(SuccessSound))
+		{
+			GEditor->PlayEditorSound(SuccessSound);
+		}
+	}
+#endif
 }

@@ -3,12 +3,17 @@
 #include "Python/AgentFrameworkPythonActions.h"
 #include "AgentFrameworkCoreModule.h"
 #include "AgentFrameworkSettings.h"
+#include "AgentFrameworkActionUtils.h"
 #include "Misc/Paths.h"
 #include "Misc/FileHelper.h"
 #include "Misc/Guid.h"
-#include "HAL/PlatformFileManager.h"
+#include "Sound/SoundBase.h"
 
-// IPythonScriptPlugin interface â€” conditional include
+#if WITH_EDITOR
+#include "Editor.h"
+#endif
+
+// IPythonScriptPlugin interface — conditional include
 #if WITH_PYTHON
 #include "IPythonScriptPlugin.h"
 #endif
@@ -46,9 +51,8 @@ bool FAgentFrameworkPythonActions::ValidateParams(const TSharedRef<FJsonObject>&
 	}
 	
 	FString Justification;
-	if (!Params->TryGetStringField(TEXT("justification_why_native_tools_or_skills_are_insufficient"), Justification) || Justification.TrimStartAndEnd().IsEmpty())
+	if (!UAgentFrameworkActionUtils::TryGetStringParam(Params, TEXT("justification_why_native_tools_or_skills_are_insufficient"), Justification, OutErrors, true))
 	{
-		OutErrors.Add(TEXT("Missing or empty required field: 'justification_why_native_tools_or_skills_are_insufficient'. You MUST provide a detailed justification explaining why native tools or dedicated skills cannot accomplish this task."));
 		return false;
 	}
 	
@@ -115,9 +119,10 @@ FAgentFrameworkActionResult FAgentFrameworkPythonActions::ExecuteAction(const TS
 
 	// Route (only one tool for now)
 	FString Action;
-	if (!Params->TryGetStringField(TEXT("action"), Action) || Action.IsEmpty())
+	TArray<FString> IgnoreErrors;
+	if (!UAgentFrameworkActionUtils::TryGetStringParam(Params, TEXT("action"), Action, IgnoreErrors, false) || Action.IsEmpty())
 	{
-		Params->TryGetStringField(TEXT("tool_name"), Action);
+		UAgentFrameworkActionUtils::TryGetStringParam(Params, TEXT("tool_name"), Action, IgnoreErrors, false);
 	}
 
 	return ExecutePythonScript(Params, Result);
@@ -141,11 +146,11 @@ FAgentFrameworkActionResult FAgentFrameworkPythonActions::ExecutePythonScript(
 
 	// 2. Get the script content
 	FString Script;
-	if (!Params->TryGetStringField(TEXT("script"), Script) || Script.IsEmpty())
+	TArray<FString> IgnoreErrors;
+	if (!UAgentFrameworkActionUtils::TryGetStringParam(Params, TEXT("script"), Script, IgnoreErrors, false) || Script.IsEmpty())
 	{
-		if (!Params->TryGetStringField(TEXT("script_content"), Script) || Script.IsEmpty())
+		if (!UAgentFrameworkActionUtils::TryGetStringParam(Params, TEXT("script_content"), Script, Result.Errors, true) || Script.IsEmpty())
 		{
-			Result.Errors.Add(TEXT("Missing or empty 'script' or 'script_content' field."));
 			return Result;
 		}
 	}
@@ -164,7 +169,8 @@ FAgentFrameworkActionResult FAgentFrameworkPythonActions::ExecutePythonScript(
 
 	// 4. Get timeout
 	int32 TimeoutSeconds = 30;
-	Params->TryGetNumberField(TEXT("timeout_seconds"), TimeoutSeconds);
+	TArray<FString> TimeoutErrors;
+	UAgentFrameworkActionUtils::TryGetIntParam(Params, TEXT("timeout_seconds"), TimeoutSeconds, TimeoutErrors, false);
 	TimeoutSeconds = FMath::Clamp(TimeoutSeconds, 5, 120);
 
 	// 5. Prepare temp file paths
@@ -222,14 +228,15 @@ FAgentFrameworkActionResult FAgentFrameworkPythonActions::ExecutePythonScript(
 
 	// 8. Execute via IPythonScriptPlugin
 	FString Justification;
-	Params->TryGetStringField(TEXT("justification_why_native_tools_or_skills_are_insufficient"), Justification);
+	TArray<FString> JustificationErrors;
+	UAgentFrameworkActionUtils::TryGetStringParam(Params, TEXT("justification_why_native_tools_or_skills_are_insufficient"), Justification, JustificationErrors, false);
 	UE_LOG(LogAgentFramework, Log, TEXT("PythonActions: Executing script %s (timeout: %ds). Justification: %s"), *ScriptPath, TimeoutSeconds, *Justification);
 
 	double StartTime = FPlatformTime::Seconds();
 
 #if WITH_PYTHON
 	IPythonScriptPlugin* PythonPlugin = IPythonScriptPlugin::Get();
-	if (PythonPlugin)
+	if (PythonPlugin != nullptr)
 	{
 		// ExecPythonCommand runs synchronously on the game thread
 		FString ExecCommand = FString::Printf(TEXT("exec(open(r'%s', encoding='utf-8').read())"), *ScriptPath);
@@ -259,13 +266,13 @@ FAgentFrameworkActionResult FAgentFrameworkPythonActions::ExecutePythonScript(
 		if (CapturedOutput.Len() > MaxOutputChars)
 		{
 			CapturedOutput = CapturedOutput.Left(MaxOutputChars)
-				+ FString::Printf(TEXT("\n\n... [OUTPUT TRUNCATED â€” showing first %d of %d characters]"),
+				+ FString::Printf(TEXT("\n\n... [OUTPUT TRUNCATED — showing first %d of %d characters]"),
 					MaxOutputChars, CapturedOutput.Len());
 		}
 	}
 	else
 	{
-		CapturedOutput = TEXT("(no output captured â€” the script may have crashed before the output redirect initialized)");
+		CapturedOutput = TEXT("(no output captured — the script may have crashed before the output redirect initialized)");
 	}
 
 	// 10. Check for errors in output
@@ -283,6 +290,19 @@ FAgentFrameworkActionResult FAgentFrameworkPythonActions::ExecutePythonScript(
 	if (bHasErrors)
 	{
 		Result.Warnings.Add(TEXT("Script produced error output. Check the result for details."));
+	}
+	else
+	{
+#if WITH_EDITOR
+		if (GEditor)
+		{
+			USoundBase* SuccessSound = LoadObject<USoundBase>(nullptr, TEXT("/Engine/EditorSounds/Notifications/CompileSuccess.CompileSuccess"));
+			if (IsValid(SuccessSound))
+			{
+				GEditor->PlayEditorSound(SuccessSound);
+			}
+		}
+#endif
 	}
 
 	// 12. Cleanup temp files
@@ -316,7 +336,8 @@ FString FAgentFrameworkPythonActions::IndentScript(const FString& Script)
 bool FAgentFrameworkPythonActions::IsPythonPluginAvailable() const
 {
 #if WITH_PYTHON
-	return IPythonScriptPlugin::Get() != nullptr;
+	IPythonScriptPlugin* PythonPlugin = IPythonScriptPlugin::Get();
+	return PythonPlugin != nullptr;
 #else
 	return false;
 #endif

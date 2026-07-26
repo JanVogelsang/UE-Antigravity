@@ -49,6 +49,8 @@ public:
 	virtual bool ValidateParams(const TSharedRef<FJsonObject>& Params, TArray<FString>& OutErrors) const override;
 
 private:
+	void PlaySuccessSound();
+
 	/**
 	 * Register gameplay tags in DefaultGameplayTags.ini via IGameplayTagsEditorModule.
 	 * Tags become immediately available without editor restart.

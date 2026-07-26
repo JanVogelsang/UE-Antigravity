@@ -2,7 +2,7 @@
 
 #include "Sequencer/AgentFrameworkSequencerActions.h"
 #include "AgentFrameworkCoreModule.h"
-#include "AgentFrameworkSettings.h"
+#include "AgentFrameworkActionUtils.h"
 #include "LevelSequence.h"
 #include "LevelSequenceActor.h"
 #include "MovieScene.h"
@@ -11,11 +11,9 @@
 #include "MovieSceneSection.h"
 #include "MovieSceneTrack.h"
 #include "Tracks/MovieScene3DTransformTrack.h"
-#include "Tracks/MovieSceneFloatTrack.h"
 #include "Tracks/MovieSceneCameraCutTrack.h"
 #include "Tracks/MovieSceneAudioTrack.h"
 #include "Sections/MovieScene3DTransformSection.h"
-#include "Sections/MovieSceneFloatSection.h"
 #include "Channels/MovieSceneChannelProxy.h"
 #include "Channels/MovieSceneFloatChannel.h"
 #include "AssetToolsModule.h"
@@ -24,6 +22,14 @@
 #include "Engine/World.h"
 #include "EngineUtils.h"
 #include "Misc/FrameRate.h"
+#include "Misc/PackageName.h"
+#include "MoviePipelineQueue.h"
+#include "MoviePipelinePrimaryConfig.h"
+#include "MoviePipelineOutputSetting.h"
+#include "UObject/Package.h"
+#include "UObject/SavePackage.h"
+#include "AssetRegistry/AssetRegistryModule.h"
+#include "Sound/SoundBase.h"
 
 #define LOCTEXT_NAMESPACE "AgentFrameworkSequencerActions"
 
@@ -33,10 +39,6 @@
 
 FAgentFrameworkSequencerActions::FAgentFrameworkSequencerActions() {}
 FAgentFrameworkSequencerActions::~FAgentFrameworkSequencerActions() {}
-
-// ============================================================================
-// IAgentFrameworkActionExecutor Interface
-// ============================================================================
 
 FName FAgentFrameworkSequencerActions::GetActionName() const { return FName(TEXT("Sequencer")); }
 
@@ -52,6 +54,50 @@ TArray<FString> FAgentFrameworkSequencerActions::GetSupportedToolNames() const
 
 bool FAgentFrameworkSequencerActions::ValidateParams(const TSharedRef<FJsonObject>& Params, TArray<FString>& OutErrors) const
 {
+	FString ToolName;
+	UAgentFrameworkActionUtils::TryGetStringParam(Params, TEXT("_tool_name"), ToolName, OutErrors, false);
+	if (ToolName.IsEmpty())
+	{
+		UAgentFrameworkActionUtils::TryGetStringParam(Params, TEXT("action"), ToolName, OutErrors, false);
+	}
+	if (ToolName.IsEmpty())
+	{
+		UAgentFrameworkActionUtils::TryGetStringParam(Params, TEXT("tool_name"), ToolName, OutErrors, false);
+	}
+
+	if (ToolName == TEXT("create_level_sequence"))
+	{
+		FString AssetPath;
+		return UAgentFrameworkActionUtils::TryGetStringParam(Params, TEXT("asset_path"), AssetPath, OutErrors, true);
+	}
+	else if (ToolName == TEXT("add_sequencer_track"))
+	{
+		FString AssetPath, TrackType;
+		bool bValid = true;
+		bValid &= UAgentFrameworkActionUtils::TryGetStringParam(Params, TEXT("asset_path"), AssetPath, OutErrors, true);
+		bValid &= UAgentFrameworkActionUtils::TryGetStringParam(Params, TEXT("track_type"), TrackType, OutErrors, true);
+		return bValid;
+	}
+	else if (ToolName == TEXT("add_sequencer_keyframe"))
+	{
+		FString AssetPath;
+		float TimeSeconds = 0.0f;
+		bool bValid = true;
+		bValid &= UAgentFrameworkActionUtils::TryGetStringParam(Params, TEXT("asset_path"), AssetPath, OutErrors, true);
+		bValid &= UAgentFrameworkActionUtils::TryGetFloatParam(Params, TEXT("time"), TimeSeconds, OutErrors, true);
+		return bValid;
+	}
+	else if (ToolName == TEXT("configure_movie_render_job"))
+	{
+		FString QueuePath, MapPath, SequencePath, OutputDir;
+		bool bValid = true;
+		bValid &= UAgentFrameworkActionUtils::TryGetStringParam(Params, TEXT("queue_path"), QueuePath, OutErrors, true);
+		bValid &= UAgentFrameworkActionUtils::TryGetStringParam(Params, TEXT("map_path"), MapPath, OutErrors, true);
+		bValid &= UAgentFrameworkActionUtils::TryGetStringParam(Params, TEXT("sequence_path"), SequencePath, OutErrors, true);
+		bValid &= UAgentFrameworkActionUtils::TryGetStringParam(Params, TEXT("output_dir"), OutputDir, OutErrors, true);
+		return bValid;
+	}
+
 	return true;
 }
 
@@ -61,19 +107,42 @@ FAgentFrameworkActionResult FAgentFrameworkSequencerActions::ExecuteAction(const
 	Result.bSuccess = false;
 
 	FString Action;
-	if (!Params->TryGetStringField(TEXT("action"), Action) || Action.IsEmpty())
-		Params->TryGetStringField(TEXT("tool_name"), Action);
+	UAgentFrameworkActionUtils::TryGetStringParam(Params, TEXT("_tool_name"), Action, Result.Errors, false);
+	if (Action.IsEmpty())
+	{
+		UAgentFrameworkActionUtils::TryGetStringParam(Params, TEXT("action"), Action, Result.Errors, false);
+	}
+	if (Action.IsEmpty())
+	{
+		UAgentFrameworkActionUtils::TryGetStringParam(Params, TEXT("tool_name"), Action, Result.Errors, false);
+	}
 
 	if (Action == TEXT("create_level_sequence"))
-		return ExecuteCreateLevelSequence(Params, Result);
+	{
+		Result = ExecuteCreateLevelSequence(Params, Result);
+	}
 	else if (Action == TEXT("add_sequencer_track"))
-		return ExecuteAddSequencerTrack(Params, Result);
+	{
+		Result = ExecuteAddSequencerTrack(Params, Result);
+	}
 	else if (Action == TEXT("add_sequencer_keyframe"))
-		return ExecuteAddSequencerKeyframe(Params, Result);
+	{
+		Result = ExecuteAddSequencerKeyframe(Params, Result);
+	}
 	else if (Action == TEXT("configure_movie_render_job"))
-		return ExecuteConfigureMovieRenderJob(Params, Result);
+	{
+		Result = ExecuteConfigureMovieRenderJob(Params, Result);
+	}
+	else
+	{
+		Result.Errors.Add(FString::Printf(TEXT("Unknown Sequencer action: '%s'."), *Action));
+	}
 
-	Result.Errors.Add(TEXT("Unknown Sequencer action."));
+	if (Result.bSuccess)
+	{
+		PlaySuccessSound();
+	}
+
 	return Result;
 }
 
@@ -85,9 +154,8 @@ FAgentFrameworkActionResult FAgentFrameworkSequencerActions::ExecuteCreateLevelS
 	const TSharedRef<FJsonObject>& Params, FAgentFrameworkActionResult& Result)
 {
 	FString AssetPath;
-	if (!Params->TryGetStringField(TEXT("asset_path"), AssetPath))
+	if (!UAgentFrameworkActionUtils::TryGetStringParam(Params, TEXT("asset_path"), AssetPath, Result.Errors, true))
 	{
-		Result.Errors.Add(TEXT("Missing required field: 'asset_path'"));
 		return Result;
 	}
 
@@ -97,35 +165,43 @@ FAgentFrameworkActionResult FAgentFrameworkSequencerActions::ExecuteCreateLevelS
 	IAssetTools& AssetTools = FModuleManager::LoadModuleChecked<FAssetToolsModule>("AssetTools").Get();
 	UObject* NewAsset = AssetTools.CreateAsset(AssetName, PackagePath, ULevelSequence::StaticClass(), nullptr);
 
-	if (!NewAsset)
+	if (!IsValid(NewAsset))
 	{
 		Result.Errors.Add(FString::Printf(TEXT("Failed to create Level Sequence at '%s'."), *AssetPath));
 		return Result;
 	}
 
 	ULevelSequence* Sequence = Cast<ULevelSequence>(NewAsset);
+	if (!IsValid(Sequence))
+	{
+		Result.Errors.Add(FString::Printf(TEXT("Created asset at '%s' is not a valid ULevelSequence."), *AssetPath));
+		return Result;
+	}
 
-	// Set duration if specified
 	float DurationSeconds = 5.0f;
-	Params->TryGetNumberField(TEXT("duration_seconds"), DurationSeconds);
+	UAgentFrameworkActionUtils::TryGetFloatParam(Params, TEXT("duration_seconds"), DurationSeconds, Result.Errors, false);
 
 	UMovieScene* MovieScene = Sequence->GetMovieScene();
-	if (MovieScene)
+	if (IsValid(MovieScene))
 	{
 		FFrameRate TickResolution = MovieScene->GetTickResolution();
 		FFrameNumber EndFrame = (DurationSeconds * TickResolution).FloorToFrame();
 		MovieScene->SetPlaybackRange(FFrameNumber(0), EndFrame.Value);
 	}
 
-	// Optionally spawn a LevelSequenceActor in the world
 	bool bSpawnInWorld = false;
-	Params->TryGetBoolField(TEXT("spawn_in_world"), bSpawnInWorld);
+	UAgentFrameworkActionUtils::TryGetBoolParam(Params, TEXT("spawn_in_world"), bSpawnInWorld, Result.Errors, false);
 
 	FString SpawnInfo;
 	if (bSpawnInWorld)
 	{
-		UWorld* World = GEditor ? GEditor->GetEditorWorldContext().World() : nullptr;
-		if (World)
+		UWorld* World = nullptr;
+		if (IsValid(GEditor))
+		{
+			World = GEditor->GetEditorWorldContext().World();
+		}
+
+		if (IsValid(World))
 		{
 			FActorSpawnParameters SpawnParams;
 			SpawnParams.SpawnCollisionHandlingOverride = ESpawnActorCollisionHandlingMethod::AlwaysSpawn;
@@ -133,7 +209,7 @@ FAgentFrameworkActionResult FAgentFrameworkSequencerActions::ExecuteCreateLevelS
 			ALevelSequenceActor* SeqActor = World->SpawnActor<ALevelSequenceActor>(
 				ALevelSequenceActor::StaticClass(), FTransform::Identity, SpawnParams);
 
-			if (SeqActor)
+			if (IsValid(SeqActor))
 			{
 				SeqActor->SetSequence(Sequence);
 				SeqActor->SetActorLabel(AssetName);
@@ -143,46 +219,37 @@ FAgentFrameworkActionResult FAgentFrameworkSequencerActions::ExecuteCreateLevelS
 	}
 
 	Sequence->MarkPackageDirty();
-
 	Result.bSuccess = true;
 	Result.ModifiedAssets.Add(AssetPath);
 	Result.ResultMessage = FString::Printf(
-		TEXT("Created Level Sequence '%s' (%.1fs duration).%s "
-			 "Use add_sequencer_track to add actor bindings, camera cuts, or audio tracks."),
-		*AssetPath, DurationSeconds, *SpawnInfo);
+		TEXT("Created Level Sequence '%s' (%.1fs duration).%s"), *AssetPath, DurationSeconds, *SpawnInfo);
 	return Result;
 }
-
-// ============================================================================
-// add_sequencer_track
-// ============================================================================
 
 FAgentFrameworkActionResult FAgentFrameworkSequencerActions::ExecuteAddSequencerTrack(
 	const TSharedRef<FJsonObject>& Params, FAgentFrameworkActionResult& Result)
 {
 	FString AssetPath;
-	if (!Params->TryGetStringField(TEXT("asset_path"), AssetPath))
+	if (!UAgentFrameworkActionUtils::TryGetStringParam(Params, TEXT("asset_path"), AssetPath, Result.Errors, true))
 	{
-		Result.Errors.Add(TEXT("Missing required field: 'asset_path'"));
 		return Result;
 	}
 
 	FString TrackType;
-	if (!Params->TryGetStringField(TEXT("track_type"), TrackType))
+	if (!UAgentFrameworkActionUtils::TryGetStringParam(Params, TEXT("track_type"), TrackType, Result.Errors, true))
 	{
-		Result.Errors.Add(TEXT("Missing required field: 'track_type' (Transform, Float, CameraCut, Audio)"));
 		return Result;
 	}
 
 	ULevelSequence* Sequence = LoadObject<ULevelSequence>(nullptr, *AssetPath);
-	if (!Sequence)
+	if (!IsValid(Sequence))
 	{
 		Result.Errors.Add(FString::Printf(TEXT("Level Sequence not found at '%s'."), *AssetPath));
 		return Result;
 	}
 
 	UMovieScene* MovieScene = Sequence->GetMovieScene();
-	if (!MovieScene)
+	if (!IsValid(MovieScene))
 	{
 		Result.Errors.Add(TEXT("Level Sequence has no MovieScene."));
 		return Result;
@@ -193,24 +260,27 @@ FAgentFrameworkActionResult FAgentFrameworkSequencerActions::ExecuteAddSequencer
 
 	if (TrackType == TEXT("transform") || TrackType == TEXT("3dtransform"))
 	{
-		// Need an actor binding
 		FString ActorLabel;
-		Params->TryGetStringField(TEXT("actor_label"), ActorLabel);
+		UAgentFrameworkActionUtils::TryGetStringParam(Params, TEXT("actor_label"), ActorLabel, Result.Errors, false);
 
 		if (ActorLabel.IsEmpty())
 		{
-			Result.Errors.Add(TEXT("Transform track requires 'actor_label' â€” the label of the actor to bind."));
+			Result.Errors.Add(TEXT("Transform track requires 'actor_label' — the label of the actor to bind."));
 			return Result;
 		}
 
-		// Find the actor in the world
-		UWorld* World = GEditor ? GEditor->GetEditorWorldContext().World() : nullptr;
+		UWorld* World = nullptr;
+		if (IsValid(GEditor))
+		{
+			World = GEditor->GetEditorWorldContext().World();
+		}
+
 		AActor* TargetActor = nullptr;
-		if (World)
+		if (IsValid(World))
 		{
 			for (TActorIterator<AActor> It(World); It; ++It)
 			{
-				if (It->GetActorLabel() == ActorLabel)
+				if (IsValid(*It) && It->GetActorLabel() == ActorLabel)
 				{
 					TargetActor = *It;
 					break;
@@ -218,23 +288,21 @@ FAgentFrameworkActionResult FAgentFrameworkSequencerActions::ExecuteAddSequencer
 			}
 		}
 
-		if (!TargetActor)
+		if (!IsValid(TargetActor))
 		{
 			Result.Errors.Add(FString::Printf(TEXT("Actor with label '%s' not found in the current level."), *ActorLabel));
 			return Result;
 		}
 
-		// Create or find the binding
 		FGuid BindingGuid = MovieScene->AddPossessable(ActorLabel, TargetActor->GetClass());
 		Sequence->BindPossessableObject(BindingGuid, *TargetActor, TargetActor->GetWorld());
 
-		// Add 3D Transform track
 		UMovieScene3DTransformTrack* TransformTrack = MovieScene->AddTrack<UMovieScene3DTransformTrack>(BindingGuid);
-		if (TransformTrack)
+		if (IsValid(TransformTrack))
 		{
 			UMovieScene3DTransformSection* Section = Cast<UMovieScene3DTransformSection>(
 				TransformTrack->CreateNewSection());
-			if (Section)
+			if (IsValid(Section))
 			{
 				Section->SetRange(MovieScene->GetPlaybackRange());
 				TransformTrack->AddSection(*Section);
@@ -242,10 +310,10 @@ FAgentFrameworkActionResult FAgentFrameworkSequencerActions::ExecuteAddSequencer
 			Report = FString::Printf(TEXT("Added 3D Transform track bound to actor '%s'."), *ActorLabel);
 		}
 	}
-	else if (TrackType == TEXT("cameraccut") || TrackType == TEXT("camera_cut") || TrackType == TEXT("camera"))
+	else if (TrackType == TEXT("cameraccut") || TrackType == TEXT("cameracut") || TrackType == TEXT("camera_cut") || TrackType == TEXT("camera"))
 	{
 		UMovieSceneCameraCutTrack* CameraTrack = MovieScene->AddTrack<UMovieSceneCameraCutTrack>();
-		if (CameraTrack)
+		if (IsValid(CameraTrack))
 		{
 			Report = TEXT("Added Camera Cut master track.");
 		}
@@ -257,62 +325,55 @@ FAgentFrameworkActionResult FAgentFrameworkSequencerActions::ExecuteAddSequencer
 	else if (TrackType == TEXT("audio"))
 	{
 		UMovieSceneAudioTrack* AudioTrack = MovieScene->AddTrack<UMovieSceneAudioTrack>();
-		if (AudioTrack)
+		if (IsValid(AudioTrack))
 		{
 			Report = TEXT("Added Audio master track.");
 		}
 	}
 	else
 	{
-		Result.Errors.Add(FString::Printf(TEXT("Unknown track type '%s'. Supported: Transform, CameraCut, Audio."), *TrackType));
+		Result.Errors.Add(FString::Printf(TEXT("Unknown track type '%s'."), *TrackType));
 		return Result;
 	}
 
 	Sequence->MarkPackageDirty();
-
 	Result.bSuccess = true;
 	Result.ModifiedAssets.Add(AssetPath);
 	Result.ResultMessage = Report;
 	return Result;
 }
 
-// ============================================================================
-// add_sequencer_keyframe
-// ============================================================================
-
 FAgentFrameworkActionResult FAgentFrameworkSequencerActions::ExecuteAddSequencerKeyframe(
 	const TSharedRef<FJsonObject>& Params, FAgentFrameworkActionResult& Result)
 {
 	FString AssetPath;
-	if (!Params->TryGetStringField(TEXT("asset_path"), AssetPath))
+	if (!UAgentFrameworkActionUtils::TryGetStringParam(Params, TEXT("asset_path"), AssetPath, Result.Errors, true))
 	{
-		Result.Errors.Add(TEXT("Missing required field: 'asset_path'"));
 		return Result;
 	}
 
 	float TimeSeconds = 0.0f;
-	if (!Params->TryGetNumberField(TEXT("time"), TimeSeconds))
+	if (!UAgentFrameworkActionUtils::TryGetFloatParam(Params, TEXT("time"), TimeSeconds, Result.Errors, true))
 	{
-		Result.Errors.Add(TEXT("Missing required field: 'time' (in seconds)"));
 		return Result;
 	}
 
 	ULevelSequence* Sequence = LoadObject<ULevelSequence>(nullptr, *AssetPath);
-	if (!Sequence)
+	if (!IsValid(Sequence))
 	{
 		Result.Errors.Add(FString::Printf(TEXT("Level Sequence not found at '%s'."), *AssetPath));
 		return Result;
 	}
 
 	UMovieScene* MovieScene = Sequence->GetMovieScene();
-	if (!MovieScene)
+	if (!IsValid(MovieScene))
 	{
 		Result.Errors.Add(TEXT("Level Sequence has no MovieScene."));
 		return Result;
 	}
 
 	FString TrackType;
-	Params->TryGetStringField(TEXT("track_type"), TrackType);
+	UAgentFrameworkActionUtils::TryGetStringParam(Params, TEXT("track_type"), TrackType, Result.Errors, false);
 	TrackType = TrackType.ToLower();
 
 	FFrameRate TickResolution = MovieScene->GetTickResolution();
@@ -323,37 +384,39 @@ FAgentFrameworkActionResult FAgentFrameworkSequencerActions::ExecuteAddSequencer
 
 	if (TrackType == TEXT("transform") || TrackType == TEXT("3dtransform"))
 	{
-		// Find the transform track by actor label
 		FString ActorLabel;
-		Params->TryGetStringField(TEXT("actor_label"), ActorLabel);
+		UAgentFrameworkActionUtils::TryGetStringParam(Params, TEXT("actor_label"), ActorLabel, Result.Errors, false);
 
-		// Parse transform values
 		FVector Location(0, 0, 0);
 		FRotator Rotation(0, 0, 0);
 		FVector Scale(1, 1, 1);
 
-		const TSharedPtr<FJsonObject>* LocObj;
-		if (Params->TryGetObjectField(TEXT("location"), LocObj))
+		const TSharedPtr<FJsonObject>* LocObj = nullptr;
+		if (UAgentFrameworkActionUtils::TryGetObjectParam(Params, TEXT("location"), LocObj, Result.Errors, false) && LocObj && LocObj->IsValid())
 		{
-			(*LocObj)->TryGetNumberField(TEXT("x"), Location.X);
-			(*LocObj)->TryGetNumberField(TEXT("y"), Location.Y);
-			(*LocObj)->TryGetNumberField(TEXT("z"), Location.Z);
+			UAgentFrameworkActionUtils::TryGetDoubleParam(*LocObj, TEXT("x"), Location.X, Result.Errors, false);
+			UAgentFrameworkActionUtils::TryGetDoubleParam(*LocObj, TEXT("y"), Location.Y, Result.Errors, false);
+			UAgentFrameworkActionUtils::TryGetDoubleParam(*LocObj, TEXT("z"), Location.Z, Result.Errors, false);
 		}
 
-		const TSharedPtr<FJsonObject>* RotObj;
-		if (Params->TryGetObjectField(TEXT("rotation"), RotObj))
+		const TSharedPtr<FJsonObject>* RotObj = nullptr;
+		if (UAgentFrameworkActionUtils::TryGetObjectParam(Params, TEXT("rotation"), RotObj, Result.Errors, false) && RotObj && RotObj->IsValid())
 		{
-			(*RotObj)->TryGetNumberField(TEXT("pitch"), Rotation.Pitch);
-			(*RotObj)->TryGetNumberField(TEXT("yaw"), Rotation.Yaw);
-			(*RotObj)->TryGetNumberField(TEXT("roll"), Rotation.Roll);
+			double Pitch = Rotation.Pitch, Yaw = Rotation.Yaw, Roll = Rotation.Roll;
+			UAgentFrameworkActionUtils::TryGetDoubleParam(*RotObj, TEXT("pitch"), Pitch, Result.Errors, false);
+			UAgentFrameworkActionUtils::TryGetDoubleParam(*RotObj, TEXT("yaw"), Yaw, Result.Errors, false);
+			UAgentFrameworkActionUtils::TryGetDoubleParam(*RotObj, TEXT("roll"), Roll, Result.Errors, false);
+			Rotation.Pitch = Pitch;
+			Rotation.Yaw = Yaw;
+			Rotation.Roll = Roll;
 		}
 
-		const TSharedPtr<FJsonObject>* ScaleObj;
-		if (Params->TryGetObjectField(TEXT("scale"), ScaleObj))
+		const TSharedPtr<FJsonObject>* ScaleObj = nullptr;
+		if (UAgentFrameworkActionUtils::TryGetObjectParam(Params, TEXT("scale"), ScaleObj, Result.Errors, false) && ScaleObj && ScaleObj->IsValid())
 		{
-			(*ScaleObj)->TryGetNumberField(TEXT("x"), Scale.X);
-			(*ScaleObj)->TryGetNumberField(TEXT("y"), Scale.Y);
-			(*ScaleObj)->TryGetNumberField(TEXT("z"), Scale.Z);
+			UAgentFrameworkActionUtils::TryGetDoubleParam(*ScaleObj, TEXT("x"), Scale.X, Result.Errors, false);
+			UAgentFrameworkActionUtils::TryGetDoubleParam(*ScaleObj, TEXT("y"), Scale.Y, Result.Errors, false);
+			UAgentFrameworkActionUtils::TryGetDoubleParam(*ScaleObj, TEXT("z"), Scale.Z, Result.Errors, false);
 		}
 
 		const TArray<FMovieSceneBinding>& Bindings = static_cast<const UMovieScene*>(MovieScene)->GetBindings();
@@ -370,27 +433,20 @@ FAgentFrameworkActionResult FAgentFrameworkSequencerActions::ExecuteAddSequencer
 				{
 					BindingName = Spawnable->GetName();
 				}
-
-				if (BindingName != ActorLabel)
-				{
-					continue;
-				}
+				if (BindingName != ActorLabel) continue;
 			}
 
 			for (UMovieSceneTrack* Track : Binding.GetTracks())
 			{
+				if (!IsValid(Track)) continue;
 				UMovieScene3DTransformTrack* TransformTrack = Cast<UMovieScene3DTransformTrack>(Track);
-				if (!TransformTrack) continue;
-
+				if (!IsValid(TransformTrack)) continue;
 				for (UMovieSceneSection* Section : TransformTrack->GetAllSections())
 				{
+					if (!IsValid(Section)) continue;
 					UMovieScene3DTransformSection* TransformSection = Cast<UMovieScene3DTransformSection>(Section);
-					if (!TransformSection) continue;
-
-					// Get the channel proxy to access individual channels
+					if (!IsValid(TransformSection)) continue;
 					TArrayView<FMovieSceneFloatChannel*> FloatChannels = TransformSection->GetChannelProxy().GetChannels<FMovieSceneFloatChannel>();
-
-					// Channels: 0=TX, 1=TY, 2=TZ, 3=RX, 4=RY, 5=RZ, 6=SX, 7=SY, 8=SZ
 					if (FloatChannels.Num() >= 9)
 					{
 						FloatChannels[0]->AddLinearKey(KeyFrame, Location.X);
@@ -403,8 +459,7 @@ FAgentFrameworkActionResult FAgentFrameworkSequencerActions::ExecuteAddSequencer
 						FloatChannels[7]->AddLinearKey(KeyFrame, Scale.Y);
 						FloatChannels[8]->AddLinearKey(KeyFrame, Scale.Z);
 						KeysAdded = 9;
-						Report = FString::Printf(TEXT("Added transform keyframe at %.2fs: Loc(%s) Rot(%s) Scale(%s)"),
-							TimeSeconds, *Location.ToString(), *Rotation.ToString(), *Scale.ToString());
+						Report = FString::Printf(TEXT("Added transform keyframe at %.2fs."), TimeSeconds);
 					}
 				}
 			}
@@ -413,33 +468,30 @@ FAgentFrameworkActionResult FAgentFrameworkSequencerActions::ExecuteAddSequencer
 
 	if (KeysAdded == 0 && Report.IsEmpty())
 	{
-		Result.Errors.Add(TEXT("No keyframes were added. Check that the track exists and the actor_label matches."));
+		Result.Errors.Add(TEXT("No keyframes were added. Check track existence and actor_label."));
 		return Result;
 	}
 
 	Sequence->MarkPackageDirty();
-
 	Result.bSuccess = true;
 	Result.ModifiedAssets.Add(AssetPath);
 	Result.ResultMessage = Report;
 	return Result;
 }
 
-#include "MoviePipelineQueue.h"
-#include "MoviePipelinePrimaryConfig.h"
-#include "MoviePipelineOutputSetting.h"
-#include "UObject/SavePackage.h"
-#include "AssetRegistry/AssetRegistryModule.h"
-
 FAgentFrameworkActionResult FAgentFrameworkSequencerActions::ExecuteConfigureMovieRenderJob(const TSharedRef<FJsonObject>& Params, FAgentFrameworkActionResult& Result)
 {
-	FString QueuePath = Params->GetStringField(TEXT("queue_path"));
-	FString MapPath = Params->GetStringField(TEXT("map_path"));
-	FString SequencePath = Params->GetStringField(TEXT("sequence_path"));
-	FString OutputDir = Params->GetStringField(TEXT("output_dir"));
+	FString QueuePath, MapPath, SequencePath, OutputDir;
+	if (!UAgentFrameworkActionUtils::TryGetStringParam(Params, TEXT("queue_path"), QueuePath, Result.Errors, true) ||
+		!UAgentFrameworkActionUtils::TryGetStringParam(Params, TEXT("map_path"), MapPath, Result.Errors, true) ||
+		!UAgentFrameworkActionUtils::TryGetStringParam(Params, TEXT("sequence_path"), SequencePath, Result.Errors, true) ||
+		!UAgentFrameworkActionUtils::TryGetStringParam(Params, TEXT("output_dir"), OutputDir, Result.Errors, true))
+	{
+		return Result;
+	}
 
 	UMoviePipelineQueue* Queue = LoadObject<UMoviePipelineQueue>(nullptr, *QueuePath);
-	if (!Queue)
+	if (!IsValid(Queue))
 	{
 		FString PackagePath = FPackageName::GetLongPackagePath(QueuePath);
 		FString AssetName = FPackageName::GetShortName(QueuePath);
@@ -447,7 +499,7 @@ FAgentFrameworkActionResult FAgentFrameworkSequencerActions::ExecuteConfigureMov
 		Queue = Cast<UMoviePipelineQueue>(AssetTools.CreateAsset(AssetName, PackagePath, UMoviePipelineQueue::StaticClass(), nullptr));
 	}
 
-	if (!Queue)
+	if (!IsValid(Queue))
 	{
 		Result.Errors.Add(FString::Printf(TEXT("Failed to load or create MoviePipelineQueue at '%s'."), *QueuePath));
 		return Result;
@@ -455,18 +507,18 @@ FAgentFrameworkActionResult FAgentFrameworkSequencerActions::ExecuteConfigureMov
 
 	Queue->Modify();
 	UMoviePipelineExecutorJob* NewJob = Queue->AllocateNewJob(UMoviePipelineExecutorJob::StaticClass());
-	if (NewJob)
+	if (IsValid(NewJob))
 	{
 		NewJob->Map = FSoftObjectPath(MapPath);
 		NewJob->Sequence = FSoftObjectPath(SequencePath);
 		NewJob->JobName = TEXT("AgentFrameworkRenderJob");
 
 		UMoviePipelinePrimaryConfig* MasterConfig = NewJob->GetConfiguration();
-		if (MasterConfig)
+		if (IsValid(MasterConfig))
 		{
 			UMoviePipelineOutputSetting* OutputSetting = Cast<UMoviePipelineOutputSetting>(
 				MasterConfig->FindOrAddSettingByClass(UMoviePipelineOutputSetting::StaticClass()));
-			if (OutputSetting)
+			if (IsValid(OutputSetting))
 			{
 				OutputSetting->OutputDirectory.Path = OutputDir;
 				OutputSetting->FileNameFormat = TEXT("{sequence_name}_{frame_number}");
@@ -475,13 +527,16 @@ FAgentFrameworkActionResult FAgentFrameworkSequencerActions::ExecuteConfigureMov
 	}
 
 	UPackage* Package = Queue->GetOutermost();
-	Package->MarkPackageDirty();
-	FString PackageFilename;
-	if (FPackageName::TryConvertLongPackageNameToFilename(Package->GetName(), PackageFilename, FPackageName::GetAssetPackageExtension()))
+	if (IsValid(Package))
 	{
-		FSavePackageArgs SaveArgs;
-		SaveArgs.TopLevelFlags = RF_Standalone;
-		UPackage::SavePackage(Package, Queue, *PackageFilename, SaveArgs);
+		Package->MarkPackageDirty();
+		FString PackageFilename;
+		if (FPackageName::TryConvertLongPackageNameToFilename(Package->GetName(), PackageFilename, FPackageName::GetAssetPackageExtension()))
+		{
+			FSavePackageArgs SaveArgs;
+			SaveArgs.TopLevelFlags = RF_Standalone;
+			UPackage::SavePackage(Package, Queue, *PackageFilename, SaveArgs);
+		}
 	}
 	FAssetRegistryModule::AssetCreated(Queue);
 
@@ -489,6 +544,20 @@ FAgentFrameworkActionResult FAgentFrameworkSequencerActions::ExecuteConfigureMov
 	Result.ResultMessage = FString::Printf(TEXT("Configured Movie Render Job in queue '%s'."), *QueuePath);
 	Result.ModifiedAssets.Add(QueuePath);
 	return Result;
+}
+
+void FAgentFrameworkSequencerActions::PlaySuccessSound()
+{
+#if WITH_EDITOR
+	if (IsValid(GEditor))
+	{
+		USoundBase* SuccessSound = LoadObject<USoundBase>(nullptr, TEXT("/Engine/EditorSounds/Notifications/CompileSuccess.CompileSuccess"));
+		if (IsValid(SuccessSound))
+		{
+			GEditor->PlayEditorSound(SuccessSound);
+		}
+	}
+#endif
 }
 
 #undef LOCTEXT_NAMESPACE

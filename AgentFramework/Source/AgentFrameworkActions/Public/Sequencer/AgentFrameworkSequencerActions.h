@@ -38,4 +38,7 @@ private:
 	FAgentFrameworkActionResult ExecuteAddSequencerKeyframe(const TSharedRef<FJsonObject>& Params, FAgentFrameworkActionResult& Result);
 
 	FAgentFrameworkActionResult ExecuteConfigureMovieRenderJob(const TSharedRef<FJsonObject>& Params, FAgentFrameworkActionResult& Result);
+
+private:
+	void PlaySuccessSound();
 };

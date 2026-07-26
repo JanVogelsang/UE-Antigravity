@@ -1,11 +1,9 @@
 // Copyright 2026 AgentFramework. All Rights Reserved.
 
 #include "GAS/AgentFrameworkGASActions.h"
-#include "AgentFrameworkCoreModule.h"
-#include "AgentFrameworkSettings.h"
+#include "AgentFrameworkActionUtils.h"
 #include "AbilitySystemComponent.h"
 #include "GameplayEffect.h"
-#include "GameplayAbilitySpec.h"
 #include "Abilities/GameplayAbility.h"
 #include "GameplayTagsManager.h"
 #include "GameplayTagsEditorModule.h"
@@ -13,14 +11,16 @@
 #include "IAssetTools.h"
 #include "Factories/BlueprintFactory.h"
 #include "Kismet2/KismetEditorUtilities.h"
-#include "Kismet2/BlueprintEditorUtils.h"
-#include "AssetRegistry/AssetRegistryModule.h"
 #include "Engine/SimpleConstructionScript.h"
 #include "Engine/SCS_Node.h"
 #include "Misc/FileHelper.h"
 #include "Misc/Paths.h"
-#include "Editor.h"
 #include "UObject/UnrealType.h"
+
+#if WITH_EDITOR
+#include "Editor.h"
+#include "Sound/SoundBase.h"
+#endif
 
 #define LOCTEXT_NAMESPACE "AgentFrameworkGASActions"
 
@@ -34,7 +34,7 @@ namespace AgentFrameworkGASReflection
 	template<typename EnumType>
 	bool SetEnumProperty(UObject* Object, const FString& PropertyName, EnumType Value)
 	{
-		if (!Object) return false;
+		if (!IsValid(Object)) return false;
 		FProperty* Prop = Object->GetClass()->FindPropertyByName(FName(*PropertyName));
 		if (!Prop) return false;
 
@@ -44,8 +44,11 @@ namespace AgentFrameworkGASReflection
 		if (EnumProp)
 		{
 			void* ValuePtr = EnumProp->ContainerPtrToValuePtr<void>(Object);
-			EnumProp->GetUnderlyingProperty()->SetIntPropertyValue(ValuePtr, static_cast<int64>(Value));
-			return true;
+			if (ValuePtr && EnumProp->GetUnderlyingProperty())
+			{
+				EnumProp->GetUnderlyingProperty()->SetIntPropertyValue(ValuePtr, static_cast<int64>(Value));
+				return true;
+			}
 		}
 		else if (ByteProp)
 		{
@@ -58,7 +61,7 @@ namespace AgentFrameworkGASReflection
 	/** Set a TSubclassOf<> property by name on an object via reflection */
 	bool SetClassProperty(UObject* Object, const FString& PropertyName, UClass* ClassValue)
 	{
-		if (!Object) return false;
+		if (!IsValid(Object) || !IsValid(ClassValue)) return false;
 		FClassProperty* Prop = CastField<FClassProperty>(Object->GetClass()->FindPropertyByName(FName(*PropertyName)));
 		if (!Prop) return false;
 		Prop->SetObjectPropertyValue_InContainer(Object, ClassValue);
@@ -68,7 +71,7 @@ namespace AgentFrameworkGASReflection
 	/** Add a tag to a FGameplayTagContainer property on an object via reflection */
 	bool AddTagToContainer(UObject* Object, const FString& PropertyName, FGameplayTag Tag)
 	{
-		if (!Object || !Tag.IsValid()) return false;
+		if (!IsValid(Object) || !Tag.IsValid()) return false;
 		FProperty* Prop = Object->GetClass()->FindPropertyByName(FName(*PropertyName));
 		if (!Prop) return false;
 		FStructProperty* StructProp = CastField<FStructProperty>(Prop);
@@ -86,6 +89,20 @@ namespace AgentFrameworkGASReflection
 
 FAgentFrameworkGASActions::FAgentFrameworkGASActions() {}
 FAgentFrameworkGASActions::~FAgentFrameworkGASActions() {}
+
+void FAgentFrameworkGASActions::PlaySuccessSound()
+{
+#if WITH_EDITOR
+	if (IsValid(GEditor))
+	{
+		USoundBase* SuccessSound = LoadObject<USoundBase>(nullptr, TEXT("/Engine/EditorSounds/Notifications/CompileSuccess.CompileSuccess"));
+		if (IsValid(SuccessSound))
+		{
+			GEditor->PlayEditorSound(SuccessSound);
+		}
+	}
+#endif
+}
 
 // ============================================================================
 // IAgentFrameworkActionExecutor Interface
@@ -115,21 +132,30 @@ FAgentFrameworkActionResult FAgentFrameworkGASActions::ExecuteAction(const TShar
 	Result.bSuccess = false;
 
 	FString Action;
-	if (!Params->TryGetStringField(TEXT("action"), Action) || Action.IsEmpty())
-		Params->TryGetStringField(TEXT("tool_name"), Action);
+	TArray<FString> TempErrors;
+	if (!UAgentFrameworkActionUtils::TryGetStringParam(Params, TEXT("action"), Action, TempErrors, false) || Action.IsEmpty())
+	{
+		UAgentFrameworkActionUtils::TryGetStringParam(Params, TEXT("tool_name"), Action, TempErrors, false);
+	}
 
 	if (Action == TEXT("gas_register_tags"))
-		return ExecuteRegisterTags(Params, Result);
+		Result = ExecuteRegisterTags(Params, Result);
 	else if (Action == TEXT("gas_create_attribute_set"))
-		return ExecuteCreateAttributeSet(Params, Result);
+		Result = ExecuteCreateAttributeSet(Params, Result);
 	else if (Action == TEXT("gas_setup_asc"))
-		return ExecuteSetupASC(Params, Result);
+		Result = ExecuteSetupASC(Params, Result);
 	else if (Action == TEXT("gas_create_effect"))
-		return ExecuteCreateEffect(Params, Result);
+		Result = ExecuteCreateEffect(Params, Result);
 	else if (Action == TEXT("gas_create_ability"))
-		return ExecuteCreateAbility(Params, Result);
+		Result = ExecuteCreateAbility(Params, Result);
+	else
+		Result.Errors.Add(TEXT("Unknown GAS action. Use gas_register_tags, gas_create_attribute_set, gas_setup_asc, gas_create_effect, or gas_create_ability."));
 
-	Result.Errors.Add(TEXT("Unknown GAS action. Use gas_register_tags, gas_create_attribute_set, gas_setup_asc, gas_create_effect, or gas_create_ability."));
+	if (Result.bSuccess)
+	{
+		PlaySuccessSound();
+	}
+
 	return Result;
 }
 
@@ -140,10 +166,13 @@ FAgentFrameworkActionResult FAgentFrameworkGASActions::ExecuteAction(const TShar
 FAgentFrameworkActionResult FAgentFrameworkGASActions::ExecuteRegisterTags(
 	const TSharedRef<FJsonObject>& Params, FAgentFrameworkActionResult& Result)
 {
-	const TArray<TSharedPtr<FJsonValue>>* TagsArray;
-	if (!Params->TryGetArrayField(TEXT("tags"), TagsArray) || TagsArray->Num() == 0)
+	const TArray<TSharedPtr<FJsonValue>>* TagsArray = nullptr;
+	if (!UAgentFrameworkActionUtils::TryGetArrayParam(Params, TEXT("tags"), TagsArray, Result.Errors, true) || !TagsArray || TagsArray->Num() == 0)
 	{
-		Result.Errors.Add(TEXT("Missing required field: 'tags' â€” array of {tag, comment} objects"));
+		if (Result.Errors.Num() == 0)
+		{
+			Result.Errors.Add(TEXT("Missing required field: 'tags' — array of {tag, comment} objects"));
+		}
 		return Result;
 	}
 
@@ -153,13 +182,15 @@ FAgentFrameworkActionResult FAgentFrameworkGASActions::ExecuteRegisterTags(
 
 	for (const TSharedPtr<FJsonValue>& TagVal : *TagsArray)
 	{
-		const TSharedPtr<FJsonObject>* TagObjPtr;
-		if (!TagVal->TryGetObject(TagObjPtr)) continue;
+		if (!TagVal.IsValid()) continue;
+		const TSharedPtr<FJsonObject>* TagObjPtr = nullptr;
+		if (!TagVal->TryGetObject(TagObjPtr) || !TagObjPtr || !TagObjPtr->IsValid()) continue;
 		const TSharedPtr<FJsonObject>& TagObj = *TagObjPtr;
 
 		FString TagName, Comment;
-		TagObj->TryGetStringField(TEXT("tag"), TagName);
-		TagObj->TryGetStringField(TEXT("comment"), Comment);
+		TArray<FString> IgnoreErrors;
+		UAgentFrameworkActionUtils::TryGetStringParam(TagObj, TEXT("tag"), TagName, IgnoreErrors, false);
+		UAgentFrameworkActionUtils::TryGetStringParam(TagObj, TEXT("comment"), Comment, IgnoreErrors, false);
 
 		if (TagName.IsEmpty()) continue;
 
@@ -171,7 +202,7 @@ FAgentFrameworkActionResult FAgentFrameworkGASActions::ExecuteRegisterTags(
 		}
 
 		TagsEditor.AddNewGameplayTagToINI(TagName, Comment.IsEmpty() ? TEXT("Added by AgentFramework") : Comment);
-		Report += FString::Printf(TEXT("  [ADD] '%s' â€” %s\n"), *TagName, *Comment);
+		Report += FString::Printf(TEXT("  [ADD] '%s' — %s\n"), *TagName, *Comment);
 		TagsAdded++;
 	}
 
@@ -188,9 +219,8 @@ FAgentFrameworkActionResult FAgentFrameworkGASActions::ExecuteCreateAttributeSet
 	const TSharedRef<FJsonObject>& Params, FAgentFrameworkActionResult& Result)
 {
 	FString ClassName;
-	if (!Params->TryGetStringField(TEXT("class_name"), ClassName))
+	if (!UAgentFrameworkActionUtils::TryGetStringParam(Params, TEXT("class_name"), ClassName, Result.Errors, true))
 	{
-		Result.Errors.Add(TEXT("Missing required field: 'class_name'"));
 		return Result;
 	}
 
@@ -199,15 +229,19 @@ FAgentFrameworkActionResult FAgentFrameworkGASActions::ExecuteCreateAttributeSet
 
 	FString FileName = ClassName.Mid(1);
 
-	const TArray<TSharedPtr<FJsonValue>>* AttributesArray;
-	if (!Params->TryGetArrayField(TEXT("attributes"), AttributesArray) || AttributesArray->Num() == 0)
+	const TArray<TSharedPtr<FJsonValue>>* AttributesArray = nullptr;
+	if (!UAgentFrameworkActionUtils::TryGetArrayParam(Params, TEXT("attributes"), AttributesArray, Result.Errors, true) || !AttributesArray || AttributesArray->Num() == 0)
 	{
-		Result.Errors.Add(TEXT("Missing required field: 'attributes'"));
+		if (Result.Errors.Num() == 0)
+		{
+			Result.Errors.Add(TEXT("Missing required field: 'attributes'"));
+		}
 		return Result;
 	}
 
+	TArray<FString> IgnoreErrors;
 	FString ModuleName;
-	if (!Params->TryGetStringField(TEXT("module_name"), ModuleName))
+	if (!UAgentFrameworkActionUtils::TryGetStringParam(Params, TEXT("module_name"), ModuleName, IgnoreErrors, false) || ModuleName.IsEmpty())
 	{
 		FString ProjectName = FString(FApp::GetProjectName());
 		ModuleName = ProjectName.ToUpper() + TEXT("_API");
@@ -215,7 +249,7 @@ FAgentFrameworkActionResult FAgentFrameworkGASActions::ExecuteCreateAttributeSet
 
 	// Build header
 	FString Header;
-	Header += TEXT("// Generated by AgentFramework â€” Gameplay Ability System AttributeSet\n\n");
+	Header += TEXT("// Generated by AgentFramework — Gameplay Ability System AttributeSet\n\n");
 	Header += TEXT("#pragma once\n\n");
 	Header += TEXT("#include \"CoreMinimal.h\"\n");
 	Header += TEXT("#include \"AttributeSet.h\"\n");
@@ -238,15 +272,16 @@ FAgentFrameworkActionResult FAgentFrameworkGASActions::ExecuteCreateAttributeSet
 	TArray<FString> AttributeNames;
 	for (const TSharedPtr<FJsonValue>& AttrVal : *AttributesArray)
 	{
-		const TSharedPtr<FJsonObject>* AttrObjPtr;
-		if (!AttrVal->TryGetObject(AttrObjPtr)) continue;
+		if (!AttrVal.IsValid()) continue;
+		const TSharedPtr<FJsonObject>* AttrObjPtr = nullptr;
+		if (!AttrVal->TryGetObject(AttrObjPtr) || !AttrObjPtr || !AttrObjPtr->IsValid()) continue;
 
 		FString AttrName;
-		(*AttrObjPtr)->TryGetStringField(TEXT("name"), AttrName);
+		UAgentFrameworkActionUtils::TryGetStringParam(*AttrObjPtr, TEXT("name"), AttrName, IgnoreErrors, false);
 		if (AttrName.IsEmpty()) continue;
 
 		bool bReplicated = true;
-		(*AttrObjPtr)->TryGetBoolField(TEXT("replicated"), bReplicated);
+		UAgentFrameworkActionUtils::TryGetBoolParam(*AttrObjPtr, TEXT("replicated"), bReplicated, IgnoreErrors, false);
 
 		AttributeNames.Add(AttrName);
 
@@ -286,7 +321,7 @@ FAgentFrameworkActionResult FAgentFrameworkGASActions::ExecuteCreateAttributeSet
 	// Write files
 	FString SourceDir = FPaths::GameSourceDir();
 	FString SubDir;
-	Params->TryGetStringField(TEXT("source_directory"), SubDir);
+	UAgentFrameworkActionUtils::TryGetStringParam(Params, TEXT("source_directory"), SubDir, IgnoreErrors, false);
 	if (SubDir.IsEmpty()) SubDir = FString(FApp::GetProjectName());
 
 	FString HeaderPath = FPaths::Combine(SourceDir, SubDir, FileName + TEXT(".h"));
@@ -312,21 +347,20 @@ FAgentFrameworkActionResult FAgentFrameworkGASActions::ExecuteSetupASC(
 	const TSharedRef<FJsonObject>& Params, FAgentFrameworkActionResult& Result)
 {
 	FString AssetPath;
-	if (!Params->TryGetStringField(TEXT("asset_path"), AssetPath))
+	if (!UAgentFrameworkActionUtils::TryGetStringParam(Params, TEXT("asset_path"), AssetPath, Result.Errors, true))
 	{
-		Result.Errors.Add(TEXT("Missing required field: 'asset_path'"));
 		return Result;
 	}
 
 	UBlueprint* Blueprint = LoadObject<UBlueprint>(nullptr, *AssetPath);
-	if (!Blueprint)
+	if (!IsValid(Blueprint))
 	{
 		Result.Errors.Add(FString::Printf(TEXT("Blueprint not found: '%s'"), *AssetPath));
 		return Result;
 	}
 
 	USimpleConstructionScript* SCS = Blueprint->SimpleConstructionScript;
-	if (!SCS)
+	if (!IsValid(SCS))
 	{
 		Result.Errors.Add(TEXT("Blueprint has no SimpleConstructionScript."));
 		return Result;
@@ -335,7 +369,7 @@ FAgentFrameworkActionResult FAgentFrameworkGASActions::ExecuteSetupASC(
 	// Check if ASC already exists
 	for (USCS_Node* Node : SCS->GetAllNodes())
 	{
-		if (Node && Node->ComponentClass && Node->ComponentClass->IsChildOf(UAbilitySystemComponent::StaticClass()))
+		if (IsValid(Node) && IsValid(Node->ComponentClass) && Node->ComponentClass->IsChildOf(UAbilitySystemComponent::StaticClass()))
 		{
 			Result.bSuccess = true;
 			Result.ResultMessage = FString::Printf(TEXT("ASC already exists on '%s'. No changes."), *AssetPath);
@@ -345,7 +379,7 @@ FAgentFrameworkActionResult FAgentFrameworkGASActions::ExecuteSetupASC(
 
 	Blueprint->Modify();
 	USCS_Node* ASCNode = SCS->CreateNode(UAbilitySystemComponent::StaticClass(), TEXT("AbilitySystemComp"));
-	if (!ASCNode)
+	if (!IsValid(ASCNode))
 	{
 		Result.Errors.Add(TEXT("Failed to create ASC SCS node."));
 		return Result;
@@ -371,9 +405,8 @@ FAgentFrameworkActionResult FAgentFrameworkGASActions::ExecuteCreateEffect(
 	const TSharedRef<FJsonObject>& Params, FAgentFrameworkActionResult& Result)
 {
 	FString AssetPath;
-	if (!Params->TryGetStringField(TEXT("asset_path"), AssetPath))
+	if (!UAgentFrameworkActionUtils::TryGetStringParam(Params, TEXT("asset_path"), AssetPath, Result.Errors, true))
 	{
-		Result.Errors.Add(TEXT("Missing required field: 'asset_path'"));
 		return Result;
 	}
 
@@ -382,32 +415,42 @@ FAgentFrameworkActionResult FAgentFrameworkGASActions::ExecuteCreateEffect(
 
 	IAssetTools& AssetTools = FModuleManager::LoadModuleChecked<FAssetToolsModule>("AssetTools").Get();
 	UBlueprintFactory* Factory = NewObject<UBlueprintFactory>();
+	if (!IsValid(Factory))
+	{
+		Result.Errors.Add(TEXT("Failed to create UBlueprintFactory."));
+		return Result;
+	}
 	Factory->ParentClass = UGameplayEffect::StaticClass();
 	Factory->bSkipClassPicker = true;
 
 	UObject* NewAsset = AssetTools.CreateAsset(AssetName, PackagePath, UBlueprint::StaticClass(), Factory);
-	if (!NewAsset)
+	if (!IsValid(NewAsset))
 	{
 		Result.Errors.Add(FString::Printf(TEXT("Failed to create GE at '%s'."), *AssetPath));
 		return Result;
 	}
 
 	UBlueprint* GEBlueprint = Cast<UBlueprint>(NewAsset);
-	if (!GEBlueprint || !GEBlueprint->GeneratedClass)
+	if (!IsValid(GEBlueprint) || !IsValid(GEBlueprint->GeneratedClass))
 	{
 		Result.Errors.Add(TEXT("Invalid GE Blueprint."));
 		return Result;
 	}
 
 	UGameplayEffect* GECDO = Cast<UGameplayEffect>(GEBlueprint->GeneratedClass->GetDefaultObject());
-	if (!GECDO) { Result.Errors.Add(TEXT("No GE CDO.")); return Result; }
+	if (!IsValid(GECDO))
+	{
+		Result.Errors.Add(TEXT("No GE CDO."));
+		return Result;
+	}
 
 	GECDO->Modify();
 	FString Report;
+	TArray<FString> IgnoreErrors;
 
-	// Duration Policy (public property)
+	// Duration Policy
 	FString DurationStr;
-	Params->TryGetStringField(TEXT("duration_policy"), DurationStr);
+	UAgentFrameworkActionUtils::TryGetStringParam(Params, TEXT("duration_policy"), DurationStr, IgnoreErrors, false);
 	DurationStr = DurationStr.ToLower();
 
 	if (DurationStr == TEXT("instant"))
@@ -419,7 +462,7 @@ FAgentFrameworkActionResult FAgentFrameworkGASActions::ExecuteCreateEffect(
 	{
 		GECDO->DurationPolicy = EGameplayEffectDurationType::HasDuration;
 		float Duration = 5.0f;
-		Params->TryGetNumberField(TEXT("duration_seconds"), Duration);
+		UAgentFrameworkActionUtils::TryGetFloatParam(Params, TEXT("duration_seconds"), Duration, IgnoreErrors, false);
 		GECDO->DurationMagnitude = FScalableFloat(Duration);
 		Report += FString::Printf(TEXT("Duration: %.1fs\n"), Duration);
 	}
@@ -434,18 +477,19 @@ FAgentFrameworkActionResult FAgentFrameworkGASActions::ExecuteCreateEffect(
 		Report += TEXT("Duration: Instant (default)\n");
 	}
 
-	// Modifiers (public array)
-	const TArray<TSharedPtr<FJsonValue>>* ModifiersArray;
-	if (Params->TryGetArrayField(TEXT("modifiers"), ModifiersArray))
+	// Modifiers
+	const TArray<TSharedPtr<FJsonValue>>* ModifiersArray = nullptr;
+	if (UAgentFrameworkActionUtils::TryGetArrayParam(Params, TEXT("modifiers"), ModifiersArray, IgnoreErrors, false) && ModifiersArray)
 	{
 		for (const TSharedPtr<FJsonValue>& ModVal : *ModifiersArray)
 		{
-			const TSharedPtr<FJsonObject>* ModObjPtr;
-			if (!ModVal->TryGetObject(ModObjPtr)) continue;
+			if (!ModVal.IsValid()) continue;
+			const TSharedPtr<FJsonObject>* ModObjPtr = nullptr;
+			if (!ModVal->TryGetObject(ModObjPtr) || !ModObjPtr || !ModObjPtr->IsValid()) continue;
 
 			FGameplayModifierInfo Modifier;
 			FString OpStr;
-			(*ModObjPtr)->TryGetStringField(TEXT("operation"), OpStr);
+			UAgentFrameworkActionUtils::TryGetStringParam(*ModObjPtr, TEXT("operation"), OpStr, IgnoreErrors, false);
 			OpStr = OpStr.ToLower();
 
 			if (OpStr == TEXT("add") || OpStr == TEXT("additive"))
@@ -460,57 +504,49 @@ FAgentFrameworkActionResult FAgentFrameworkGASActions::ExecuteCreateEffect(
 				Modifier.ModifierOp = EGameplayModOp::Additive;
 
 			float Magnitude = 0.0f;
-			(*ModObjPtr)->TryGetNumberField(TEXT("magnitude"), Magnitude);
+			UAgentFrameworkActionUtils::TryGetFloatParam(*ModObjPtr, TEXT("magnitude"), Magnitude, IgnoreErrors, false);
 			Modifier.ModifierMagnitude = FScalableFloat(Magnitude);
 
 			FString AttributeStr;
-			(*ModObjPtr)->TryGetStringField(TEXT("attribute"), AttributeStr);
+			UAgentFrameworkActionUtils::TryGetStringParam(*ModObjPtr, TEXT("attribute"), AttributeStr, IgnoreErrors, false);
 
 			GECDO->Modifiers.Add(Modifier);
 			Report += FString::Printf(TEXT("Modifier: %s %.1f to %s\n"), *OpStr, Magnitude, *AttributeStr);
 		}
 	}
 
-	// Tags: Use reflection to access InheritableOwnedTagsContainer (public on GE CDO)
-	// For grant_tags on the GE itself:
-	const TArray<TSharedPtr<FJsonValue>>* GrantTagsArray;
-	if (Params->TryGetArrayField(TEXT("grant_tags"), GrantTagsArray))
+	// Grant Tags
+	TArray<FString> GrantTagStrings;
+	if (UAgentFrameworkActionUtils::TryGetStringArrayParam(Params, TEXT("grant_tags"), GrantTagStrings, IgnoreErrors, false))
 	{
-		for (const TSharedPtr<FJsonValue>& TagVal : *GrantTagsArray)
+		for (const FString& TagStr : GrantTagStrings)
 		{
-			FString TagStr;
-			if (TagVal->TryGetString(TagStr))
+			if (TagStr.IsEmpty()) continue;
+			FGameplayTag Tag = FGameplayTag::RequestGameplayTag(FName(*TagStr), false);
+			if (Tag.IsValid())
 			{
-				FGameplayTag Tag = FGameplayTag::RequestGameplayTag(FName(*TagStr), false);
-				if (Tag.IsValid())
-				{
-					// Use reflection to set tags on the CDO â€” handles both pre and post 5.3 layouts
-					AgentFrameworkGASReflection::AddTagToContainer(GECDO, TEXT("InheritableOwnedTagsContainer"), Tag);
-					Report += FString::Printf(TEXT("Owned tag: %s\n"), *TagStr);
-				}
-				else
-				{
-					Result.Warnings.Add(FString::Printf(TEXT("Tag '%s' not found. Register first."), *TagStr));
-				}
+				AgentFrameworkGASReflection::AddTagToContainer(GECDO, TEXT("InheritableOwnedTagsContainer"), Tag);
+				Report += FString::Printf(TEXT("Owned tag: %s\n"), *TagStr);
+			}
+			else
+			{
+				Result.Warnings.Add(FString::Printf(TEXT("Tag '%s' not found. Register first."), *TagStr));
 			}
 		}
 	}
 
-	// Asset tags via reflection
-	const TArray<TSharedPtr<FJsonValue>>* AssetTagsArray;
-	if (Params->TryGetArrayField(TEXT("asset_tags"), AssetTagsArray))
+	// Asset Tags
+	TArray<FString> AssetTagStrings;
+	if (UAgentFrameworkActionUtils::TryGetStringArrayParam(Params, TEXT("asset_tags"), AssetTagStrings, IgnoreErrors, false))
 	{
-		for (const TSharedPtr<FJsonValue>& TagVal : *AssetTagsArray)
+		for (const FString& TagStr : AssetTagStrings)
 		{
-			FString TagStr;
-			if (TagVal->TryGetString(TagStr))
+			if (TagStr.IsEmpty()) continue;
+			FGameplayTag Tag = FGameplayTag::RequestGameplayTag(FName(*TagStr), false);
+			if (Tag.IsValid())
 			{
-				FGameplayTag Tag = FGameplayTag::RequestGameplayTag(FName(*TagStr), false);
-				if (Tag.IsValid())
-				{
-					AgentFrameworkGASReflection::AddTagToContainer(GECDO, TEXT("InheritableGameplayEffectTags"), Tag);
-					Report += FString::Printf(TEXT("Asset tag: %s\n"), *TagStr);
-				}
+				AgentFrameworkGASReflection::AddTagToContainer(GECDO, TEXT("InheritableGameplayEffectTags"), Tag);
+				Report += FString::Printf(TEXT("Asset tag: %s\n"), *TagStr);
 			}
 		}
 	}
@@ -532,9 +568,8 @@ FAgentFrameworkActionResult FAgentFrameworkGASActions::ExecuteCreateAbility(
 	const TSharedRef<FJsonObject>& Params, FAgentFrameworkActionResult& Result)
 {
 	FString AssetPath;
-	if (!Params->TryGetStringField(TEXT("asset_path"), AssetPath))
+	if (!UAgentFrameworkActionUtils::TryGetStringParam(Params, TEXT("asset_path"), AssetPath, Result.Errors, true))
 	{
-		Result.Errors.Add(TEXT("Missing required field: 'asset_path'"));
 		return Result;
 	}
 
@@ -543,32 +578,42 @@ FAgentFrameworkActionResult FAgentFrameworkGASActions::ExecuteCreateAbility(
 
 	IAssetTools& AssetTools = FModuleManager::LoadModuleChecked<FAssetToolsModule>("AssetTools").Get();
 	UBlueprintFactory* Factory = NewObject<UBlueprintFactory>();
+	if (!IsValid(Factory))
+	{
+		Result.Errors.Add(TEXT("Failed to create UBlueprintFactory."));
+		return Result;
+	}
 	Factory->ParentClass = UGameplayAbility::StaticClass();
 	Factory->bSkipClassPicker = true;
 
 	UObject* NewAsset = AssetTools.CreateAsset(AssetName, PackagePath, UBlueprint::StaticClass(), Factory);
-	if (!NewAsset)
+	if (!IsValid(NewAsset))
 	{
 		Result.Errors.Add(FString::Printf(TEXT("Failed to create GA at '%s'."), *AssetPath));
 		return Result;
 	}
 
 	UBlueprint* GABlueprint = Cast<UBlueprint>(NewAsset);
-	if (!GABlueprint || !GABlueprint->GeneratedClass)
+	if (!IsValid(GABlueprint) || !IsValid(GABlueprint->GeneratedClass))
 	{
 		Result.Errors.Add(TEXT("Invalid GA Blueprint."));
 		return Result;
 	}
 
 	UGameplayAbility* GACDO = Cast<UGameplayAbility>(GABlueprint->GeneratedClass->GetDefaultObject());
-	if (!GACDO) { Result.Errors.Add(TEXT("No GA CDO.")); return Result; }
+	if (!IsValid(GACDO))
+	{
+		Result.Errors.Add(TEXT("No GA CDO."));
+		return Result;
+	}
 
 	GACDO->Modify();
 	FString Report;
+	TArray<FString> IgnoreErrors;
 
-	// Instancing Policy (protected â€” use reflection)
+	// Instancing Policy
 	FString InstancingStr;
-	Params->TryGetStringField(TEXT("instancing_policy"), InstancingStr);
+	UAgentFrameworkActionUtils::TryGetStringParam(Params, TEXT("instancing_policy"), InstancingStr, IgnoreErrors, false);
 	InstancingStr = InstancingStr.ToLower();
 
 	EGameplayAbilityInstancingPolicy::Type InstancingPolicy = EGameplayAbilityInstancingPolicy::InstancedPerActor;
@@ -580,9 +625,9 @@ FAgentFrameworkActionResult FAgentFrameworkGASActions::ExecuteCreateAbility(
 	AgentFrameworkGASReflection::SetEnumProperty(GACDO, TEXT("InstancingPolicy"), InstancingPolicy);
 	Report += FString::Printf(TEXT("Instancing: %s\n"), *InstancingStr);
 
-	// Net Execution Policy (protected â€” use reflection)
+	// Net Execution Policy
 	FString NetPolicyStr;
-	Params->TryGetStringField(TEXT("net_execution_policy"), NetPolicyStr);
+	UAgentFrameworkActionUtils::TryGetStringParam(Params, TEXT("net_execution_policy"), NetPolicyStr, IgnoreErrors, false);
 	NetPolicyStr = NetPolicyStr.ToLower();
 
 	EGameplayAbilityNetExecutionPolicy::Type NetPolicy = EGameplayAbilityNetExecutionPolicy::LocalPredicted;
@@ -596,47 +641,44 @@ FAgentFrameworkActionResult FAgentFrameworkGASActions::ExecuteCreateAbility(
 	AgentFrameworkGASReflection::SetEnumProperty(GACDO, TEXT("NetExecutionPolicy"), NetPolicy);
 	Report += FString::Printf(TEXT("Net: %s\n"), *NetPolicyStr);
 
-	// Ability Tags (public on CDO)
-	const TArray<TSharedPtr<FJsonValue>>* AbilityTagsArray;
-	if (Params->TryGetArrayField(TEXT("ability_tags"), AbilityTagsArray))
+	// Ability Tags
+	TArray<FString> AbilityTagStrings;
+	if (UAgentFrameworkActionUtils::TryGetStringArrayParam(Params, TEXT("ability_tags"), AbilityTagStrings, IgnoreErrors, false))
 	{
-		for (const TSharedPtr<FJsonValue>& TagVal : *AbilityTagsArray)
+		for (const FString& TagStr : AbilityTagStrings)
 		{
-			FString TagStr;
-			if (TagVal->TryGetString(TagStr))
+			if (TagStr.IsEmpty()) continue;
+			FGameplayTag Tag = FGameplayTag::RequestGameplayTag(FName(*TagStr), false);
+			if (Tag.IsValid())
 			{
-				FGameplayTag Tag = FGameplayTag::RequestGameplayTag(FName(*TagStr), false);
-				if (Tag.IsValid())
-				{
-					AgentFrameworkGASReflection::AddTagToContainer(GACDO, TEXT("AbilityTags"), Tag);
-					Report += FString::Printf(TEXT("Ability tag: %s\n"), *TagStr);
-				}
-				else
-				{
-					Result.Warnings.Add(FString::Printf(TEXT("Tag '%s' not found."), *TagStr));
-				}
+				AgentFrameworkGASReflection::AddTagToContainer(GACDO, TEXT("AbilityTags"), Tag);
+				Report += FString::Printf(TEXT("Ability tag: %s\n"), *TagStr);
+			}
+			else
+			{
+				Result.Warnings.Add(FString::Printf(TEXT("Tag '%s' not found."), *TagStr));
 			}
 		}
 	}
 
-	// Cooldown GE class (protected â€” use reflection)
+	// Cooldown GE class
 	FString CooldownGEPath;
-	if (Params->TryGetStringField(TEXT("cooldown_effect"), CooldownGEPath))
+	if (UAgentFrameworkActionUtils::TryGetStringParam(Params, TEXT("cooldown_effect"), CooldownGEPath, IgnoreErrors, false) && !CooldownGEPath.IsEmpty())
 	{
 		UBlueprint* CooldownBP = LoadObject<UBlueprint>(nullptr, *CooldownGEPath);
-		if (CooldownBP && CooldownBP->GeneratedClass)
+		if (IsValid(CooldownBP) && IsValid(CooldownBP->GeneratedClass))
 		{
 			AgentFrameworkGASReflection::SetClassProperty(GACDO, TEXT("CooldownGameplayEffectClass"), CooldownBP->GeneratedClass);
 			Report += FString::Printf(TEXT("Cooldown GE: %s\n"), *CooldownGEPath);
 		}
 	}
 
-	// Cost GE class (protected â€” use reflection)
+	// Cost GE class
 	FString CostGEPath;
-	if (Params->TryGetStringField(TEXT("cost_effect"), CostGEPath))
+	if (UAgentFrameworkActionUtils::TryGetStringParam(Params, TEXT("cost_effect"), CostGEPath, IgnoreErrors, false) && !CostGEPath.IsEmpty())
 	{
 		UBlueprint* CostBP = LoadObject<UBlueprint>(nullptr, *CostGEPath);
-		if (CostBP && CostBP->GeneratedClass)
+		if (IsValid(CostBP) && IsValid(CostBP->GeneratedClass))
 		{
 			AgentFrameworkGASReflection::SetClassProperty(GACDO, TEXT("CostGameplayEffectClass"), CostBP->GeneratedClass);
 			Report += FString::Printf(TEXT("Cost GE: %s\n"), *CostGEPath);

@@ -2,8 +2,9 @@
 
 #include "Widget/AgentFrameworkWidgetActions.h"
 #include "AgentFrameworkCoreModule.h"
+#include "AgentFrameworkActionUtils.h"
 
-// UMG Runtime â€” Panels
+// UMG Runtime — Panels
 #include "Blueprint/WidgetTree.h"
 #include "Components/PanelWidget.h"
 #include "Components/ContentWidget.h"
@@ -27,13 +28,16 @@
 #include "Components/WrapBox.h"
 #include "Components/WrapBoxSlot.h"
 #include "Components/ScaleBox.h"
+#include "Components/ScaleBoxSlot.h"
 #include "Components/Border.h"
+#include "Components/BorderSlot.h"
+#include "Components/SizeBoxSlot.h"
 #include "Components/BackgroundBlur.h"
 #include "Components/InvalidationBox.h"
 #include "Components/RetainerBox.h"
 #include "Components/NamedSlot.h"
 
-// UMG Runtime â€” Leaf Widgets
+// UMG Runtime — Leaf Widgets
 #include "Components/TextBlock.h"
 #include "Components/RichTextBlock.h"
 #include "Components/Button.h"
@@ -115,6 +119,402 @@ namespace
 		}
 		return InPath;
 	}
+
+	bool ResolveWidgetAssetPath(const TSharedPtr<FJsonObject>& Params, FString& OutAssetPath, TArray<FString>& OutErrors)
+	{
+		FString RawPath;
+		if (Params->TryGetStringField(TEXT("asset_path"), RawPath) ||
+			Params->TryGetStringField(TEXT("widget_blueprint_path"), RawPath) ||
+			Params->TryGetStringField(TEXT("AssetPath"), RawPath) ||
+			Params->TryGetStringField(TEXT("WidgetBlueprintPath"), RawPath) ||
+			Params->TryGetStringField(TEXT("TargetAsset"), RawPath))
+		{
+			OutAssetPath = ExpandWidgetAssetPath(RawPath);
+			return true;
+		}
+		OutErrors.Add(TEXT("Missing required asset path parameter (asset_path or widget_blueprint_path)."));
+		return false;
+	}
+
+	bool ResolveWidgetName(const TSharedPtr<FJsonObject>& Params, FString& OutWidgetName, TArray<FString>& OutErrors)
+	{
+		if (Params->TryGetStringField(TEXT("widget_name"), OutWidgetName) ||
+			Params->TryGetStringField(TEXT("WidgetName"), OutWidgetName) ||
+			Params->TryGetStringField(TEXT("name"), OutWidgetName) ||
+			Params->TryGetStringField(TEXT("Name"), OutWidgetName))
+		{
+			if (!OutWidgetName.IsEmpty())
+			{
+				return true;
+			}
+		}
+		OutErrors.Add(TEXT("Missing required widget name parameter (widget_name or WidgetName)."));
+		return false;
+	}
+
+	TSharedPtr<FJsonObject> GetEffectiveSlotParams(const TSharedPtr<FJsonObject>& InParams)
+	{
+		if (!InParams.IsValid()) return MakeShared<FJsonObject>();
+
+		const TSharedPtr<FJsonObject>* ContainerObj = nullptr;
+		if (InParams->TryGetObjectField(TEXT("slot_properties"), ContainerObj) ||
+			InParams->TryGetObjectField(TEXT("SlotProperties"), ContainerObj) ||
+			InParams->TryGetObjectField(TEXT("slot_params"), ContainerObj) ||
+			InParams->TryGetObjectField(TEXT("SlotParams"), ContainerObj))
+		{
+			if (ContainerObj && ContainerObj->IsValid())
+			{
+				TSharedPtr<FJsonObject> Merged = MakeShared<FJsonObject>();
+				for (const auto& Pair : (*ContainerObj)->Values)
+				{
+					Merged->SetField(Pair.Key, Pair.Value);
+				}
+				for (const auto& Pair : InParams->Values)
+				{
+					if (!Merged->HasField(Pair.Key))
+					{
+						Merged->SetField(Pair.Key, Pair.Value);
+					}
+				}
+				return Merged;
+			}
+		}
+		return InParams;
+	}
+
+	bool TryGetAnchors(const TSharedPtr<FJsonObject>& InParams, FAnchors& OutAnchors)
+	{
+		if (!InParams.IsValid()) return false;
+
+		const TSharedPtr<FJsonObject>* AnchorsObj = nullptr;
+		if (InParams->TryGetObjectField(TEXT("anchors"), AnchorsObj) ||
+			InParams->TryGetObjectField(TEXT("Anchors"), AnchorsObj))
+		{
+			if (AnchorsObj && AnchorsObj->IsValid())
+			{
+				double MinX = 0.0, MinY = 0.0, MaxX = 0.0, MaxY = 0.0;
+				bool bHasMinX = (*AnchorsObj)->TryGetNumberField(TEXT("min_x"), MinX) ||
+				                (*AnchorsObj)->TryGetNumberField(TEXT("MinX"), MinX) ||
+				                (*AnchorsObj)->TryGetNumberField(TEXT("minimum_x"), MinX) ||
+				                (*AnchorsObj)->TryGetNumberField(TEXT("x"), MinX) ||
+				                (*AnchorsObj)->TryGetNumberField(TEXT("X"), MinX);
+
+				bool bHasMinY = (*AnchorsObj)->TryGetNumberField(TEXT("min_y"), MinY) ||
+				                (*AnchorsObj)->TryGetNumberField(TEXT("MinY"), MinY) ||
+				                (*AnchorsObj)->TryGetNumberField(TEXT("minimum_y"), MinY) ||
+				                (*AnchorsObj)->TryGetNumberField(TEXT("y"), MinY) ||
+				                (*AnchorsObj)->TryGetNumberField(TEXT("Y"), MinY);
+
+				bool bHasMaxX = (*AnchorsObj)->TryGetNumberField(TEXT("max_x"), MaxX) ||
+				                (*AnchorsObj)->TryGetNumberField(TEXT("MaxX"), MaxX) ||
+				                (*AnchorsObj)->TryGetNumberField(TEXT("maximum_x"), MaxX);
+
+				bool bHasMaxY = (*AnchorsObj)->TryGetNumberField(TEXT("max_y"), MaxY) ||
+				                (*AnchorsObj)->TryGetNumberField(TEXT("MaxY"), MaxY) ||
+				                (*AnchorsObj)->TryGetNumberField(TEXT("maximum_y"), MaxY);
+
+				if (!bHasMaxX) MaxX = MinX;
+				if (!bHasMaxY) MaxY = MinY;
+
+				if (bHasMinX || bHasMinY || bHasMaxX || bHasMaxY)
+				{
+					OutAnchors.Minimum = FVector2D(MinX, MinY);
+					OutAnchors.Maximum = FVector2D(MaxX, MaxY);
+					return true;
+				}
+			}
+		}
+
+		FString AnchorsStr, MinStr, MaxStr;
+		if (InParams->TryGetStringField(TEXT("anchors"), AnchorsStr) ||
+			InParams->TryGetStringField(TEXT("Anchors"), AnchorsStr))
+		{
+			TArray<FString> Parts;
+			AnchorsStr.ParseIntoArray(Parts, TEXT(","), true);
+			if (Parts.Num() == 4)
+			{
+				OutAnchors.Minimum = FVector2D(FCString::Atof(*Parts[0].TrimStartAndEnd()), FCString::Atof(*Parts[1].TrimStartAndEnd()));
+				OutAnchors.Maximum = FVector2D(FCString::Atof(*Parts[2].TrimStartAndEnd()), FCString::Atof(*Parts[3].TrimStartAndEnd()));
+				return true;
+			}
+			else if (Parts.Num() == 2)
+			{
+				FVector2D Vec(FCString::Atof(*Parts[0].TrimStartAndEnd()), FCString::Atof(*Parts[1].TrimStartAndEnd()));
+				OutAnchors.Minimum = Vec;
+				OutAnchors.Maximum = Vec;
+				return true;
+			}
+		}
+
+		bool bFoundMin = false, bFoundMax = false;
+		if (InParams->TryGetStringField(TEXT("anchors_min"), MinStr) ||
+			InParams->TryGetStringField(TEXT("AnchorsMin"), MinStr) ||
+			InParams->TryGetStringField(TEXT("anchors_minimum"), MinStr))
+		{
+			FVector2D MinVec;
+			if (FAgentFrameworkWidgetActions::ParseVector2D(MinStr, MinVec))
+			{
+				OutAnchors.Minimum = MinVec;
+				bFoundMin = true;
+			}
+		}
+
+		if (InParams->TryGetStringField(TEXT("anchors_max"), MaxStr) ||
+			InParams->TryGetStringField(TEXT("AnchorsMax"), MaxStr) ||
+			InParams->TryGetStringField(TEXT("anchors_maximum"), MaxStr))
+		{
+			FVector2D MaxVec;
+			if (FAgentFrameworkWidgetActions::ParseVector2D(MaxStr, MaxVec))
+			{
+				OutAnchors.Maximum = MaxVec;
+				bFoundMax = true;
+			}
+		}
+
+		if (bFoundMin && !bFoundMax)
+		{
+			OutAnchors.Maximum = OutAnchors.Minimum;
+			return true;
+		}
+		return (bFoundMin || bFoundMax);
+	}
+
+	bool TryGetMargin(const TSharedPtr<FJsonObject>& InParams, const FString& FieldNameSnake, const FString& FieldNamePascal, FMargin& OutMargin)
+	{
+		if (!InParams.IsValid()) return false;
+
+		const TSharedPtr<FJsonObject>* MarginObj = nullptr;
+		if (InParams->TryGetObjectField(FieldNameSnake, MarginObj) ||
+			InParams->TryGetObjectField(FieldNamePascal, MarginObj) ||
+			(FieldNameSnake == TEXT("offsets") && InParams->TryGetObjectField(TEXT("margin"), MarginObj)) ||
+			(FieldNameSnake == TEXT("offsets") && InParams->TryGetObjectField(TEXT("Margin"), MarginObj)) ||
+			(FieldNameSnake == TEXT("padding") && InParams->TryGetObjectField(TEXT("pad"), MarginObj)) ||
+			(FieldNameSnake == TEXT("padding") && InParams->TryGetObjectField(TEXT("Pad"), MarginObj)))
+		{
+			if (MarginObj && MarginObj->IsValid())
+			{
+				double Left = 0.0, Top = 0.0, Right = 0.0, Bottom = 0.0;
+				bool bHasLeft = (*MarginObj)->TryGetNumberField(TEXT("left"), Left) ||
+				                (*MarginObj)->TryGetNumberField(TEXT("Left"), Left) ||
+				                (*MarginObj)->TryGetNumberField(TEXT("l"), Left) ||
+				                (*MarginObj)->TryGetNumberField(TEXT("x"), Left) ||
+				                (*MarginObj)->TryGetNumberField(TEXT("X"), Left);
+
+				bool bHasTop = (*MarginObj)->TryGetNumberField(TEXT("top"), Top) ||
+				               (*MarginObj)->TryGetNumberField(TEXT("Top"), Top) ||
+				               (*MarginObj)->TryGetNumberField(TEXT("t"), Top) ||
+				               (*MarginObj)->TryGetNumberField(TEXT("y"), Top) ||
+				               (*MarginObj)->TryGetNumberField(TEXT("Y"), Top);
+
+				bool bHasRight = (*MarginObj)->TryGetNumberField(TEXT("right"), Right) ||
+				                 (*MarginObj)->TryGetNumberField(TEXT("Right"), Right) ||
+				                 (*MarginObj)->TryGetNumberField(TEXT("r"), Right) ||
+				                 (*MarginObj)->TryGetNumberField(TEXT("width"), Right) ||
+				                 (*MarginObj)->TryGetNumberField(TEXT("Width"), Right) ||
+				                 (*MarginObj)->TryGetNumberField(TEXT("w"), Right);
+
+				bool bHasBottom = (*MarginObj)->TryGetNumberField(TEXT("bottom"), Bottom) ||
+				                  (*MarginObj)->TryGetNumberField(TEXT("Bottom"), Bottom) ||
+				                  (*MarginObj)->TryGetNumberField(TEXT("b"), Bottom) ||
+				                  (*MarginObj)->TryGetNumberField(TEXT("height"), Bottom) ||
+				                  (*MarginObj)->TryGetNumberField(TEXT("Height"), Bottom) ||
+				                  (*MarginObj)->TryGetNumberField(TEXT("h"), Bottom);
+
+				double Uniform = 0.0;
+				if ((*MarginObj)->TryGetNumberField(TEXT("uniform"), Uniform) ||
+					(*MarginObj)->TryGetNumberField(TEXT("Uniform"), Uniform))
+				{
+					OutMargin = FMargin(Uniform);
+					return true;
+				}
+
+				if (bHasLeft || bHasTop || bHasRight || bHasBottom)
+				{
+					OutMargin = FMargin(Left, Top, Right, Bottom);
+					return true;
+				}
+			}
+		}
+
+		double NumVal = 0.0;
+		if (InParams->TryGetNumberField(FieldNameSnake, NumVal) ||
+			InParams->TryGetNumberField(FieldNamePascal, NumVal))
+		{
+			OutMargin = FMargin(NumVal);
+			return true;
+		}
+
+		FString MarginStr;
+		if (InParams->TryGetStringField(FieldNameSnake, MarginStr) ||
+			InParams->TryGetStringField(FieldNamePascal, MarginStr) ||
+			(FieldNameSnake == TEXT("offsets") && InParams->TryGetStringField(TEXT("margin"), MarginStr)) ||
+			(FieldNameSnake == TEXT("offsets") && InParams->TryGetStringField(TEXT("Margin"), MarginStr)) ||
+			(FieldNameSnake == TEXT("padding") && InParams->TryGetStringField(TEXT("pad"), MarginStr)) ||
+			(FieldNameSnake == TEXT("padding") && InParams->TryGetStringField(TEXT("Pad"), MarginStr)))
+		{
+			if (FAgentFrameworkWidgetActions::ParseMargin(MarginStr, OutMargin))
+			{
+				return true;
+			}
+		}
+
+		return false;
+	}
+
+	bool TryGetAlignment(const TSharedPtr<FJsonObject>& InParams, FVector2D& OutAlignment)
+	{
+		if (!InParams.IsValid()) return false;
+
+		const TSharedPtr<FJsonObject>* AlignObj = nullptr;
+		if (InParams->TryGetObjectField(TEXT("alignment"), AlignObj) ||
+			InParams->TryGetObjectField(TEXT("Alignment"), AlignObj) ||
+			InParams->TryGetObjectField(TEXT("align"), AlignObj) ||
+			InParams->TryGetObjectField(TEXT("Align"), AlignObj))
+		{
+			if (AlignObj && AlignObj->IsValid())
+			{
+				double X = 0.0, Y = 0.0;
+				bool bHasX = (*AlignObj)->TryGetNumberField(TEXT("x"), X) ||
+				             (*AlignObj)->TryGetNumberField(TEXT("X"), X) ||
+				             (*AlignObj)->TryGetNumberField(TEXT("horizontal"), X) ||
+				             (*AlignObj)->TryGetNumberField(TEXT("h"), X);
+
+				bool bHasY = (*AlignObj)->TryGetNumberField(TEXT("y"), Y) ||
+				             (*AlignObj)->TryGetNumberField(TEXT("Y"), Y) ||
+				             (*AlignObj)->TryGetNumberField(TEXT("vertical"), Y) ||
+				             (*AlignObj)->TryGetNumberField(TEXT("v"), Y);
+
+				if (bHasX || bHasY)
+				{
+					OutAlignment = FVector2D(X, Y);
+					return true;
+				}
+			}
+		}
+
+		double Scalar = 0.0;
+		if (InParams->TryGetNumberField(TEXT("alignment"), Scalar) ||
+			InParams->TryGetNumberField(TEXT("Alignment"), Scalar))
+		{
+			OutAlignment = FVector2D(Scalar, Scalar);
+			return true;
+		}
+
+		FString AlignStr;
+		if (InParams->TryGetStringField(TEXT("alignment"), AlignStr) ||
+			InParams->TryGetStringField(TEXT("Alignment"), AlignStr) ||
+			InParams->TryGetStringField(TEXT("align"), AlignStr) ||
+			InParams->TryGetStringField(TEXT("Align"), AlignStr))
+		{
+			if (FAgentFrameworkWidgetActions::ParseVector2D(AlignStr, OutAlignment))
+			{
+				return true;
+			}
+		}
+
+		return false;
+	}
+
+	bool TryGetSizeRule(const TSharedPtr<FJsonObject>& InParams, FString& OutSizeRuleStr, ESlateSizeRule::Type& OutSizeRule)
+	{
+		if (!InParams.IsValid()) return false;
+		if (InParams->TryGetStringField(TEXT("size_rule"), OutSizeRuleStr) ||
+			InParams->TryGetStringField(TEXT("SizeRule"), OutSizeRuleStr) ||
+			InParams->TryGetStringField(TEXT("size"), OutSizeRuleStr) ||
+			InParams->TryGetStringField(TEXT("Size"), OutSizeRuleStr))
+		{
+			if (OutSizeRuleStr.Equals(TEXT("Fill"), ESearchCase::IgnoreCase))
+			{
+				OutSizeRule = ESlateSizeRule::Fill;
+			}
+			else
+			{
+				OutSizeRule = ESlateSizeRule::Automatic;
+			}
+			return true;
+		}
+		return false;
+	}
+
+	bool TryGetHAlign(const TSharedPtr<FJsonObject>& InParams, FString& OutStr, EHorizontalAlignment& OutHAlign)
+	{
+		if (!InParams.IsValid()) return false;
+		if (InParams->TryGetStringField(TEXT("h_align"), OutStr) ||
+			InParams->TryGetStringField(TEXT("HAlign"), OutStr) ||
+			InParams->TryGetStringField(TEXT("horizontal_alignment"), OutStr) ||
+			InParams->TryGetStringField(TEXT("HorizontalAlignment"), OutStr))
+		{
+			OutHAlign = FAgentFrameworkWidgetActions::ParseHAlign(OutStr);
+			return true;
+		}
+		return false;
+	}
+
+	bool TryGetVAlign(const TSharedPtr<FJsonObject>& InParams, FString& OutStr, EVerticalAlignment& OutVAlign)
+	{
+		if (!InParams.IsValid()) return false;
+		if (InParams->TryGetStringField(TEXT("v_align"), OutStr) ||
+			InParams->TryGetStringField(TEXT("VAlign"), OutStr) ||
+			InParams->TryGetStringField(TEXT("vertical_alignment"), OutStr) ||
+			InParams->TryGetStringField(TEXT("VerticalAlignment"), OutStr))
+		{
+			OutVAlign = FAgentFrameworkWidgetActions::ParseVAlign(OutStr);
+			return true;
+		}
+		return false;
+	}
+
+	bool TryGetBoolValue(const TSharedPtr<FJsonObject>& InParams, const FString& K1, const FString& K2, const FString& K3, bool& OutVal)
+	{
+		if (!InParams.IsValid()) return false;
+		if (InParams->HasField(K1) && InParams->TryGetBoolField(K1, OutVal)) return true;
+		if (!K2.IsEmpty() && InParams->HasField(K2) && InParams->TryGetBoolField(K2, OutVal)) return true;
+		if (!K3.IsEmpty() && InParams->HasField(K3) && InParams->TryGetBoolField(K3, OutVal)) return true;
+
+		FString StrVal;
+		if (InParams->TryGetStringField(K1, StrVal) || (!K2.IsEmpty() && InParams->TryGetStringField(K2, StrVal)) || (!K3.IsEmpty() && InParams->TryGetStringField(K3, StrVal)))
+		{
+			OutVal = StrVal.ToBool();
+			return true;
+		}
+		return false;
+	}
+
+	bool TryGetIntValue(const TSharedPtr<FJsonObject>& InParams, const FString& K1, const FString& K2, const FString& K3, int32& OutVal)
+	{
+		if (!InParams.IsValid()) return false;
+		double Num = 0.0;
+		if (InParams->TryGetNumberField(K1, Num) || (!K2.IsEmpty() && InParams->TryGetNumberField(K2, Num)) || (!K3.IsEmpty() && InParams->TryGetNumberField(K3, Num)))
+		{
+			OutVal = static_cast<int32>(Num);
+			return true;
+		}
+		FString StrVal;
+		if (InParams->TryGetStringField(K1, StrVal) || (!K2.IsEmpty() && InParams->TryGetStringField(K2, StrVal)) || (!K3.IsEmpty() && InParams->TryGetStringField(K3, StrVal)))
+		{
+			OutVal = FCString::Atoi(*StrVal);
+			return true;
+		}
+		return false;
+	}
+
+	bool TryGetFloatValue(const TSharedPtr<FJsonObject>& InParams, const FString& K1, const FString& K2, float& OutVal)
+	{
+		if (!InParams.IsValid()) return false;
+		double Num = 0.0;
+		if (InParams->TryGetNumberField(K1, Num) || (!K2.IsEmpty() && InParams->TryGetNumberField(K2, Num)))
+		{
+			OutVal = static_cast<float>(Num);
+			return true;
+		}
+		FString StrVal;
+		if (InParams->TryGetStringField(K1, StrVal) || (!K2.IsEmpty() && InParams->TryGetStringField(K2, StrVal)))
+		{
+			OutVal = FCString::Atof(*StrVal);
+			return true;
+		}
+		return false;
+	}
 }
 
 FAgentFrameworkWidgetActions::FAgentFrameworkWidgetActions() {}
@@ -128,6 +528,7 @@ TArray<FString> FAgentFrameworkWidgetActions::GetSupportedToolNames() const
 		TEXT("create_widget_blueprint"),
 		TEXT("add_widget"),
 		TEXT("set_widget_slot"),
+		TEXT("set_widget_slot_properties"),
 		TEXT("set_widget_property"),
 		TEXT("set_widget_font"),
 		TEXT("set_widget_brush"),
@@ -137,28 +538,43 @@ TArray<FString> FAgentFrameworkWidgetActions::GetSupportedToolNames() const
 		TEXT("compile_widget_blueprint"),
 		TEXT("macro_create_basic_ui_menu"),
 		TEXT("capture_widget"),
-		TEXT("instantiate_ui_hierarchy")
+		TEXT("instantiate_ui_hierarchy"),
+		TEXT("get_widget_info"),
+		TEXT("clear_panel_children"),
+		TEXT("get_widget_slots")
 	};
 }
 
 bool FAgentFrameworkWidgetActions::ValidateParams(const TSharedRef<FJsonObject>& Params, TArray<FString>& OutErrors) const
 {
 	FString RawAssetPath;
-	if (Params->TryGetStringField(TEXT("asset_path"), RawAssetPath))
+	if (!Params->TryGetStringField(TEXT("asset_path"), RawAssetPath))
+	{
+		if (!Params->TryGetStringField(TEXT("widget_blueprint_path"), RawAssetPath))
+		{
+			if (!Params->TryGetStringField(TEXT("AssetPath"), RawAssetPath))
+			{
+				Params->TryGetStringField(TEXT("WidgetBlueprintPath"), RawAssetPath);
+			}
+		}
+	}
+	if (!RawAssetPath.IsEmpty())
 	{
 		Params->SetStringField(TEXT("asset_path"), ExpandWidgetAssetPath(RawAssetPath));
 	}
 
-	if (!Params->HasField(TEXT("asset_path")))
+	FString RawWidgetName;
+	if (!Params->TryGetStringField(TEXT("widget_name"), RawWidgetName))
 	{
-		OutErrors.Add(TEXT("Missing required field: asset_path"));
-		return false;
+		if (Params->TryGetStringField(TEXT("WidgetName"), RawWidgetName))
+		{
+			Params->SetStringField(TEXT("widget_name"), RawWidgetName);
+		}
 	}
 
-	FString AssetPath = Params->GetStringField(TEXT("asset_path"));
-	if (AssetPath.IsEmpty())
+	FString AssetPath;
+	if (!UAgentFrameworkActionUtils::TryGetStringParam(Params, TEXT("asset_path"), AssetPath, OutErrors, true))
 	{
-		OutErrors.Add(TEXT("asset_path cannot be empty. Provide a valid content path starting with /Game/, e.g. /Game/UI/WBP_MainMenu"));
 		return false;
 	}
 
@@ -169,77 +585,91 @@ bool FAgentFrameworkWidgetActions::ValidateParams(const TSharedRef<FJsonObject>&
 	}
 
 	FString ToolName;
-	Params->TryGetStringField(TEXT("_tool_name"), ToolName);
+	UAgentFrameworkActionUtils::TryGetStringParam(Params, TEXT("_tool_name"), ToolName, OutErrors, false);
 
 	if (ToolName == TEXT("add_widget"))
 	{
-		if (!Params->HasField(TEXT("widget_class")) || !Params->HasField(TEXT("widget_name")))
+		FString WidgetClass, WidgetName;
+		if (!UAgentFrameworkActionUtils::TryGetStringParam(Params, TEXT("widget_class"), WidgetClass, OutErrors, true) ||
+			!UAgentFrameworkActionUtils::TryGetStringParam(Params, TEXT("widget_name"), WidgetName, OutErrors, true))
 		{
-			OutErrors.Add(TEXT("Missing required field(s) for add_widget: widget_class, widget_name"));
 			return false;
 		}
 	}
-	else if (ToolName == TEXT("set_widget_slot"))
+	else if (ToolName == TEXT("set_widget_slot") || ToolName == TEXT("set_widget_slot_properties"))
 	{
-		if (!Params->HasField(TEXT("widget_name")) || !Params->HasField(TEXT("slot_properties")))
+		FString WidgetName;
+		if (!UAgentFrameworkActionUtils::TryGetStringParam(Params, TEXT("widget_name"), WidgetName, OutErrors, true))
 		{
-			OutErrors.Add(TEXT("Missing required field(s) for set_widget_slot: widget_name, slot_properties"));
 			return false;
 		}
 	}
 	else if (ToolName == TEXT("set_widget_property"))
 	{
-		if (!Params->HasField(TEXT("widget_name")) || !Params->HasField(TEXT("property_name")) || !Params->HasField(TEXT("property_value")))
+		FString WidgetName, PropertyName, PropertyValue;
+		if (!UAgentFrameworkActionUtils::TryGetStringParam(Params, TEXT("widget_name"), WidgetName, OutErrors, true) ||
+			!UAgentFrameworkActionUtils::TryGetStringParam(Params, TEXT("property_name"), PropertyName, OutErrors, true) ||
+			!UAgentFrameworkActionUtils::TryGetStringParam(Params, TEXT("property_value"), PropertyValue, OutErrors, true))
 		{
-			OutErrors.Add(TEXT("Missing required field(s) for set_widget_property: widget_name, property_name, property_value"));
 			return false;
 		}
 	}
 	else if (ToolName == TEXT("set_widget_font"))
 	{
-		if (!Params->HasField(TEXT("widget_name")) || !Params->HasField(TEXT("font_path")) || !Params->HasField(TEXT("size")))
+		FString WidgetName;
+		if (!UAgentFrameworkActionUtils::TryGetStringParam(Params, TEXT("widget_name"), WidgetName, OutErrors, true))
 		{
-			OutErrors.Add(TEXT("Missing required field(s) for set_widget_font: widget_name, font_path, size"));
 			return false;
 		}
 	}
 	else if (ToolName == TEXT("set_widget_brush"))
 	{
-		if (!Params->HasField(TEXT("widget_name")) || !Params->HasField(TEXT("texture_path")))
+		FString WidgetName;
+		if (!UAgentFrameworkActionUtils::TryGetStringParam(Params, TEXT("widget_name"), WidgetName, OutErrors, true))
 		{
-			OutErrors.Add(TEXT("Missing required field(s) for set_widget_brush: widget_name, texture_path"));
 			return false;
 		}
 	}
 	else if (ToolName == TEXT("bind_widget_event"))
 	{
-		if (!Params->HasField(TEXT("widget_name")) || !Params->HasField(TEXT("event_name")) || !Params->HasField(TEXT("function_name")))
+		FString WidgetName, EventName;
+		if (!UAgentFrameworkActionUtils::TryGetStringParam(Params, TEXT("widget_name"), WidgetName, OutErrors, true) ||
+			!UAgentFrameworkActionUtils::TryGetStringParam(Params, TEXT("event_name"), EventName, OutErrors, true))
 		{
-			OutErrors.Add(TEXT("Missing required field(s) for bind_widget_event: widget_name, event_name, function_name"));
 			return false;
 		}
 	}
 	else if (ToolName == TEXT("remove_widget"))
 	{
-		if (!Params->HasField(TEXT("widget_name")))
+		FString WidgetName;
+		if (!UAgentFrameworkActionUtils::TryGetStringParam(Params, TEXT("widget_name"), WidgetName, OutErrors, true))
 		{
-			OutErrors.Add(TEXT("Missing required field for remove_widget: widget_name"));
 			return false;
 		}
 	}
 	else if (ToolName == TEXT("macro_create_basic_ui_menu"))
 	{
-		if (!Params->HasField(TEXT("menu_title")) || !Params->HasField(TEXT("button_names")))
+		FString MenuTitle;
+		TArray<FString> ButtonNames;
+		if (!UAgentFrameworkActionUtils::TryGetStringParam(Params, TEXT("menu_title"), MenuTitle, OutErrors, true) ||
+			!UAgentFrameworkActionUtils::TryGetStringArrayParam(Params, TEXT("button_names"), ButtonNames, OutErrors, true))
 		{
-			OutErrors.Add(TEXT("Missing required field(s) for macro_create_basic_ui_menu: menu_title, button_names"));
 			return false;
 		}
 	}
 	else if (ToolName == TEXT("instantiate_ui_hierarchy"))
 	{
-		if (!Params->HasField(TEXT("widgets")))
+		const TArray<TSharedPtr<FJsonValue>>* WidgetsArray = nullptr;
+		if (!UAgentFrameworkActionUtils::TryGetArrayParam(Params, TEXT("widgets"), WidgetsArray, OutErrors, true))
 		{
-			OutErrors.Add(TEXT("Missing required field for instantiate_ui_hierarchy: widgets (must be a JSON array)"));
+			return false;
+		}
+	}
+	else if (ToolName == TEXT("get_widget_info") || ToolName == TEXT("clear_panel_children"))
+	{
+		FString WidgetName;
+		if (!UAgentFrameworkActionUtils::TryGetStringParam(Params, TEXT("widget_name"), WidgetName, OutErrors, true))
+		{
 			return false;
 		}
 	}
@@ -253,10 +683,13 @@ bool FAgentFrameworkWidgetActions::ValidateParams(const TSharedRef<FJsonObject>&
 
 FAgentFrameworkActionResult FAgentFrameworkWidgetActions::ExecuteAction(const TSharedRef<FJsonObject>& Params)
 {
-	FString ToolName;
-	Params->TryGetStringField(TEXT("_tool_name"), ToolName);
+	FAgentFrameworkActionResult Result;
+	Result.bSuccess = false;
 
-	bool bIsReadOnly = (ToolName == TEXT("get_widget_tree") || ToolName == TEXT("capture_widget"));
+	FString ToolName;
+	UAgentFrameworkActionUtils::TryGetStringParam(Params, TEXT("_tool_name"), ToolName, Result.Errors, false);
+
+	bool bIsReadOnly = (ToolName == TEXT("get_widget_tree") || ToolName == TEXT("capture_widget") || ToolName == TEXT("get_widget_info") || ToolName == TEXT("get_widget_slots"));
 
 	TOptional<FScopedTransaction> Transaction;
 	if (!bIsReadOnly)
@@ -264,12 +697,10 @@ FAgentFrameworkActionResult FAgentFrameworkWidgetActions::ExecuteAction(const TS
 		Transaction.Emplace(FText::FromString(TEXT("AgentFramework Widget Action")));
 	}
 
-	FAgentFrameworkActionResult Result;
-	Result.bSuccess = false;
-
 	if (ToolName == TEXT("create_widget_blueprint"))       Result = ExecuteCreateWidgetBlueprint(Params, Result);
 	else if (ToolName == TEXT("add_widget"))               Result = ExecuteAddWidget(Params, Result);
 	else if (ToolName == TEXT("set_widget_slot"))          Result = ExecuteSetWidgetSlot(Params, Result);
+	else if (ToolName == TEXT("set_widget_slot_properties")) Result = ExecuteSetWidgetSlotProperties(Params, Result);
 	else if (ToolName == TEXT("set_widget_property"))      Result = ExecuteSetWidgetProperty(Params, Result);
 	else if (ToolName == TEXT("set_widget_font"))          Result = ExecuteSetWidgetFont(Params, Result);
 	else if (ToolName == TEXT("set_widget_brush"))         Result = ExecuteSetWidgetBrush(Params, Result);
@@ -280,9 +711,12 @@ FAgentFrameworkActionResult FAgentFrameworkWidgetActions::ExecuteAction(const TS
 	else if (ToolName == TEXT("macro_create_basic_ui_menu")) Result = ExecuteMacroCreateBasicUIMenu(Params, Result);
 	else if (ToolName == TEXT("capture_widget"))           Result = ExecuteCaptureWidget(Params, Result);
 	else if (ToolName == TEXT("instantiate_ui_hierarchy")) Result = ExecuteInstantiateUIHierarchy(Params, Result);
+	else if (ToolName == TEXT("get_widget_info"))          Result = ExecuteGetWidgetInfo(Params, Result);
+	else if (ToolName == TEXT("clear_panel_children"))     Result = ExecuteClearPanelChildren(Params, Result);
+	else if (ToolName == TEXT("get_widget_slots"))        Result = ExecuteGetWidgetSlots(Params, Result);
 	else
 	{
-		Result.Errors.Add(FString::Printf(TEXT("Unknown Widget tool: '%s'. Supported: create_widget_blueprint, add_widget, set_widget_slot, set_widget_property, set_widget_font, set_widget_brush, bind_widget_event, remove_widget, get_widget_tree, compile_widget_blueprint, macro_create_basic_ui_menu, capture_widget, instantiate_ui_hierarchy"), *ToolName));
+		Result.Errors.Add(FString::Printf(TEXT("Unknown Widget tool: '%s'. Supported: create_widget_blueprint, add_widget, set_widget_slot, set_widget_slot_properties, set_widget_property, set_widget_font, set_widget_brush, bind_widget_event, remove_widget, get_widget_tree, compile_widget_blueprint, macro_create_basic_ui_menu, capture_widget, instantiate_ui_hierarchy, get_widget_info, clear_panel_children, get_widget_slots"), *ToolName));
 	}
 
 	if (Transaction.IsSet() && !Result.bSuccess)
@@ -337,9 +771,9 @@ UClass* FAgentFrameworkWidgetActions::ResolveWidgetClass(const FString& ClassNam
 	if (ClassName == TEXT("CircularThrobber"))  return UCircularThrobber::StaticClass();
 	if (ClassName == TEXT("ExpandableArea"))    return UExpandableArea::StaticClass();
 
-	// Reflection search â€” try with and without U prefix
+	// Reflection search — try with and without U prefix
 	UClass* Found = FindFirstObject<UClass>(*ClassName, EFindFirstObjectOptions::None);
-	if (!Found)
+	if (!IsValid(Found))
 		Found = FindFirstObject<UClass>(*(TEXT("U") + ClassName), EFindFirstObjectOptions::None);
 	return Found;
 }
@@ -347,7 +781,7 @@ UClass* FAgentFrameworkWidgetActions::ResolveWidgetClass(const FString& ClassNam
 UWidgetBlueprint* FAgentFrameworkWidgetActions::LoadWidgetBP(const FString& AssetPath, FAgentFrameworkActionResult& Result)
 {
 	UWidgetBlueprint* WidgetBP = LoadObject<UWidgetBlueprint>(nullptr, *AssetPath);
-	if (!WidgetBP)
+	if (!IsValid(WidgetBP))
 	{
 		Result.Errors.Add(FString::Printf(TEXT("Widget Blueprint not found: '%s'. Verify the asset exists and the path starts with /Game/."), *AssetPath));
 	}
@@ -356,14 +790,14 @@ UWidgetBlueprint* FAgentFrameworkWidgetActions::LoadWidgetBP(const FString& Asse
 
 UWidget* FAgentFrameworkWidgetActions::FindWidgetByName(UWidgetBlueprint* WidgetBP, const FString& WidgetName, FAgentFrameworkActionResult& Result)
 {
-	if (!WidgetBP->WidgetTree)
+	if (!IsValid(WidgetBP) || !IsValid(WidgetBP->WidgetTree))
 	{
-		Result.Errors.Add(TEXT("Widget Blueprint has no WidgetTree â€” recreate the asset."));
+		Result.Errors.Add(TEXT("Widget Blueprint is invalid or has no WidgetTree — recreate the asset."));
 		return nullptr;
 	}
 
 	UWidget* Widget = WidgetBP->WidgetTree->FindWidget(FName(*WidgetName));
-	if (!Widget)
+	if (!IsValid(Widget))
 	{
 		// Build helpful list of existing widget names
 		TArray<UWidget*> AllWidgets;
@@ -371,8 +805,11 @@ UWidget* FAgentFrameworkWidgetActions::FindWidgetByName(UWidgetBlueprint* Widget
 		FString AvailableNames;
 		for (UWidget* W : AllWidgets)
 		{
-			if (!AvailableNames.IsEmpty()) AvailableNames += TEXT(", ");
-			AvailableNames += W->GetName();
+			if (IsValid(W))
+			{
+				if (!AvailableNames.IsEmpty()) AvailableNames += TEXT(", ");
+				AvailableNames += W->GetName();
+			}
 		}
 		Result.Errors.Add(FString::Printf(TEXT("Widget '%s' not found. Available widgets: [%s]. Use get_widget_tree to see all widget names."), *WidgetName, *AvailableNames));
 	}
@@ -471,8 +908,12 @@ bool FAgentFrameworkWidgetActions::ParseLinearColor(const FString& Str, FLinearC
 
 void FAgentFrameworkWidgetActions::CompileAndMarkDirty(UWidgetBlueprint* WidgetBP)
 {
+	if (!IsValid(WidgetBP)) return;
 	FKismetEditorUtilities::CompileBlueprint(WidgetBP, EBlueprintCompileOptions::SkipGarbageCollection);
-	WidgetBP->GetOutermost()->MarkPackageDirty();
+	if (IsValid(WidgetBP->GetOutermost()))
+	{
+		WidgetBP->GetOutermost()->MarkPackageDirty();
+	}
 }
 
 // ============================================================================
@@ -481,17 +922,19 @@ void FAgentFrameworkWidgetActions::CompileAndMarkDirty(UWidgetBlueprint* WidgetB
 
 FString FAgentFrameworkWidgetActions::BuildWidgetTreeJson(UWidgetBlueprint* WidgetBlueprint)
 {
+	if (!IsValid(WidgetBlueprint)) return TEXT("{}");
+
 	TSharedPtr<FJsonObject> Root = MakeShared<FJsonObject>();
 	Root->SetStringField(TEXT("asset_path"), WidgetBlueprint->GetPathName());
-	Root->SetStringField(TEXT("parent_class"), WidgetBlueprint->ParentClass ? WidgetBlueprint->ParentClass->GetName() : TEXT("UserWidget"));
+	Root->SetStringField(TEXT("parent_class"), IsValid(WidgetBlueprint->ParentClass) ? WidgetBlueprint->ParentClass->GetName() : TEXT("UserWidget"));
 
 	TArray<TSharedPtr<FJsonValue>> WidgetsArray;
 
-	if (WidgetBlueprint->WidgetTree)
+	if (IsValid(WidgetBlueprint->WidgetTree))
 	{
 		WidgetBlueprint->WidgetTree->ForEachWidget([&](UWidget* Widget)
 		{
-			if (!Widget) return;
+			if (!IsValid(Widget)) return;
 			TSharedPtr<FJsonObject> WObj = MakeShared<FJsonObject>();
 			WObj->SetStringField(TEXT("name"), Widget->GetName());
 			WObj->SetStringField(TEXT("class"), Widget->GetClass()->GetName());
@@ -501,7 +944,7 @@ FString FAgentFrameworkWidgetActions::BuildWidgetTreeJson(UWidgetBlueprint* Widg
 
 			// Parent name
 			UPanelWidget* ParentPanel = Widget->GetParent();
-			if (ParentPanel)
+			if (IsValid(ParentPanel))
 			{
 				WObj->SetStringField(TEXT("parent"), ParentPanel->GetName());
 			}
@@ -512,7 +955,7 @@ FString FAgentFrameworkWidgetActions::BuildWidgetTreeJson(UWidgetBlueprint* Widg
 
 			// Is it a panel (can contain children)?
 			UPanelWidget* Panel = Cast<UPanelWidget>(Widget);
-			if (Panel)
+			if (IsValid(Panel))
 			{
 				WObj->SetBoolField(TEXT("is_panel"), true);
 				WObj->SetNumberField(TEXT("child_count"), Panel->GetChildrenCount());
@@ -523,7 +966,7 @@ FString FAgentFrameworkWidgetActions::BuildWidgetTreeJson(UWidgetBlueprint* Widg
 			}
 
 			// Slot type
-			if (Widget->Slot)
+			if (IsValid(Widget->Slot))
 			{
 				WObj->SetStringField(TEXT("slot_type"), Widget->Slot->GetClass()->GetName());
 			}
@@ -549,14 +992,12 @@ FString FAgentFrameworkWidgetActions::BuildWidgetTreeJson(UWidgetBlueprint* Widg
 
 FAgentFrameworkActionResult FAgentFrameworkWidgetActions::ExecuteCreateWidgetBlueprint(const TSharedRef<FJsonObject>& Params, FAgentFrameworkActionResult& Result)
 {
-	FString AssetPath = Params->GetStringField(TEXT("asset_path"));
-
-	// Validate asset_path early
-	if (AssetPath.IsEmpty())
+	FString AssetPath;
+	if (!UAgentFrameworkActionUtils::TryGetStringParam(Params, TEXT("asset_path"), AssetPath, Result.Errors, true))
 	{
-		Result.Errors.Add(TEXT("asset_path is empty. You MUST provide a valid content path starting with /Game/, e.g. /Game/UI/WBP_MainMenu."));
 		return Result;
 	}
+
 	if (!AssetPath.StartsWith(TEXT("/Game/")))
 	{
 		Result.Errors.Add(FString::Printf(TEXT("asset_path '%s' must start with /Game/. Example: /Game/UI/WBP_MainMenu"), *AssetPath));
@@ -564,10 +1005,10 @@ FAgentFrameworkActionResult FAgentFrameworkWidgetActions::ExecuteCreateWidgetBlu
 	}
 
 	FString RootWidgetClassName = TEXT("CanvasPanel");
-	Params->TryGetStringField(TEXT("root_widget_class"), RootWidgetClassName);
+	UAgentFrameworkActionUtils::TryGetStringParam(Params, TEXT("root_widget_class"), RootWidgetClassName, Result.Errors, false);
 
 	FString ParentClassName = TEXT("UserWidget");
-	Params->TryGetStringField(TEXT("parent_class"), ParentClassName);
+	UAgentFrameworkActionUtils::TryGetStringParam(Params, TEXT("parent_class"), ParentClassName, Result.Errors, false);
 
 	FString PackagePath = FPackageName::GetLongPackagePath(AssetPath);
 	FString AssetName   = FPackageName::GetShortName(AssetPath);
@@ -577,9 +1018,9 @@ FAgentFrameworkActionResult FAgentFrameworkWidgetActions::ExecuteCreateWidgetBlu
 	if (!ParentClassName.IsEmpty() && ParentClassName != TEXT("UserWidget"))
 	{
 		UClass* FoundClass = FindFirstObject<UClass>(*ParentClassName, EFindFirstObjectOptions::None);
-		if (!FoundClass)
+		if (!IsValid(FoundClass))
 			FoundClass = FindFirstObject<UClass>(*(TEXT("U") + ParentClassName), EFindFirstObjectOptions::None);
-		if (FoundClass && FoundClass->IsChildOf(UUserWidget::StaticClass()))
+		if (IsValid(FoundClass) && FoundClass->IsChildOf(UUserWidget::StaticClass()))
 		{
 			ParentClass = FoundClass;
 		}
@@ -597,22 +1038,22 @@ FAgentFrameworkActionResult FAgentFrameworkWidgetActions::ExecuteCreateWidgetBlu
 	UObject* NewAsset = AssetTools.CreateAsset(AssetName, PackagePath, UWidgetBlueprint::StaticClass(), Factory);
 	UWidgetBlueprint* NewWidget = Cast<UWidgetBlueprint>(NewAsset);
 
-	if (!NewWidget)
+	if (!IsValid(NewWidget))
 	{
 		Result.Errors.Add(FString::Printf(TEXT("Failed to create Widget Blueprint at '%s'. Verify the path is valid, starts with /Game/, and the directory exists. Example: /Game/UI/WBP_MainMenu"), *AssetPath));
 		return Result;
 	}
 
 	// Set the root widget
-	if (NewWidget->WidgetTree && !RootWidgetClassName.IsEmpty() && RootWidgetClassName != TEXT("none"))
+	if (IsValid(NewWidget->WidgetTree) && !RootWidgetClassName.IsEmpty() && RootWidgetClassName != TEXT("none"))
 	{
 		UClass* RootClass = ResolveWidgetClass(RootWidgetClassName);
-		if (RootClass)
+		if (IsValid(RootClass))
 		{
 			NewWidget->Modify();
 			NewWidget->WidgetTree->Modify();
 			UWidget* RootWidget = NewWidget->WidgetTree->ConstructWidget<UWidget>(RootClass, FName(*RootWidgetClassName));
-			if (RootWidget)
+			if (IsValid(RootWidget))
 			{
 				NewWidget->WidgetVariableNameToGuidMap.Add(RootWidget->GetFName(), FGuid::NewGuid());
 				NewWidget->WidgetTree->RootWidget = RootWidget;
@@ -621,7 +1062,7 @@ FAgentFrameworkActionResult FAgentFrameworkWidgetActions::ExecuteCreateWidgetBlu
 		}
 		else
 		{
-			Result.Warnings.Add(FString::Printf(TEXT("Root widget class '%s' not found â€” Widget Blueprint created without a root widget. Valid classes: CanvasPanel, VerticalBox, HorizontalBox, SizeBox, Overlay, GridPanel, ScrollBox, WrapBox."), *RootWidgetClassName));
+			Result.Warnings.Add(FString::Printf(TEXT("Root widget class '%s' not found — Widget Blueprint created without a root widget. Valid classes: CanvasPanel, VerticalBox, HorizontalBox, SizeBox, Overlay, GridPanel, ScrollBox, WrapBox."), *RootWidgetClassName));
 		}
 	}
 
@@ -630,13 +1071,16 @@ FAgentFrameworkActionResult FAgentFrameworkWidgetActions::ExecuteCreateWidgetBlu
 
 	// Save
 	UPackage* Package = NewWidget->GetOutermost();
-	Package->MarkPackageDirty();
-	FString PackageFilename;
-	if (FPackageName::TryConvertLongPackageNameToFilename(Package->GetName(), PackageFilename, FPackageName::GetAssetPackageExtension()))
+	if (IsValid(Package))
 	{
-		FSavePackageArgs SaveArgs;
-		SaveArgs.TopLevelFlags = RF_Standalone;
-		UPackage::SavePackage(Package, NewWidget, *PackageFilename, SaveArgs);
+		Package->MarkPackageDirty();
+		FString PackageFilename;
+		if (FPackageName::TryConvertLongPackageNameToFilename(Package->GetName(), PackageFilename, FPackageName::GetAssetPackageExtension()))
+		{
+			FSavePackageArgs SaveArgs;
+			SaveArgs.TopLevelFlags = RF_Standalone;
+			UPackage::SavePackage(Package, NewWidget, *PackageFilename, SaveArgs);
+		}
 	}
 
 	FAssetRegistryModule::AssetCreated(NewWidget);
@@ -653,16 +1097,17 @@ FAgentFrameworkActionResult FAgentFrameworkWidgetActions::ExecuteCreateWidgetBlu
 
 FAgentFrameworkActionResult FAgentFrameworkWidgetActions::ExecuteMacroCreateBasicUIMenu(const TSharedRef<FJsonObject>& Params, FAgentFrameworkActionResult& Result)
 {
-	FString AssetPath = Params->GetStringField(TEXT("asset_path"));
-	FString MenuTitle = Params->GetStringField(TEXT("menu_title"));
+	FString AssetPath, MenuTitle;
+	if (!UAgentFrameworkActionUtils::TryGetStringParam(Params, TEXT("asset_path"), AssetPath, Result.Errors, true) ||
+		!UAgentFrameworkActionUtils::TryGetStringParam(Params, TEXT("menu_title"), MenuTitle, Result.Errors, true))
+	{
+		return Result;
+	}
 
 	TArray<FString> ButtonNames;
-	if (Params->HasTypedField<EJson::Array>(TEXT("button_names")))
+	if (!UAgentFrameworkActionUtils::TryGetStringArrayParam(Params, TEXT("button_names"), ButtonNames, Result.Errors, true))
 	{
-		for (const TSharedPtr<FJsonValue>& Val : Params->GetArrayField(TEXT("button_names")))
-		{
-			ButtonNames.Add(Val->AsString());
-		}
+		return Result;
 	}
 
 	// 1. Create the base Widget Blueprint with a CanvasPanel root
@@ -680,13 +1125,13 @@ FAgentFrameworkActionResult FAgentFrameworkWidgetActions::ExecuteMacroCreateBasi
 
 	// 2. Load the newly created asset
 	UWidgetBlueprint* WidgetBP = LoadWidgetBP(AssetPath, Result);
-	if (!WidgetBP || !WidgetBP->WidgetTree) return Result;
+	if (!IsValid(WidgetBP) || !IsValid(WidgetBP->WidgetTree)) return Result;
 
 	WidgetBP->Modify();
 	WidgetBP->WidgetTree->Modify();
 
 	UCanvasPanel* RootCanvas = Cast<UCanvasPanel>(WidgetBP->WidgetTree->RootWidget);
-	if (!RootCanvas)
+	if (!IsValid(RootCanvas))
 	{
 		Result.Errors.Add(TEXT("Root widget is not a CanvasPanel."));
 		return Result;
@@ -694,12 +1139,12 @@ FAgentFrameworkActionResult FAgentFrameworkWidgetActions::ExecuteMacroCreateBasi
 
 	// 3. Create Vertical Box and add to Canvas
 	UVerticalBox* VBox = WidgetBP->WidgetTree->ConstructWidget<UVerticalBox>(UVerticalBox::StaticClass(), TEXT("MenuVerticalBox"));
-	if (VBox)
+	if (IsValid(VBox))
 	{
 		WidgetBP->WidgetVariableNameToGuidMap.Add(VBox->GetFName(), FGuid::NewGuid());
 	}
 	UCanvasPanelSlot* VBoxSlot = Cast<UCanvasPanelSlot>(RootCanvas->AddChild(VBox));
-	if (VBoxSlot)
+	if (IsValid(VBoxSlot))
 	{
 		FAnchors CenterAnchor(0.5f, 0.5f, 0.5f, 0.5f);
 		VBoxSlot->SetAnchors(CenterAnchor);
@@ -709,12 +1154,12 @@ FAgentFrameworkActionResult FAgentFrameworkWidgetActions::ExecuteMacroCreateBasi
 
 	// 4. Create Title Text
 	UTextBlock* TitleText = WidgetBP->WidgetTree->ConstructWidget<UTextBlock>(UTextBlock::StaticClass(), TEXT("TitleText"));
-	if (TitleText)
+	if (IsValid(TitleText))
 	{
 		WidgetBP->WidgetVariableNameToGuidMap.Add(TitleText->GetFName(), FGuid::NewGuid());
 		TitleText->SetText(FText::FromString(MenuTitle));
 		UVerticalBoxSlot* TitleSlot = Cast<UVerticalBoxSlot>(VBox->AddChild(TitleText));
-		if (TitleSlot)
+		if (IsValid(TitleSlot))
 		{
 			TitleSlot->SetHorizontalAlignment(HAlign_Center);
 			TitleSlot->SetPadding(FMargin(0, 0, 0, 40));
@@ -728,18 +1173,18 @@ FAgentFrameworkActionResult FAgentFrameworkWidgetActions::ExecuteMacroCreateBasi
 		BtnWidgetName.ReplaceInline(TEXT(" "), TEXT(""));
 
 		UButton* Btn = WidgetBP->WidgetTree->ConstructWidget<UButton>(UButton::StaticClass(), FName(*BtnWidgetName));
-		if (Btn)
+		if (IsValid(Btn))
 		{
 			WidgetBP->WidgetVariableNameToGuidMap.Add(Btn->GetFName(), FGuid::NewGuid());
 			UVerticalBoxSlot* BtnSlot = Cast<UVerticalBoxSlot>(VBox->AddChild(Btn));
-			if (BtnSlot)
+			if (IsValid(BtnSlot))
 			{
 				BtnSlot->SetPadding(FMargin(0, 0, 0, 10));
 				BtnSlot->SetSize(FSlateChildSize(ESlateSizeRule::Fill));
 			}
 
 			UTextBlock* BtnText = WidgetBP->WidgetTree->ConstructWidget<UTextBlock>(UTextBlock::StaticClass(), FName(*(BtnWidgetName + TEXT("Text"))));
-			if (BtnText)
+			if (IsValid(BtnText))
 			{
 				WidgetBP->WidgetVariableNameToGuidMap.Add(BtnText->GetFName(), FGuid::NewGuid());
 				BtnText->SetText(FText::FromString(BtnName));
@@ -754,17 +1199,20 @@ FAgentFrameworkActionResult FAgentFrameworkWidgetActions::ExecuteMacroCreateBasi
 				if (DelegateProp)
 				{
 					UK2Node_ComponentBoundEvent* EventNode = NewObject<UK2Node_ComponentBoundEvent>(EventGraph);
-					EventNode->DelegatePropertyName = DelegateProp->GetFName();
-					EventNode->DelegateOwnerClass = UButton::StaticClass();
-					EventNode->ComponentPropertyName = FName(*BtnWidgetName);
-					
-					EventNode->NodePosX = 0;
-					EventNode->NodePosY = 150 * ButtonNames.IndexOfByKey(BtnName); // space them out
-					
-					EventGraph->AddNode(EventNode, false, false);
-					EventNode->CreateNewGuid();
-					EventNode->PostPlacedNewNode();
-					EventNode->AllocateDefaultPins();
+					if (IsValid(EventNode))
+					{
+						EventNode->DelegatePropertyName = DelegateProp->GetFName();
+						EventNode->DelegateOwnerClass = UButton::StaticClass();
+						EventNode->ComponentPropertyName = FName(*BtnWidgetName);
+						
+						EventNode->NodePosX = 0;
+						EventNode->NodePosY = 150 * ButtonNames.IndexOfByKey(BtnName); // space them out
+						
+						EventGraph->AddNode(EventNode, false, false);
+						EventNode->CreateNewGuid();
+						EventNode->PostPlacedNewNode();
+						EventNode->AllocateDefaultPins();
+					}
 				}
 			}
 		}
@@ -784,21 +1232,25 @@ FAgentFrameworkActionResult FAgentFrameworkWidgetActions::ExecuteMacroCreateBasi
 
 FAgentFrameworkActionResult FAgentFrameworkWidgetActions::ExecuteAddWidget(const TSharedRef<FJsonObject>& Params, FAgentFrameworkActionResult& Result)
 {
-	FString AssetPath      = Params->GetStringField(TEXT("asset_path"));
-	FString WidgetClassName = Params->GetStringField(TEXT("widget_class"));
-	FString WidgetName     = Params->GetStringField(TEXT("widget_name"));
+	FString AssetPath, WidgetClassName, WidgetName;
+	if (!UAgentFrameworkActionUtils::TryGetStringParam(Params, TEXT("asset_path"), AssetPath, Result.Errors, true) ||
+		!UAgentFrameworkActionUtils::TryGetStringParam(Params, TEXT("widget_class"), WidgetClassName, Result.Errors, true) ||
+		!UAgentFrameworkActionUtils::TryGetStringParam(Params, TEXT("widget_name"), WidgetName, Result.Errors, true))
+	{
+		return Result;
+	}
 
 	UWidgetBlueprint* WidgetBP = LoadWidgetBP(AssetPath, Result);
-	if (!WidgetBP) return Result;
+	if (!IsValid(WidgetBP)) return Result;
 
-	if (!WidgetBP->WidgetTree)
+	if (!IsValid(WidgetBP->WidgetTree))
 	{
-		Result.Errors.Add(TEXT("Widget Blueprint has no WidgetTree â€” recreate the asset."));
+		Result.Errors.Add(TEXT("Widget Blueprint has no WidgetTree — recreate the asset."));
 		return Result;
 	}
 
 	UClass* WidgetClass = ResolveWidgetClass(WidgetClassName);
-	if (!WidgetClass)
+	if (!IsValid(WidgetClass))
 	{
 		Result.Errors.Add(FString::Printf(TEXT("Widget class not found: '%s'. Valid classes: CanvasPanel, VerticalBox, HorizontalBox, TextBlock, Button, Image, ScrollBox, SizeBox, Overlay, WidgetSwitcher, ProgressBar, Slider, CheckBox, EditableTextBox, MultiLineEditableTextBox, ComboBoxString, SpinBox, Spacer, Border, BackgroundBlur, WrapBox, ScaleBox, RichTextBlock, Throbber, CircularThrobber, ExpandableArea, GridPanel, UniformGridPanel"), *WidgetClassName));
 		return Result;
@@ -808,7 +1260,7 @@ FAgentFrameworkActionResult FAgentFrameworkWidgetActions::ExecuteAddWidget(const
 	WidgetBP->WidgetTree->Modify();
 
 	UWidget* NewWidget = WidgetBP->WidgetTree->ConstructWidget<UWidget>(WidgetClass, FName(*WidgetName));
-	if (!NewWidget)
+	if (!IsValid(NewWidget))
 	{
 		Result.Errors.Add(FString::Printf(TEXT("Failed to construct widget of class '%s'."), *WidgetClassName));
 		return Result;
@@ -819,27 +1271,27 @@ FAgentFrameworkActionResult FAgentFrameworkWidgetActions::ExecuteAddWidget(const
 	// Attach to parent panel if specified
 	FString ParentWidgetName;
 	bool bAddedToParent = false;
-	if (Params->TryGetStringField(TEXT("parent_widget"), ParentWidgetName) && !ParentWidgetName.IsEmpty())
+	if (UAgentFrameworkActionUtils::TryGetStringParam(Params, TEXT("parent_widget"), ParentWidgetName, Result.Errors, false) && !ParentWidgetName.IsEmpty())
 	{
 		UWidget* ParentWidgetRaw = WidgetBP->WidgetTree->FindWidget(FName(*ParentWidgetName));
 		UPanelWidget* ParentPanel = Cast<UPanelWidget>(ParentWidgetRaw);
-		if (ParentPanel)
+		if (IsValid(ParentPanel))
 		{
 			UPanelSlot* Slot = ParentPanel->AddChild(NewWidget);
 			bAddedToParent = true;
 
 			// Report the slot type so the AI knows what properties are available
-			if (Slot)
+			if (IsValid(Slot))
 			{
 				FString SlotType = Slot->GetClass()->GetName();
 				Result.Warnings.Add(FString::Printf(TEXT("Widget added to '%s'. Slot type: %s. Use set_widget_slot to configure layout (anchors, padding, alignment)."), *ParentWidgetName, *SlotType));
 			}
 		}
-		else if (ParentWidgetRaw)
+		else if (IsValid(ParentWidgetRaw))
 		{
-			// Check if it's a content widget (single child) â€” like Button, SizeBox, Border
+			// Check if it's a content widget (single child) — like Button, SizeBox, Border
 			UContentWidget* ContentParent = Cast<UContentWidget>(ParentWidgetRaw);
-			if (ContentParent)
+			if (IsValid(ContentParent))
 			{
 				if (ContentParent->GetChildrenCount() > 0)
 				{
@@ -861,50 +1313,60 @@ FAgentFrameworkActionResult FAgentFrameworkWidgetActions::ExecuteAddWidget(const
 	}
 
 	// If not added to a parent and no root exists, set as root
-	if (!bAddedToParent && !WidgetBP->WidgetTree->RootWidget)
+	if (!bAddedToParent && !IsValid(WidgetBP->WidgetTree->RootWidget))
 	{
 		WidgetBP->WidgetTree->RootWidget = NewWidget;
-		Result.Warnings.Add(FString::Printf(TEXT("No parent_widget specified and no root exists â€” '%s' set as root widget."), *WidgetName));
+		Result.Warnings.Add(FString::Printf(TEXT("No parent_widget specified and no root exists — '%s' set as root widget."), *WidgetName));
 	}
 	else if (!bAddedToParent)
 	{
 		// Try to attach to root if it's a panel
 		UPanelWidget* RootPanel = Cast<UPanelWidget>(WidgetBP->WidgetTree->RootWidget);
-		if (RootPanel)
+		if (IsValid(RootPanel))
 		{
 			RootPanel->AddChild(NewWidget);
-			Result.Warnings.Add(FString::Printf(TEXT("No parent_widget specified â€” attached '%s' to root panel '%s' by default. Use set_widget_slot to configure layout."), *WidgetName, *RootPanel->GetName()));
+			Result.Warnings.Add(FString::Printf(TEXT("No parent_widget specified — attached '%s' to root panel '%s' by default. Use set_widget_slot to configure layout."), *WidgetName, *RootPanel->GetName()));
 		}
 		else
 		{
-			Result.Warnings.Add(TEXT("Could not attach widget â€” specify parent_widget or set a panel as the root first."));
+			Result.Warnings.Add(TEXT("Could not attach widget — specify parent_widget or set a panel as the root first."));
 		}
 	}
 
 	CompileAndMarkDirty(WidgetBP);
 
 	Result.bSuccess = true;
-	Result.ResultMessage = FString::Printf(TEXT("Added widget '%s' (%s) to '%s'. IMPORTANT: If the parent is a CanvasPanel, you MUST call set_widget_slot to set anchors/position/size â€” otherwise the widget will be invisible (zero size at 0,0)."), *WidgetName, *WidgetClassName, *AssetPath);
+	Result.ResultMessage = FString::Printf(TEXT("Added widget '%s' (%s) to '%s'. IMPORTANT: If the parent is a CanvasPanel, you MUST call set_widget_slot to set anchors/position/size — otherwise the widget will be invisible (zero size at 0,0)."), *WidgetName, *WidgetClassName, *AssetPath);
 	Result.ModifiedAssets.Add(AssetPath);
 	return Result;
 }
 
 // ============================================================================
-// ExecuteSetWidgetSlot
 // ============================================================================
+// ExecuteSetWidgetSlot & ExecuteSetWidgetSlotProperties
+// ============================================================================
+
+FAgentFrameworkActionResult FAgentFrameworkWidgetActions::ExecuteSetWidgetSlotProperties(const TSharedRef<FJsonObject>& Params, FAgentFrameworkActionResult& Result)
+{
+	return ExecuteSetWidgetSlot(Params, Result);
+}
 
 FAgentFrameworkActionResult FAgentFrameworkWidgetActions::ExecuteSetWidgetSlot(const TSharedRef<FJsonObject>& Params, FAgentFrameworkActionResult& Result)
 {
-	FString AssetPath  = Params->GetStringField(TEXT("asset_path"));
-	FString WidgetName = Params->GetStringField(TEXT("widget_name"));
+	FString AssetPath, WidgetName;
+	if (!ResolveWidgetAssetPath(Params, AssetPath, Result.Errors) ||
+		!ResolveWidgetName(Params, WidgetName, Result.Errors))
+	{
+		return Result;
+	}
 
 	UWidgetBlueprint* WidgetBP = LoadWidgetBP(AssetPath, Result);
-	if (!WidgetBP) return Result;
+	if (!IsValid(WidgetBP)) return Result;
 
 	UWidget* Widget = FindWidgetByName(WidgetBP, WidgetName, Result);
-	if (!Widget) return Result;
+	if (!IsValid(Widget)) return Result;
 
-	if (!Widget->Slot)
+	if (!IsValid(Widget->Slot))
 	{
 		Result.Errors.Add(FString::Printf(TEXT("Widget '%s' has no slot. It may be the root widget (root widgets don't have slots) or not yet attached to a parent panel. Add it to a panel first via add_widget."), *WidgetName));
 		return Result;
@@ -913,318 +1375,13 @@ FAgentFrameworkActionResult FAgentFrameworkWidgetActions::ExecuteSetWidgetSlot(c
 	WidgetBP->Modify();
 	Widget->Slot->Modify();
 
-	FString AppliedSettings;
-
-	// ====== CanvasPanelSlot ======
-	UCanvasPanelSlot* CanvasSlot = Cast<UCanvasPanelSlot>(Widget->Slot);
-	if (CanvasSlot)
+	if (ApplyWidgetSlotHelper(WidgetBP, Widget, Params, Result))
 	{
-		FString AnchorsMinStr, AnchorsMaxStr, OffsetsStr, AlignmentStr;
-		bool bAutoSize = false;
-		int32 ZOrder = 0;
-
-		if (Params->TryGetStringField(TEXT("anchors_min"), AnchorsMinStr))
-		{
-			FVector2D AnchorMin;
-			if (ParseVector2D(AnchorsMinStr, AnchorMin))
-			{
-				FAnchors Anchors = CanvasSlot->GetAnchors();
-				Anchors.Minimum = AnchorMin;
-
-				// If max is also provided, set both together
-				if (Params->TryGetStringField(TEXT("anchors_max"), AnchorsMaxStr))
-				{
-					FVector2D AnchorMax;
-					if (ParseVector2D(AnchorsMaxStr, AnchorMax))
-					{
-						Anchors.Maximum = AnchorMax;
-					}
-				}
-				CanvasSlot->SetAnchors(Anchors);
-				AppliedSettings += FString::Printf(TEXT("anchors=(%.1f,%.1f)-(%.1f,%.1f) "), Anchors.Minimum.X, Anchors.Minimum.Y, Anchors.Maximum.X, Anchors.Maximum.Y);
-			}
-		}
-		else if (Params->TryGetStringField(TEXT("anchors_max"), AnchorsMaxStr))
-		{
-			FVector2D AnchorMax;
-			if (ParseVector2D(AnchorsMaxStr, AnchorMax))
-			{
-				FAnchors Anchors = CanvasSlot->GetAnchors();
-				Anchors.Maximum = AnchorMax;
-				CanvasSlot->SetAnchors(Anchors);
-				AppliedSettings += FString::Printf(TEXT("anchors_max=(%.1f,%.1f) "), AnchorMax.X, AnchorMax.Y);
-			}
-		}
-
-		if (Params->TryGetStringField(TEXT("offsets"), OffsetsStr))
-		{
-			FMargin Offsets;
-			if (ParseMargin(OffsetsStr, Offsets))
-			{
-				CanvasSlot->SetOffsets(Offsets);
-				AppliedSettings += FString::Printf(TEXT("offsets=(%.0f,%.0f,%.0f,%.0f) "), Offsets.Left, Offsets.Top, Offsets.Right, Offsets.Bottom);
-			}
-		}
-
-		if (Params->TryGetStringField(TEXT("alignment"), AlignmentStr))
-		{
-			FVector2D Alignment;
-			if (ParseVector2D(AlignmentStr, Alignment))
-			{
-				CanvasSlot->SetAlignment(Alignment);
-				AppliedSettings += FString::Printf(TEXT("alignment=(%.1f,%.1f) "), Alignment.X, Alignment.Y);
-			}
-		}
-
-		if (Params->TryGetBoolField(TEXT("auto_size"), bAutoSize))
-		{
-			CanvasSlot->SetAutoSize(bAutoSize);
-			AppliedSettings += FString::Printf(TEXT("auto_size=%s "), bAutoSize ? TEXT("true") : TEXT("false"));
-		}
-
-		if (Params->TryGetNumberField(TEXT("z_order"), ZOrder))
-		{
-			CanvasSlot->SetZOrder(ZOrder);
-			AppliedSettings += FString::Printf(TEXT("z_order=%d "), ZOrder);
-		}
+		CompileAndMarkDirty(WidgetBP);
+		Result.bSuccess = true;
+		Result.ModifiedAssets.Add(AssetPath);
 	}
 
-	// ====== VerticalBoxSlot ======
-	UVerticalBoxSlot* VBSlot = Cast<UVerticalBoxSlot>(Widget->Slot);
-	if (VBSlot)
-	{
-		FString PaddingStr, SizeRuleStr, HAlignStr, VAlignStr;
-
-		if (Params->TryGetStringField(TEXT("padding"), PaddingStr))
-		{
-			FMargin Padding;
-			if (ParseMargin(PaddingStr, Padding))
-			{
-				VBSlot->SetPadding(Padding);
-				AppliedSettings += FString::Printf(TEXT("padding=(%.0f,%.0f,%.0f,%.0f) "), Padding.Left, Padding.Top, Padding.Right, Padding.Bottom);
-			}
-		}
-
-		if (Params->TryGetStringField(TEXT("size_rule"), SizeRuleStr))
-		{
-			if (SizeRuleStr.Equals(TEXT("Fill"), ESearchCase::IgnoreCase))
-			{
-				VBSlot->SetSize(FSlateChildSize(ESlateSizeRule::Fill));
-				AppliedSettings += TEXT("size=Fill ");
-			}
-			else
-			{
-				VBSlot->SetSize(FSlateChildSize(ESlateSizeRule::Automatic));
-				AppliedSettings += TEXT("size=Auto ");
-			}
-		}
-
-		if (Params->TryGetStringField(TEXT("h_align"), HAlignStr))
-		{
-			VBSlot->SetHorizontalAlignment(ParseHAlign(HAlignStr));
-			AppliedSettings += FString::Printf(TEXT("h_align=%s "), *HAlignStr);
-		}
-
-		if (Params->TryGetStringField(TEXT("v_align"), VAlignStr))
-		{
-			VBSlot->SetVerticalAlignment(ParseVAlign(VAlignStr));
-			AppliedSettings += FString::Printf(TEXT("v_align=%s "), *VAlignStr);
-		}
-	}
-
-	// ====== HorizontalBoxSlot ======
-	UHorizontalBoxSlot* HBSlot = Cast<UHorizontalBoxSlot>(Widget->Slot);
-	if (HBSlot)
-	{
-		FString PaddingStr, SizeRuleStr, HAlignStr, VAlignStr;
-
-		if (Params->TryGetStringField(TEXT("padding"), PaddingStr))
-		{
-			FMargin Padding;
-			if (ParseMargin(PaddingStr, Padding))
-			{
-				HBSlot->SetPadding(Padding);
-				AppliedSettings += FString::Printf(TEXT("padding=(%.0f,%.0f,%.0f,%.0f) "), Padding.Left, Padding.Top, Padding.Right, Padding.Bottom);
-			}
-		}
-
-		if (Params->TryGetStringField(TEXT("size_rule"), SizeRuleStr))
-		{
-			if (SizeRuleStr.Equals(TEXT("Fill"), ESearchCase::IgnoreCase))
-			{
-				HBSlot->SetSize(FSlateChildSize(ESlateSizeRule::Fill));
-				AppliedSettings += TEXT("size=Fill ");
-			}
-			else
-			{
-				HBSlot->SetSize(FSlateChildSize(ESlateSizeRule::Automatic));
-				AppliedSettings += TEXT("size=Auto ");
-			}
-		}
-
-		if (Params->TryGetStringField(TEXT("h_align"), HAlignStr))
-		{
-			HBSlot->SetHorizontalAlignment(ParseHAlign(HAlignStr));
-			AppliedSettings += FString::Printf(TEXT("h_align=%s "), *HAlignStr);
-		}
-
-		if (Params->TryGetStringField(TEXT("v_align"), VAlignStr))
-		{
-			HBSlot->SetVerticalAlignment(ParseVAlign(VAlignStr));
-			AppliedSettings += FString::Printf(TEXT("v_align=%s "), *VAlignStr);
-		}
-	}
-
-	// ====== OverlaySlot ======
-	UOverlaySlot* OverlaySlotPtr = Cast<UOverlaySlot>(Widget->Slot);
-	if (OverlaySlotPtr)
-	{
-		FString PaddingStr, HAlignStr, VAlignStr;
-
-		if (Params->TryGetStringField(TEXT("padding"), PaddingStr))
-		{
-			FMargin Padding;
-			if (ParseMargin(PaddingStr, Padding))
-			{
-				OverlaySlotPtr->SetPadding(Padding);
-				AppliedSettings += FString::Printf(TEXT("padding=(%.0f,%.0f,%.0f,%.0f) "), Padding.Left, Padding.Top, Padding.Right, Padding.Bottom);
-			}
-		}
-
-		if (Params->TryGetStringField(TEXT("h_align"), HAlignStr))
-		{
-			OverlaySlotPtr->SetHorizontalAlignment(ParseHAlign(HAlignStr));
-			AppliedSettings += FString::Printf(TEXT("h_align=%s "), *HAlignStr);
-		}
-
-		if (Params->TryGetStringField(TEXT("v_align"), VAlignStr))
-		{
-			OverlaySlotPtr->SetVerticalAlignment(ParseVAlign(VAlignStr));
-			AppliedSettings += FString::Printf(TEXT("v_align=%s "), *VAlignStr);
-		}
-	}
-
-	// ====== GridSlot ======
-	UGridSlot* GridSlotPtr = Cast<UGridSlot>(Widget->Slot);
-	if (GridSlotPtr)
-	{
-		int32 Row = 0, Column = 0, RowSpan = 1, ColumnSpan = 1;
-		FString PaddingStr, HAlignStr, VAlignStr;
-
-		if (Params->TryGetNumberField(TEXT("row"), Row))
-		{
-			GridSlotPtr->SetRow(Row);
-			AppliedSettings += FString::Printf(TEXT("row=%d "), Row);
-		}
-		if (Params->TryGetNumberField(TEXT("column"), Column))
-		{
-			GridSlotPtr->SetColumn(Column);
-			AppliedSettings += FString::Printf(TEXT("column=%d "), Column);
-		}
-		if (Params->TryGetNumberField(TEXT("row_span"), RowSpan))
-		{
-			GridSlotPtr->SetRowSpan(RowSpan);
-			AppliedSettings += FString::Printf(TEXT("row_span=%d "), RowSpan);
-		}
-		if (Params->TryGetNumberField(TEXT("column_span"), ColumnSpan))
-		{
-			GridSlotPtr->SetColumnSpan(ColumnSpan);
-			AppliedSettings += FString::Printf(TEXT("column_span=%d "), ColumnSpan);
-		}
-
-		if (Params->TryGetStringField(TEXT("padding"), PaddingStr))
-		{
-			FMargin Padding;
-			if (ParseMargin(PaddingStr, Padding))
-			{
-				GridSlotPtr->SetPadding(Padding);
-				AppliedSettings += FString::Printf(TEXT("padding=(%.0f,%.0f,%.0f,%.0f) "), Padding.Left, Padding.Top, Padding.Right, Padding.Bottom);
-			}
-		}
-
-		if (Params->TryGetStringField(TEXT("h_align"), HAlignStr))
-		{
-			GridSlotPtr->SetHorizontalAlignment(ParseHAlign(HAlignStr));
-			AppliedSettings += FString::Printf(TEXT("h_align=%s "), *HAlignStr);
-		}
-		if (Params->TryGetStringField(TEXT("v_align"), VAlignStr))
-		{
-			GridSlotPtr->SetVerticalAlignment(ParseVAlign(VAlignStr));
-			AppliedSettings += FString::Printf(TEXT("v_align=%s "), *VAlignStr);
-		}
-	}
-
-	// ====== ScrollBoxSlot ======
-	UScrollBoxSlot* ScrollSlot = Cast<UScrollBoxSlot>(Widget->Slot);
-	if (ScrollSlot)
-	{
-		FString PaddingStr, SizeRuleStr, HAlignStr;
-
-		if (Params->TryGetStringField(TEXT("padding"), PaddingStr))
-		{
-			FMargin Padding;
-			if (ParseMargin(PaddingStr, Padding))
-			{
-				ScrollSlot->SetPadding(Padding);
-				AppliedSettings += FString::Printf(TEXT("padding=(%.0f,%.0f,%.0f,%.0f) "), Padding.Left, Padding.Top, Padding.Right, Padding.Bottom);
-			}
-		}
-
-		if (Params->TryGetStringField(TEXT("h_align"), HAlignStr))
-		{
-			ScrollSlot->SetHorizontalAlignment(ParseHAlign(HAlignStr));
-			AppliedSettings += FString::Printf(TEXT("h_align=%s "), *HAlignStr);
-		}
-	}
-
-	// ====== WrapBoxSlot ======
-	UWrapBoxSlot* WrapSlot = Cast<UWrapBoxSlot>(Widget->Slot);
-	if (WrapSlot)
-	{
-		FString PaddingStr, HAlignStr, VAlignStr;
-		bool bFillEmptySpace = false;
-
-		if (Params->TryGetStringField(TEXT("padding"), PaddingStr))
-		{
-			FMargin Padding;
-			if (ParseMargin(PaddingStr, Padding))
-			{
-				WrapSlot->SetPadding(Padding);
-				AppliedSettings += FString::Printf(TEXT("padding=(%.0f,%.0f,%.0f,%.0f) "), Padding.Left, Padding.Top, Padding.Right, Padding.Bottom);
-			}
-		}
-
-		if (Params->TryGetStringField(TEXT("h_align"), HAlignStr))
-		{
-			WrapSlot->SetHorizontalAlignment(ParseHAlign(HAlignStr));
-			AppliedSettings += FString::Printf(TEXT("h_align=%s "), *HAlignStr);
-		}
-
-		if (Params->TryGetStringField(TEXT("v_align"), VAlignStr))
-		{
-			WrapSlot->SetVerticalAlignment(ParseVAlign(VAlignStr));
-			AppliedSettings += FString::Printf(TEXT("v_align=%s "), *VAlignStr);
-		}
-
-		if (Params->TryGetBoolField(TEXT("fill_empty_space"), bFillEmptySpace))
-		{
-			WrapSlot->SetFillEmptySpace(bFillEmptySpace);
-			AppliedSettings += FString::Printf(TEXT("fill=%s "), bFillEmptySpace ? TEXT("true") : TEXT("false"));
-		}
-	}
-
-	if (AppliedSettings.IsEmpty())
-	{
-		FString SlotType = Widget->Slot ? Widget->Slot->GetClass()->GetName() : TEXT("unknown");
-		Result.Errors.Add(FString::Printf(TEXT("No slot properties were applied. Widget '%s' has slot type '%s'. Check that you're providing the correct properties for this slot type."), *WidgetName, *SlotType));
-		return Result;
-	}
-
-	CompileAndMarkDirty(WidgetBP);
-
-	Result.bSuccess = true;
-	Result.ResultMessage = FString::Printf(TEXT("Configured slot on '%s': %s"), *WidgetName, *AppliedSettings.TrimEnd());
-	Result.ModifiedAssets.Add(AssetPath);
 	return Result;
 }
 
@@ -1234,16 +1391,20 @@ FAgentFrameworkActionResult FAgentFrameworkWidgetActions::ExecuteSetWidgetSlot(c
 
 FAgentFrameworkActionResult FAgentFrameworkWidgetActions::ExecuteSetWidgetProperty(const TSharedRef<FJsonObject>& Params, FAgentFrameworkActionResult& Result)
 {
-	FString AssetPath     = Params->GetStringField(TEXT("asset_path"));
-	FString WidgetName    = Params->GetStringField(TEXT("widget_name"));
-	FString PropertyName  = Params->GetStringField(TEXT("property_name"));
-	FString PropertyValue = Params->GetStringField(TEXT("property_value"));
+	FString AssetPath, WidgetName, PropertyName, PropertyValue;
+	if (!UAgentFrameworkActionUtils::TryGetStringParam(Params, TEXT("asset_path"), AssetPath, Result.Errors, true) ||
+		!UAgentFrameworkActionUtils::TryGetStringParam(Params, TEXT("widget_name"), WidgetName, Result.Errors, true) ||
+		!UAgentFrameworkActionUtils::TryGetStringParam(Params, TEXT("property_name"), PropertyName, Result.Errors, true) ||
+		!UAgentFrameworkActionUtils::TryGetStringParam(Params, TEXT("property_value"), PropertyValue, Result.Errors, true))
+	{
+		return Result;
+	}
 
 	UWidgetBlueprint* WidgetBP = LoadWidgetBP(AssetPath, Result);
-	if (!WidgetBP) return Result;
+	if (!IsValid(WidgetBP)) return Result;
 
 	UWidget* TargetWidget = FindWidgetByName(WidgetBP, WidgetName, Result);
-	if (!TargetWidget) return Result;
+	if (!IsValid(TargetWidget)) return Result;
 
 	WidgetBP->Modify();
 
@@ -1263,14 +1424,18 @@ FAgentFrameworkActionResult FAgentFrameworkWidgetActions::ExecuteSetWidgetProper
 
 FAgentFrameworkActionResult FAgentFrameworkWidgetActions::ExecuteSetWidgetFont(const TSharedRef<FJsonObject>& Params, FAgentFrameworkActionResult& Result)
 {
-	FString AssetPath  = Params->GetStringField(TEXT("asset_path"));
-	FString WidgetName = Params->GetStringField(TEXT("widget_name"));
+	FString AssetPath, WidgetName;
+	if (!UAgentFrameworkActionUtils::TryGetStringParam(Params, TEXT("asset_path"), AssetPath, Result.Errors, true) ||
+		!UAgentFrameworkActionUtils::TryGetStringParam(Params, TEXT("widget_name"), WidgetName, Result.Errors, true))
+	{
+		return Result;
+	}
 
 	UWidgetBlueprint* WidgetBP = LoadWidgetBP(AssetPath, Result);
-	if (!WidgetBP) return Result;
+	if (!IsValid(WidgetBP)) return Result;
 
 	UWidget* Widget = FindWidgetByName(WidgetBP, WidgetName, Result);
-	if (!Widget) return Result;
+	if (!IsValid(Widget)) return Result;
 
 	WidgetBP->Modify();
 	Widget->Modify();
@@ -1281,7 +1446,7 @@ FAgentFrameworkActionResult FAgentFrameworkWidgetActions::ExecuteSetWidgetFont(c
 
 		FSlateFontInfo FontInfo;
 		UTextBlock* TextBlock = Cast<UTextBlock>(Widget);
-		if (TextBlock)
+		if (IsValid(TextBlock))
 		{
 			FontInfo = TextBlock->GetFont();
 		}
@@ -1298,10 +1463,9 @@ FAgentFrameworkActionResult FAgentFrameworkWidgetActions::ExecuteSetWidgetFont(c
 			}
 		}
 
-		FString FontFamily;
-		Params->TryGetStringField(TEXT("font_family"), FontFamily);
-		FString Typeface;
-		Params->TryGetStringField(TEXT("typeface"), Typeface);
+		FString FontFamily, Typeface;
+		UAgentFrameworkActionUtils::TryGetStringParam(Params, TEXT("font_family"), FontFamily, Result.Errors, false);
+		UAgentFrameworkActionUtils::TryGetStringParam(Params, TEXT("typeface"), Typeface, Result.Errors, false);
 
 		Result.bSuccess = true;
 		Result.ResultMessage = FString::Printf(TEXT("Set font on '%s': size=%d%s%s."),
@@ -1319,14 +1483,18 @@ FAgentFrameworkActionResult FAgentFrameworkWidgetActions::ExecuteSetWidgetFont(c
 
 FAgentFrameworkActionResult FAgentFrameworkWidgetActions::ExecuteSetWidgetBrush(const TSharedRef<FJsonObject>& Params, FAgentFrameworkActionResult& Result)
 {
-	FString AssetPath   = Params->GetStringField(TEXT("asset_path"));
-	FString WidgetName  = Params->GetStringField(TEXT("widget_name"));
+	FString AssetPath, WidgetName;
+	if (!UAgentFrameworkActionUtils::TryGetStringParam(Params, TEXT("asset_path"), AssetPath, Result.Errors, true) ||
+		!UAgentFrameworkActionUtils::TryGetStringParam(Params, TEXT("widget_name"), WidgetName, Result.Errors, true))
+	{
+		return Result;
+	}
 
 	UWidgetBlueprint* WidgetBP = LoadWidgetBP(AssetPath, Result);
-	if (!WidgetBP) return Result;
+	if (!IsValid(WidgetBP)) return Result;
 
 	UWidget* Widget = FindWidgetByName(WidgetBP, WidgetName, Result);
-	if (!Widget) return Result;
+	if (!IsValid(Widget)) return Result;
 
 	WidgetBP->Modify();
 	Widget->Modify();
@@ -1336,9 +1504,9 @@ FAgentFrameworkActionResult FAgentFrameworkWidgetActions::ExecuteSetWidgetBrush(
 		CompileAndMarkDirty(WidgetBP);
 
 		FString BrushTarget = TEXT("Brush");
-		Params->TryGetStringField(TEXT("brush_target"), BrushTarget);
+		UAgentFrameworkActionUtils::TryGetStringParam(Params, TEXT("brush_target"), BrushTarget, Result.Errors, false);
 		FString TexturePath;
-		Params->TryGetStringField(TEXT("texture_path"), TexturePath);
+		UAgentFrameworkActionUtils::TryGetStringParam(Params, TEXT("texture_path"), TexturePath, Result.Errors, false);
 
 		Result.bSuccess = true;
 		Result.ResultMessage = FString::Printf(TEXT("Set brush '%s' on '%s' in '%s'.%s"),
@@ -1355,15 +1523,19 @@ FAgentFrameworkActionResult FAgentFrameworkWidgetActions::ExecuteSetWidgetBrush(
 
 FAgentFrameworkActionResult FAgentFrameworkWidgetActions::ExecuteBindWidgetEvent(const TSharedRef<FJsonObject>& Params, FAgentFrameworkActionResult& Result)
 {
-	FString AssetPath  = Params->GetStringField(TEXT("asset_path"));
-	FString WidgetName = Params->GetStringField(TEXT("widget_name"));
-	FString EventName  = Params->GetStringField(TEXT("event_name"));
+	FString AssetPath, WidgetName, EventName;
+	if (!UAgentFrameworkActionUtils::TryGetStringParam(Params, TEXT("asset_path"), AssetPath, Result.Errors, true) ||
+		!UAgentFrameworkActionUtils::TryGetStringParam(Params, TEXT("widget_name"), WidgetName, Result.Errors, true) ||
+		!UAgentFrameworkActionUtils::TryGetStringParam(Params, TEXT("event_name"), EventName, Result.Errors, true))
+	{
+		return Result;
+	}
 
 	UWidgetBlueprint* WidgetBP = LoadWidgetBP(AssetPath, Result);
-	if (!WidgetBP) return Result;
+	if (!IsValid(WidgetBP)) return Result;
 
 	UWidget* Widget = FindWidgetByName(WidgetBP, WidgetName, Result);
-	if (!Widget) return Result;
+	if (!IsValid(Widget)) return Result;
 
 	WidgetBP->Modify();
 
@@ -1376,22 +1548,22 @@ FAgentFrameworkActionResult FAgentFrameworkWidgetActions::ExecuteBindWidgetEvent
 		UEdGraph* EventGraph = nullptr;
 		for (UEdGraph* Graph : WidgetBP->UbergraphPages)
 		{
-			if (Graph->GetFName() == UEdGraphSchema_K2::GN_EventGraph)
+			if (IsValid(Graph) && Graph->GetFName() == UEdGraphSchema_K2::GN_EventGraph)
 			{
 				EventGraph = Graph;
 				break;
 			}
 		}
-		if (!EventGraph && WidgetBP->UbergraphPages.Num() > 0)
+		if (!IsValid(EventGraph) && WidgetBP->UbergraphPages.Num() > 0)
 		{
 			EventGraph = WidgetBP->UbergraphPages[0];
 		}
-		if (EventGraph)
+		if (IsValid(EventGraph))
 		{
 			for (UEdGraphNode* Node : EventGraph->Nodes)
 			{
 				UK2Node_ComponentBoundEvent* BoundNode = Cast<UK2Node_ComponentBoundEvent>(Node);
-				if (BoundNode && BoundNode->ComponentPropertyName == FName(*WidgetName) && BoundNode->DelegatePropertyName == FName(*EventName))
+				if (IsValid(BoundNode) && BoundNode->ComponentPropertyName == FName(*WidgetName) && BoundNode->DelegatePropertyName == FName(*EventName))
 				{
 					NodeName = BoundNode->GetName();
 					NodePosX = BoundNode->NodePosX;
@@ -1415,30 +1587,37 @@ FAgentFrameworkActionResult FAgentFrameworkWidgetActions::ExecuteBindWidgetEvent
 
 FAgentFrameworkActionResult FAgentFrameworkWidgetActions::ExecuteRemoveWidget(const TSharedRef<FJsonObject>& Params, FAgentFrameworkActionResult& Result)
 {
-	FString AssetPath  = Params->GetStringField(TEXT("asset_path"));
-	FString WidgetName = Params->GetStringField(TEXT("widget_name"));
+	FString AssetPath, WidgetName;
+	if (!UAgentFrameworkActionUtils::TryGetStringParam(Params, TEXT("asset_path"), AssetPath, Result.Errors, true) ||
+		!UAgentFrameworkActionUtils::TryGetStringParam(Params, TEXT("widget_name"), WidgetName, Result.Errors, true))
+	{
+		return Result;
+	}
 
 	UWidgetBlueprint* WidgetBP = LoadWidgetBP(AssetPath, Result);
-	if (!WidgetBP) return Result;
+	if (!IsValid(WidgetBP)) return Result;
 
 	UWidget* Widget = FindWidgetByName(WidgetBP, WidgetName, Result);
-	if (!Widget) return Result;
+	if (!IsValid(Widget)) return Result;
 
 	WidgetBP->Modify();
-	WidgetBP->WidgetTree->Modify();
+	if (IsValid(WidgetBP->WidgetTree))
+	{
+		WidgetBP->WidgetTree->Modify();
+	}
 
-	bool bWasRoot = (Widget == WidgetBP->WidgetTree->RootWidget);
+	bool bWasRoot = (IsValid(WidgetBP->WidgetTree) && Widget == WidgetBP->WidgetTree->RootWidget);
 
 	// If the widget has a parent panel, remove from it
 	UPanelWidget* Parent = Widget->GetParent();
-	if (Parent)
+	if (IsValid(Parent))
 	{
 		Parent->Modify();
 		Parent->RemoveChild(Widget);
 	}
 
 	// If it was the root, clear the root
-	if (bWasRoot)
+	if (bWasRoot && IsValid(WidgetBP->WidgetTree))
 	{
 		WidgetBP->WidgetTree->RootWidget = nullptr;
 		Result.Warnings.Add(TEXT("Removed the root widget. The widget tree is now empty. Use add_widget to add a new root."));
@@ -1448,7 +1627,7 @@ FAgentFrameworkActionResult FAgentFrameworkWidgetActions::ExecuteRemoveWidget(co
 
 	Result.bSuccess = true;
 	Result.ResultMessage = FString::Printf(TEXT("Removed widget '%s' from '%s'.%s"), *WidgetName, *AssetPath,
-		bWasRoot ? TEXT(" (was root â€” tree is now empty)") : TEXT(""));
+		bWasRoot ? TEXT(" (was root — tree is now empty)") : TEXT(""));
 	Result.ModifiedAssets.Add(AssetPath);
 	return Result;
 }
@@ -1459,10 +1638,14 @@ FAgentFrameworkActionResult FAgentFrameworkWidgetActions::ExecuteRemoveWidget(co
 
 FAgentFrameworkActionResult FAgentFrameworkWidgetActions::ExecuteGetWidgetTree(const TSharedRef<FJsonObject>& Params, FAgentFrameworkActionResult& Result)
 {
-	FString AssetPath = Params->GetStringField(TEXT("asset_path"));
+	FString AssetPath;
+	if (!UAgentFrameworkActionUtils::TryGetStringParam(Params, TEXT("asset_path"), AssetPath, Result.Errors, true))
+	{
+		return Result;
+	}
 
 	UWidgetBlueprint* WidgetBP = LoadWidgetBP(AssetPath, Result);
-	if (!WidgetBP) return Result;
+	if (!IsValid(WidgetBP)) return Result;
 
 	FString Json = BuildWidgetTreeJson(WidgetBP);
 	Result.bSuccess = true;
@@ -1476,10 +1659,14 @@ FAgentFrameworkActionResult FAgentFrameworkWidgetActions::ExecuteGetWidgetTree(c
 
 FAgentFrameworkActionResult FAgentFrameworkWidgetActions::ExecuteCompileWidgetBlueprint(const TSharedRef<FJsonObject>& Params, FAgentFrameworkActionResult& Result)
 {
-	FString AssetPath = Params->GetStringField(TEXT("asset_path"));
+	FString AssetPath;
+	if (!UAgentFrameworkActionUtils::TryGetStringParam(Params, TEXT("asset_path"), AssetPath, Result.Errors, true))
+	{
+		return Result;
+	}
 
 	UWidgetBlueprint* WidgetBP = LoadWidgetBP(AssetPath, Result);
-	if (!WidgetBP) return Result;
+	if (!IsValid(WidgetBP)) return Result;
 
 	FCompilerResultsLog Log;
 	FKismetEditorUtilities::CompileBlueprint(WidgetBP, EBlueprintCompileOptions::None, &Log);
@@ -1498,12 +1685,12 @@ FAgentFrameworkActionResult FAgentFrameworkWidgetActions::ExecuteCompileWidgetBl
 	// Add widget tree summary to the result
 	int32 WidgetCount = 0;
 	FString RootName = TEXT("(none)");
-	if (WidgetBP->WidgetTree)
+	if (IsValid(WidgetBP->WidgetTree))
 	{
 		TArray<UWidget*> AllWidgets;
 		WidgetBP->WidgetTree->GetAllWidgets(AllWidgets);
 		WidgetCount = AllWidgets.Num();
-		if (WidgetBP->WidgetTree->RootWidget)
+		if (IsValid(WidgetBP->WidgetTree->RootWidget))
 		{
 			RootName = FString::Printf(TEXT("%s (%s)"), *WidgetBP->WidgetTree->RootWidget->GetName(), *WidgetBP->WidgetTree->RootWidget->GetClass()->GetName());
 		}
@@ -1523,27 +1710,31 @@ FAgentFrameworkActionResult FAgentFrameworkWidgetActions::ExecuteCompileWidgetBl
 
 FAgentFrameworkActionResult FAgentFrameworkWidgetActions::ExecuteCaptureWidget(const TSharedRef<FJsonObject>& Params, FAgentFrameworkActionResult& Result)
 {
-	FString AssetPath = Params->GetStringField(TEXT("asset_path"));
+	FString AssetPath;
+	if (!UAgentFrameworkActionUtils::TryGetStringParam(Params, TEXT("asset_path"), AssetPath, Result.Errors, true))
+	{
+		return Result;
+	}
 
 	UWidgetBlueprint* WidgetBP = LoadWidgetBP(AssetPath, Result);
-	if (!WidgetBP) return Result;
+	if (!IsValid(WidgetBP)) return Result;
 
 	UClass* WidgetClass = WidgetBP->GeneratedClass;
-	if (!WidgetClass)
+	if (!IsValid(WidgetClass))
 	{
 		Result.Errors.Add(TEXT("Widget Blueprint has no GeneratedClass. Try compiling it first."));
 		return Result;
 	}
 
 	UWorld* World = GEditor ? GEditor->GetEditorWorldContext().World() : nullptr;
-	if (!World)
+	if (!IsValid(World))
 	{
 		Result.Errors.Add(TEXT("Could not find a valid World context to spawn the widget."));
 		return Result;
 	}
 
 	UUserWidget* CreatedWidget = CreateWidget<UUserWidget>(World, WidgetClass);
-	if (!CreatedWidget)
+	if (!IsValid(CreatedWidget))
 	{
 		Result.Errors.Add(TEXT("Failed to create temporary widget instance."));
 		return Result;
@@ -1559,7 +1750,7 @@ FAgentFrameworkActionResult FAgentFrameworkWidgetActions::ExecuteCaptureWidget(c
 	FVector2D RenderSize = DesiredSize;
 
 	FString RenderSizeStr;
-	if (Params->TryGetStringField(TEXT("render_size"), RenderSizeStr))
+	if (UAgentFrameworkActionUtils::TryGetStringParam(Params, TEXT("render_size"), RenderSizeStr, Result.Errors, false) && !RenderSizeStr.IsEmpty())
 	{
 		if (!ParseVector2D(RenderSizeStr, RenderSize))
 		{
@@ -1570,7 +1761,7 @@ FAgentFrameworkActionResult FAgentFrameworkWidgetActions::ExecuteCaptureWidget(c
 	else if (RenderSize.X <= 0 || RenderSize.Y <= 0)
 	{
 		FString ResolutionStr = TEXT("1920,1080");
-		Params->TryGetStringField(TEXT("resolution"), ResolutionStr);
+		UAgentFrameworkActionUtils::TryGetStringParam(Params, TEXT("resolution"), ResolutionStr, Result.Errors, false);
 		if (!ParseVector2D(ResolutionStr, RenderSize))
 		{
 			RenderSize = FVector2D(1920, 1080);
@@ -1581,6 +1772,11 @@ FAgentFrameworkActionResult FAgentFrameworkWidgetActions::ExecuteCaptureWidget(c
 	int32 Height = FMath::Max(1, FMath::RoundToInt(RenderSize.Y));
 
 	UTextureRenderTarget2D* RenderTarget = NewObject<UTextureRenderTarget2D>();
+	if (!IsValid(RenderTarget))
+	{
+		Result.Errors.Add(TEXT("Failed to create RenderTarget for widget capture."));
+		return Result;
+	}
 	RenderTarget->InitCustomFormat(Width, Height, PF_B8G8R8A8, false);
 
 	FWidgetRenderer* WidgetRenderer = new FWidgetRenderer(true);
@@ -1606,10 +1802,10 @@ FAgentFrameworkActionResult FAgentFrameworkWidgetActions::ExecuteCaptureWidget(c
 	delete WidgetRenderer;
 
 	int32 MaxDimension = 512;
-	Params->TryGetNumberField(TEXT("max_dimension"), MaxDimension);
+	UAgentFrameworkActionUtils::TryGetIntParam(Params, TEXT("max_dimension"), MaxDimension, Result.Errors, false);
 
 	int32 Quality = 75;
-	Params->TryGetNumberField(TEXT("quality"), Quality);
+	UAgentFrameworkActionUtils::TryGetIntParam(Params, TEXT("quality"), Quality, Result.Errors, false);
 
 	FString FilePath = FAgentFrameworkViewportActions::SavePixelsToDisk(Pixels, Width, Height, MaxDimension, Quality);
 	if (FilePath.IsEmpty())
@@ -1634,7 +1830,7 @@ FAgentFrameworkActionResult FAgentFrameworkWidgetActions::ExecuteCaptureWidget(c
 
 bool FAgentFrameworkWidgetActions::ApplyWidgetPropertyHelper(UWidgetBlueprint* WidgetBP, UWidget* TargetWidget, const FString& PropertyName, const FString& PropertyValue, FAgentFrameworkActionResult& Result)
 {
-	if (!WidgetBP || !TargetWidget) return false;
+	if (!IsValid(WidgetBP) || !IsValid(TargetWidget)) return false;
 
 	FString WidgetName = TargetWidget->GetName();
 
@@ -1642,7 +1838,7 @@ bool FAgentFrameworkWidgetActions::ApplyWidgetPropertyHelper(UWidgetBlueprint* W
 	if (PropertyName == TEXT("Text"))
 	{
 		UTextBlock* TextBlock = Cast<UTextBlock>(TargetWidget);
-		if (TextBlock)
+		if (IsValid(TextBlock))
 		{
 			TextBlock->Modify();
 			TextBlock->SetText(FText::FromString(PropertyValue));
@@ -1651,7 +1847,7 @@ bool FAgentFrameworkWidgetActions::ApplyWidgetPropertyHelper(UWidgetBlueprint* W
 
 		// Also handle EditableTextBox Text
 		UEditableTextBox* EditBox = Cast<UEditableTextBox>(TargetWidget);
-		if (EditBox)
+		if (IsValid(EditBox))
 		{
 			EditBox->Modify();
 			EditBox->SetText(FText::FromString(PropertyValue));
@@ -1663,7 +1859,7 @@ bool FAgentFrameworkWidgetActions::ApplyWidgetPropertyHelper(UWidgetBlueprint* W
 	if (PropertyName == TEXT("HintText"))
 	{
 		UEditableTextBox* EditBox = Cast<UEditableTextBox>(TargetWidget);
-		if (EditBox)
+		if (IsValid(EditBox))
 		{
 			EditBox->Modify();
 			EditBox->SetHintText(FText::FromString(PropertyValue));
@@ -1690,7 +1886,7 @@ bool FAgentFrameworkWidgetActions::ApplyWidgetPropertyHelper(UWidgetBlueprint* W
 
 bool FAgentFrameworkWidgetActions::ApplyWidgetFontHelper(UWidgetBlueprint* WidgetBP, UWidget* Widget, const TSharedPtr<FJsonObject>& FontParams, FAgentFrameworkActionResult& Result)
 {
-	if (!WidgetBP || !Widget || !FontParams.IsValid()) return false;
+	if (!IsValid(WidgetBP) || !IsValid(Widget) || !FontParams.IsValid()) return false;
 
 	FString WidgetName = Widget->GetName();
 
@@ -1698,7 +1894,7 @@ bool FAgentFrameworkWidgetActions::ApplyWidgetFontHelper(UWidgetBlueprint* Widge
 	FSlateFontInfo FontInfo;
 
 	UTextBlock* TextBlock = Cast<UTextBlock>(Widget);
-	if (TextBlock)
+	if (IsValid(TextBlock))
 	{
 		FontInfo = TextBlock->GetFont();
 	}
@@ -1723,12 +1919,12 @@ bool FAgentFrameworkWidgetActions::ApplyWidgetFontHelper(UWidgetBlueprint* Widge
 
 	// Apply font family
 	FString FontFamily;
-	if (FontParams->TryGetStringField(TEXT("font_family"), FontFamily) && !FontFamily.IsEmpty())
+	if (UAgentFrameworkActionUtils::TryGetStringParam(FontParams, TEXT("font_family"), FontFamily, Result.Errors, false) && !FontFamily.IsEmpty())
 	{
 		if (FontFamily.Equals(TEXT("Roboto"), ESearchCase::IgnoreCase))
 		{
 			UObject* FontObj = LoadObject<UFont>(nullptr, TEXT("/Engine/EngineFonts/Roboto.Roboto"));
-			if (FontObj)
+			if (IsValid(FontObj))
 			{
 				FontInfo.FontObject = FontObj;
 			}
@@ -1736,7 +1932,7 @@ bool FAgentFrameworkWidgetActions::ApplyWidgetFontHelper(UWidgetBlueprint* Widge
 		else if (FontFamily.Equals(TEXT("DroidSansMono"), ESearchCase::IgnoreCase))
 		{
 			UObject* FontObj = LoadObject<UFont>(nullptr, TEXT("/Engine/EngineFonts/DroidSansMono.DroidSansMono"));
-			if (FontObj)
+			if (IsValid(FontObj))
 			{
 				FontInfo.FontObject = FontObj;
 			}
@@ -1744,7 +1940,7 @@ bool FAgentFrameworkWidgetActions::ApplyWidgetFontHelper(UWidgetBlueprint* Widge
 		else if (FontFamily.StartsWith(TEXT("/Game/")) || FontFamily.StartsWith(TEXT("/Engine/")))
 		{
 			UObject* FontObj = LoadObject<UFont>(nullptr, *FontFamily);
-			if (FontObj)
+			if (IsValid(FontObj))
 			{
 				FontInfo.FontObject = FontObj;
 			}
@@ -1757,20 +1953,20 @@ bool FAgentFrameworkWidgetActions::ApplyWidgetFontHelper(UWidgetBlueprint* Widge
 
 	// Apply font size
 	int32 FontSize = 12;
-	if (FontParams->TryGetNumberField(TEXT("font_size"), FontSize))
+	if (UAgentFrameworkActionUtils::TryGetIntParam(FontParams, TEXT("font_size"), FontSize, Result.Errors, false))
 	{
 		FontInfo.Size = FontSize;
 	}
 
 	// Apply typeface
 	FString Typeface;
-	if (FontParams->TryGetStringField(TEXT("typeface"), Typeface) && !Typeface.IsEmpty())
+	if (UAgentFrameworkActionUtils::TryGetStringParam(FontParams, TEXT("typeface"), Typeface, Result.Errors, false) && !Typeface.IsEmpty())
 	{
 		FontInfo.TypefaceFontName = FName(*Typeface);
 	}
 
 	// Set the font back on the widget
-	if (TextBlock)
+	if (IsValid(TextBlock))
 	{
 		TextBlock->SetFont(FontInfo);
 	}
@@ -1789,7 +1985,7 @@ bool FAgentFrameworkWidgetActions::ApplyWidgetFontHelper(UWidgetBlueprint* Widge
 
 	// Apply color (TextBlock only)
 	FString ColorStr;
-	if (TextBlock && FontParams->TryGetStringField(TEXT("color"), ColorStr))
+	if (IsValid(TextBlock) && UAgentFrameworkActionUtils::TryGetStringParam(FontParams, TEXT("color"), ColorStr, Result.Errors, false))
 	{
 		FLinearColor Color;
 		if (ParseLinearColor(ColorStr, Color))
@@ -1800,7 +1996,7 @@ bool FAgentFrameworkWidgetActions::ApplyWidgetFontHelper(UWidgetBlueprint* Widge
 
 	// Apply shadow
 	FString ShadowOffsetStr;
-	if (TextBlock && FontParams->TryGetStringField(TEXT("shadow_offset"), ShadowOffsetStr))
+	if (IsValid(TextBlock) && UAgentFrameworkActionUtils::TryGetStringParam(FontParams, TEXT("shadow_offset"), ShadowOffsetStr, Result.Errors, false))
 	{
 		FVector2D ShadowOffset;
 		if (ParseVector2D(ShadowOffsetStr, ShadowOffset))
@@ -1810,7 +2006,7 @@ bool FAgentFrameworkWidgetActions::ApplyWidgetFontHelper(UWidgetBlueprint* Widge
 	}
 
 	FString ShadowColorStr;
-	if (TextBlock && FontParams->TryGetStringField(TEXT("shadow_color"), ShadowColorStr))
+	if (IsValid(TextBlock) && UAgentFrameworkActionUtils::TryGetStringParam(FontParams, TEXT("shadow_color"), ShadowColorStr, Result.Errors, false))
 	{
 		FLinearColor ShadowColor;
 		if (ParseLinearColor(ShadowColorStr, ShadowColor))
@@ -1824,22 +2020,22 @@ bool FAgentFrameworkWidgetActions::ApplyWidgetFontHelper(UWidgetBlueprint* Widge
 
 bool FAgentFrameworkWidgetActions::ApplyWidgetBrushHelper(UWidgetBlueprint* WidgetBP, UWidget* Widget, const TSharedPtr<FJsonObject>& BrushParams, FAgentFrameworkActionResult& Result)
 {
-	if (!WidgetBP || !Widget || !BrushParams.IsValid()) return false;
+	if (!IsValid(WidgetBP) || !IsValid(Widget) || !BrushParams.IsValid()) return false;
 
 	FString WidgetName = Widget->GetName();
 
 	FString BrushTarget = TEXT("Brush");
-	BrushParams->TryGetStringField(TEXT("brush_target"), BrushTarget);
+	UAgentFrameworkActionUtils::TryGetStringParam(BrushParams, TEXT("brush_target"), BrushTarget, Result.Errors, false);
 
 	// Build the brush
 	FSlateBrush NewBrush;
 
 	// Load texture if provided
 	FString TexturePath;
-	if (BrushParams->TryGetStringField(TEXT("texture_path"), TexturePath) && !TexturePath.IsEmpty())
+	if (UAgentFrameworkActionUtils::TryGetStringParam(BrushParams, TEXT("texture_path"), TexturePath, Result.Errors, false) && !TexturePath.IsEmpty())
 	{
 		UTexture2D* Texture = LoadObject<UTexture2D>(nullptr, *TexturePath);
-		if (Texture)
+		if (IsValid(Texture))
 		{
 			NewBrush.SetResourceObject(Texture);
 		}
@@ -1851,7 +2047,7 @@ bool FAgentFrameworkWidgetActions::ApplyWidgetBrushHelper(UWidgetBlueprint* Widg
 
 	// Set tint color
 	FString TintColorStr;
-	if (BrushParams->TryGetStringField(TEXT("tint_color"), TintColorStr))
+	if (UAgentFrameworkActionUtils::TryGetStringParam(BrushParams, TEXT("tint_color"), TintColorStr, Result.Errors, false))
 	{
 		FLinearColor TintColor;
 		if (ParseLinearColor(TintColorStr, TintColor))
@@ -1862,7 +2058,7 @@ bool FAgentFrameworkWidgetActions::ApplyWidgetBrushHelper(UWidgetBlueprint* Widg
 
 	// Set image size
 	FString ImageSizeStr;
-	if (BrushParams->TryGetStringField(TEXT("image_size"), ImageSizeStr))
+	if (UAgentFrameworkActionUtils::TryGetStringParam(BrushParams, TEXT("image_size"), ImageSizeStr, Result.Errors, false))
 	{
 		FVector2D ImageSize;
 		FString Clean = ImageSizeStr;
@@ -1878,7 +2074,7 @@ bool FAgentFrameworkWidgetActions::ApplyWidgetBrushHelper(UWidgetBlueprint* Widg
 
 	// Set draw type
 	FString DrawAsStr;
-	if (BrushParams->TryGetStringField(TEXT("draw_as"), DrawAsStr))
+	if (UAgentFrameworkActionUtils::TryGetStringParam(BrushParams, TEXT("draw_as"), DrawAsStr, Result.Errors, false))
 	{
 		if (DrawAsStr.Equals(TEXT("Box"), ESearchCase::IgnoreCase))
 			NewBrush.DrawAs = ESlateBrushDrawType::Box;
@@ -1892,7 +2088,7 @@ bool FAgentFrameworkWidgetActions::ApplyWidgetBrushHelper(UWidgetBlueprint* Widg
 
 	// Set 9-slice margin
 	FString MarginStr;
-	if (BrushParams->TryGetStringField(TEXT("margin"), MarginStr))
+	if (UAgentFrameworkActionUtils::TryGetStringParam(BrushParams, TEXT("margin"), MarginStr, Result.Errors, false))
 	{
 		FMargin BrushMargin;
 		if (ParseMargin(MarginStr, BrushMargin))
@@ -1906,7 +2102,7 @@ bool FAgentFrameworkWidgetActions::ApplyWidgetBrushHelper(UWidgetBlueprint* Widg
 
 	// === Image widget ===
 	UImage* ImageWidget = Cast<UImage>(Widget);
-	if (ImageWidget && BrushTarget.Equals(TEXT("Brush"), ESearchCase::IgnoreCase))
+	if (IsValid(ImageWidget) && BrushTarget.Equals(TEXT("Brush"), ESearchCase::IgnoreCase))
 	{
 		ImageWidget->SetBrush(NewBrush);
 		bApplied = true;
@@ -1914,7 +2110,7 @@ bool FAgentFrameworkWidgetActions::ApplyWidgetBrushHelper(UWidgetBlueprint* Widg
 
 	// === Button widget ===
 	UButton* ButtonWidget = Cast<UButton>(Widget);
-	if (ButtonWidget)
+	if (IsValid(ButtonWidget))
 	{
 		FButtonStyle ButtonStyle = ButtonWidget->GetStyle();
 		
@@ -1947,7 +2143,7 @@ bool FAgentFrameworkWidgetActions::ApplyWidgetBrushHelper(UWidgetBlueprint* Widg
 
 	// === Border widget ===
 	UBorder* BorderWidget = Cast<UBorder>(Widget);
-	if (BorderWidget && BrushTarget.Equals(TEXT("Background"), ESearchCase::IgnoreCase))
+	if (IsValid(BorderWidget) && BrushTarget.Equals(TEXT("Background"), ESearchCase::IgnoreCase))
 	{
 		BorderWidget->SetBrush(NewBrush);
 		bApplied = true;
@@ -1955,7 +2151,7 @@ bool FAgentFrameworkWidgetActions::ApplyWidgetBrushHelper(UWidgetBlueprint* Widg
 
 	// === ProgressBar widget ===
 	UProgressBar* PBWidget = Cast<UProgressBar>(Widget);
-	if (PBWidget && BrushTarget.Equals(TEXT("FillImage"), ESearchCase::IgnoreCase))
+	if (IsValid(PBWidget) && BrushTarget.Equals(TEXT("FillImage"), ESearchCase::IgnoreCase))
 	{
 		FProgressBarStyle PBStyle = PBWidget->GetWidgetStyle();
 		PBStyle.FillImage = NewBrush;
@@ -1989,7 +2185,7 @@ bool FAgentFrameworkWidgetActions::ApplyWidgetBrushHelper(UWidgetBlueprint* Widg
 
 bool FAgentFrameworkWidgetActions::ApplyWidgetEventHelper(UWidgetBlueprint* WidgetBP, UWidget* Widget, const FString& EventName, const FString& FunctionName, FAgentFrameworkActionResult& Result)
 {
-	if (!WidgetBP || !Widget) return false;
+	if (!IsValid(WidgetBP) || !IsValid(Widget)) return false;
 
 	FString WidgetName = Widget->GetName();
 
@@ -2015,19 +2211,19 @@ bool FAgentFrameworkWidgetActions::ApplyWidgetEventHelper(UWidgetBlueprint* Widg
 	UEdGraph* EventGraph = nullptr;
 	for (UEdGraph* Graph : WidgetBP->UbergraphPages)
 	{
-		if (Graph->GetFName() == UEdGraphSchema_K2::GN_EventGraph)
+		if (IsValid(Graph) && Graph->GetFName() == UEdGraphSchema_K2::GN_EventGraph)
 		{
 			EventGraph = Graph;
 			break;
 		}
 	}
 
-	if (!EventGraph && WidgetBP->UbergraphPages.Num() > 0)
+	if (!IsValid(EventGraph) && WidgetBP->UbergraphPages.Num() > 0)
 	{
 		EventGraph = WidgetBP->UbergraphPages[0];
 	}
 
-	if (!EventGraph)
+	if (!IsValid(EventGraph))
 	{
 		Result.Errors.Add(TEXT("Widget Blueprint has no EventGraph. This is unexpected — try recompiling the Widget Blueprint first."));
 		return false;
@@ -2037,6 +2233,12 @@ bool FAgentFrameworkWidgetActions::ApplyWidgetEventHelper(UWidgetBlueprint* Widg
 
 	// Create a K2Node_ComponentBoundEvent
 	UK2Node_ComponentBoundEvent* EventNode = NewObject<UK2Node_ComponentBoundEvent>(EventGraph);
+	if (!IsValid(EventNode))
+	{
+		Result.Errors.Add(TEXT("Failed to create K2Node_ComponentBoundEvent node."));
+		return false;
+	}
+
 	EventNode->DelegatePropertyName = DelegateProp->GetFName();
 	EventNode->DelegateOwnerClass = Widget->GetClass();
 	EventNode->ComponentPropertyName = FName(*WidgetName);
@@ -2045,7 +2247,7 @@ bool FAgentFrameworkWidgetActions::ApplyWidgetEventHelper(UWidgetBlueprint* Widg
 	int32 MaxY = 0;
 	for (UEdGraphNode* Node : EventGraph->Nodes)
 	{
-		if (Node)
+		if (IsValid(Node))
 		{
 			MaxY = FMath::Max(MaxY, Node->NodePosY + 200);
 		}
@@ -2053,7 +2255,7 @@ bool FAgentFrameworkWidgetActions::ApplyWidgetEventHelper(UWidgetBlueprint* Widg
 	EventNode->NodePosX = 0;
 	EventNode->NodePosY = MaxY + 100;
 
-	EventGraph->AddNode(EventNode, false, false);
+EventGraph->AddNode(EventNode, false, false);
 	EventNode->CreateNewGuid();
 	EventNode->PostPlacedNewNode();
 	EventNode->AllocateDefaultPins();
@@ -2065,11 +2267,11 @@ bool FAgentFrameworkWidgetActions::ApplyWidgetEventHelper(UWidgetBlueprint* Widg
 
 bool FAgentFrameworkWidgetActions::ApplyWidgetSlotHelper(UWidgetBlueprint* WidgetBP, UWidget* Widget, const TSharedPtr<FJsonObject>& SlotParams, FAgentFrameworkActionResult& Result)
 {
-	if (!WidgetBP || !Widget || !SlotParams.IsValid()) return false;
+	if (!IsValid(WidgetBP) || !IsValid(Widget) || !SlotParams.IsValid()) return false;
 
 	FString WidgetName = Widget->GetName();
 
-	if (!Widget->Slot)
+	if (!IsValid(Widget->Slot))
 	{
 		Result.Errors.Add(FString::Printf(TEXT("Widget '%s' has no slot. It may be the root widget (root widgets don't have slots) or not yet attached to a parent panel. Add it to a panel first via add_widget."), *WidgetName));
 		return false;
@@ -2077,75 +2279,43 @@ bool FAgentFrameworkWidgetActions::ApplyWidgetSlotHelper(UWidgetBlueprint* Widge
 
 	Widget->Slot->Modify();
 
+	TSharedPtr<FJsonObject> EffectiveParams = GetEffectiveSlotParams(SlotParams);
 	FString AppliedSettings;
 
 	// ====== CanvasPanelSlot ======
 	UCanvasPanelSlot* CanvasSlot = Cast<UCanvasPanelSlot>(Widget->Slot);
-	if (CanvasSlot)
+	if (IsValid(CanvasSlot))
 	{
-		FString AnchorsMinStr, AnchorsMaxStr, OffsetsStr, AlignmentStr;
+		FAnchors Anchors;
+		if (TryGetAnchors(EffectiveParams, Anchors))
+		{
+			CanvasSlot->SetAnchors(Anchors);
+			AppliedSettings += FString::Printf(TEXT("anchors=(%.1f,%.1f)-(%.1f,%.1f) "), Anchors.Minimum.X, Anchors.Minimum.Y, Anchors.Maximum.X, Anchors.Maximum.Y);
+		}
+
+		FMargin Offsets;
+		if (TryGetMargin(EffectiveParams, TEXT("offsets"), TEXT("Offsets"), Offsets))
+		{
+			CanvasSlot->SetOffsets(Offsets);
+			AppliedSettings += FString::Printf(TEXT("offsets=(%.0f,%.0f,%.0f,%.0f) "), Offsets.Left, Offsets.Top, Offsets.Right, Offsets.Bottom);
+		}
+
+		FVector2D Alignment;
+		if (TryGetAlignment(EffectiveParams, Alignment))
+		{
+			CanvasSlot->SetAlignment(Alignment);
+			AppliedSettings += FString::Printf(TEXT("alignment=(%.1f,%.1f) "), Alignment.X, Alignment.Y);
+		}
+
 		bool bAutoSize = false;
-		int32 ZOrder = 0;
-
-		if (SlotParams->TryGetStringField(TEXT("anchors_min"), AnchorsMinStr))
-		{
-			FVector2D AnchorMin;
-			if (ParseVector2D(AnchorsMinStr, AnchorMin))
-			{
-				FAnchors Anchors = CanvasSlot->GetAnchors();
-				Anchors.Minimum = AnchorMin;
-
-				if (SlotParams->TryGetStringField(TEXT("anchors_max"), AnchorsMaxStr))
-				{
-					FVector2D AnchorMax;
-					if (ParseVector2D(AnchorsMaxStr, AnchorMax))
-					{
-						Anchors.Maximum = AnchorMax;
-					}
-				}
-				CanvasSlot->SetAnchors(Anchors);
-				AppliedSettings += FString::Printf(TEXT("anchors=(%.1f,%.1f)-(%.1f,%.1f) "), Anchors.Minimum.X, Anchors.Minimum.Y, Anchors.Maximum.X, Anchors.Maximum.Y);
-			}
-		}
-		else if (SlotParams->TryGetStringField(TEXT("anchors_max"), AnchorsMaxStr))
-		{
-			FVector2D AnchorMax;
-			if (ParseVector2D(AnchorsMaxStr, AnchorMax))
-			{
-				FAnchors Anchors = CanvasSlot->GetAnchors();
-				Anchors.Maximum = AnchorMax;
-				CanvasSlot->SetAnchors(Anchors);
-				AppliedSettings += FString::Printf(TEXT("anchors_max=(%.1f,%.1f) "), AnchorMax.X, AnchorMax.Y);
-			}
-		}
-
-		if (SlotParams->TryGetStringField(TEXT("offsets"), OffsetsStr))
-		{
-			FMargin Offsets;
-			if (ParseMargin(OffsetsStr, Offsets))
-			{
-				CanvasSlot->SetOffsets(Offsets);
-				AppliedSettings += FString::Printf(TEXT("offsets=(%.0f,%.0f,%.0f,%.0f) "), Offsets.Left, Offsets.Top, Offsets.Right, Offsets.Bottom);
-			}
-		}
-
-		if (SlotParams->TryGetStringField(TEXT("alignment"), AlignmentStr))
-		{
-			FVector2D Alignment;
-			if (ParseVector2D(AlignmentStr, Alignment))
-			{
-				CanvasSlot->SetAlignment(Alignment);
-				AppliedSettings += FString::Printf(TEXT("alignment=(%.1f,%.1f) "), Alignment.X, Alignment.Y);
-			}
-		}
-
-		if (SlotParams->TryGetBoolField(TEXT("auto_size"), bAutoSize))
+		if (TryGetBoolValue(EffectiveParams, TEXT("auto_size"), TEXT("AutoSize"), TEXT("bAutoSize"), bAutoSize))
 		{
 			CanvasSlot->SetAutoSize(bAutoSize);
 			AppliedSettings += FString::Printf(TEXT("auto_size=%s "), bAutoSize ? TEXT("true") : TEXT("false"));
 		}
 
-		if (SlotParams->TryGetNumberField(TEXT("z_order"), ZOrder))
+		int32 ZOrder = 0;
+		if (TryGetIntValue(EffectiveParams, TEXT("z_order"), TEXT("ZOrder"), TEXT("zorder"), ZOrder))
 		{
 			CanvasSlot->SetZOrder(ZOrder);
 			AppliedSettings += FString::Printf(TEXT("z_order=%d "), ZOrder);
@@ -2154,255 +2324,438 @@ bool FAgentFrameworkWidgetActions::ApplyWidgetSlotHelper(UWidgetBlueprint* Widge
 
 	// ====== VerticalBoxSlot ======
 	UVerticalBoxSlot* VBSlot = Cast<UVerticalBoxSlot>(Widget->Slot);
-	if (VBSlot)
+	if (IsValid(VBSlot))
 	{
-		FString PaddingStr, SizeRuleStr, HAlignStr, VAlignStr;
-
-		if (SlotParams->TryGetStringField(TEXT("padding"), PaddingStr))
+		FMargin Padding;
+		if (TryGetMargin(EffectiveParams, TEXT("padding"), TEXT("Padding"), Padding))
 		{
-			FMargin Padding;
-			if (ParseMargin(PaddingStr, Padding))
-			{
-				VBSlot->SetPadding(Padding);
-				AppliedSettings += FString::Printf(TEXT("padding=(%.0f,%.0f,%.0f,%.0f) "), Padding.Left, Padding.Top, Padding.Right, Padding.Bottom);
-			}
+			VBSlot->SetPadding(Padding);
+			AppliedSettings += FString::Printf(TEXT("padding=(%.0f,%.0f,%.0f,%.0f) "), Padding.Left, Padding.Top, Padding.Right, Padding.Bottom);
 		}
 
-		if (SlotParams->TryGetStringField(TEXT("size_rule"), SizeRuleStr))
+		FString SizeRuleStr;
+		ESlateSizeRule::Type SizeRule;
+		if (TryGetSizeRule(EffectiveParams, SizeRuleStr, SizeRule))
 		{
-			if (SizeRuleStr.Equals(TEXT("Fill"), ESearchCase::IgnoreCase))
-			{
-				VBSlot->SetSize(FSlateChildSize(ESlateSizeRule::Fill));
-				AppliedSettings += TEXT("size=Fill ");
-			}
-			else
-			{
-				VBSlot->SetSize(FSlateChildSize(ESlateSizeRule::Automatic));
-				AppliedSettings += TEXT("size=Auto ");
-			}
+			VBSlot->SetSize(FSlateChildSize(SizeRule));
+			AppliedSettings += FString::Printf(TEXT("size=%s "), SizeRule == ESlateSizeRule::Fill ? TEXT("Fill") : TEXT("Auto"));
 		}
 
-		if (SlotParams->TryGetStringField(TEXT("h_align"), HAlignStr))
+		FString HAlignStr;
+		EHorizontalAlignment HAlign;
+		if (TryGetHAlign(EffectiveParams, HAlignStr, HAlign))
 		{
-			VBSlot->SetHorizontalAlignment(ParseHAlign(HAlignStr));
+			VBSlot->SetHorizontalAlignment(HAlign);
 			AppliedSettings += FString::Printf(TEXT("h_align=%s "), *HAlignStr);
 		}
 
-		if (SlotParams->TryGetStringField(TEXT("v_align"), VAlignStr))
+		FString VAlignStr;
+		EVerticalAlignment VAlign;
+		if (TryGetVAlign(EffectiveParams, VAlignStr, VAlign))
 		{
-			VBSlot->SetVerticalAlignment(ParseVAlign(VAlignStr));
+			VBSlot->SetVerticalAlignment(VAlign);
 			AppliedSettings += FString::Printf(TEXT("v_align=%s "), *VAlignStr);
 		}
 	}
 
 	// ====== HorizontalBoxSlot ======
 	UHorizontalBoxSlot* HBSlot = Cast<UHorizontalBoxSlot>(Widget->Slot);
-	if (HBSlot)
+	if (IsValid(HBSlot))
 	{
-		FString PaddingStr, SizeRuleStr, HAlignStr, VAlignStr;
-
-		if (SlotParams->TryGetStringField(TEXT("padding"), PaddingStr))
+		FMargin Padding;
+		if (TryGetMargin(EffectiveParams, TEXT("padding"), TEXT("Padding"), Padding))
 		{
-			FMargin Padding;
-			if (ParseMargin(PaddingStr, Padding))
-			{
-				HBSlot->SetPadding(Padding);
-				AppliedSettings += FString::Printf(TEXT("padding=(%.0f,%.0f,%.0f,%.0f) "), Padding.Left, Padding.Top, Padding.Right, Padding.Bottom);
-			}
+			HBSlot->SetPadding(Padding);
+			AppliedSettings += FString::Printf(TEXT("padding=(%.0f,%.0f,%.0f,%.0f) "), Padding.Left, Padding.Top, Padding.Right, Padding.Bottom);
 		}
 
-		if (SlotParams->TryGetStringField(TEXT("size_rule"), SizeRuleStr))
+		FString SizeRuleStr;
+		ESlateSizeRule::Type SizeRule;
+		if (TryGetSizeRule(EffectiveParams, SizeRuleStr, SizeRule))
 		{
-			if (SizeRuleStr.Equals(TEXT("Fill"), ESearchCase::IgnoreCase))
-			{
-				HBSlot->SetSize(FSlateChildSize(ESlateSizeRule::Fill));
-				AppliedSettings += TEXT("size=Fill ");
-			}
-			else
-			{
-				HBSlot->SetSize(FSlateChildSize(ESlateSizeRule::Automatic));
-				AppliedSettings += TEXT("size=Auto ");
-			}
+			HBSlot->SetSize(FSlateChildSize(SizeRule));
+			AppliedSettings += FString::Printf(TEXT("size=%s "), SizeRule == ESlateSizeRule::Fill ? TEXT("Fill") : TEXT("Auto"));
 		}
 
-		if (SlotParams->TryGetStringField(TEXT("h_align"), HAlignStr))
+		FString HAlignStr;
+		EHorizontalAlignment HAlign;
+		if (TryGetHAlign(EffectiveParams, HAlignStr, HAlign))
 		{
-			HBSlot->SetHorizontalAlignment(ParseHAlign(HAlignStr));
+			HBSlot->SetHorizontalAlignment(HAlign);
 			AppliedSettings += FString::Printf(TEXT("h_align=%s "), *HAlignStr);
 		}
 
-		if (SlotParams->TryGetStringField(TEXT("v_align"), VAlignStr))
+		FString VAlignStr;
+		EVerticalAlignment VAlign;
+		if (TryGetVAlign(EffectiveParams, VAlignStr, VAlign))
 		{
-			HBSlot->SetVerticalAlignment(ParseVAlign(VAlignStr));
+			HBSlot->SetVerticalAlignment(VAlign);
 			AppliedSettings += FString::Printf(TEXT("v_align=%s "), *VAlignStr);
 		}
 	}
 
 	// ====== OverlaySlot ======
 	UOverlaySlot* OverlaySlotPtr = Cast<UOverlaySlot>(Widget->Slot);
-	if (OverlaySlotPtr)
+	if (IsValid(OverlaySlotPtr))
 	{
-		FString PaddingStr, HAlignStr, VAlignStr;
-
-		if (SlotParams->TryGetStringField(TEXT("padding"), PaddingStr))
+		FMargin Padding;
+		if (TryGetMargin(EffectiveParams, TEXT("padding"), TEXT("Padding"), Padding))
 		{
-			FMargin Padding;
-			if (ParseMargin(PaddingStr, Padding))
-			{
-				OverlaySlotPtr->SetPadding(Padding);
-				AppliedSettings += FString::Printf(TEXT("padding=(%.0f,%.0f,%.0f,%.0f) "), Padding.Left, Padding.Top, Padding.Right, Padding.Bottom);
-			}
+			OverlaySlotPtr->SetPadding(Padding);
+			AppliedSettings += FString::Printf(TEXT("padding=(%.0f,%.0f,%.0f,%.0f) "), Padding.Left, Padding.Top, Padding.Right, Padding.Bottom);
 		}
 
-		if (SlotParams->TryGetStringField(TEXT("h_align"), HAlignStr))
+		FString HAlignStr;
+		EHorizontalAlignment HAlign;
+		if (TryGetHAlign(EffectiveParams, HAlignStr, HAlign))
 		{
-			OverlaySlotPtr->SetHorizontalAlignment(ParseHAlign(HAlignStr));
+			OverlaySlotPtr->SetHorizontalAlignment(HAlign);
 			AppliedSettings += FString::Printf(TEXT("h_align=%s "), *HAlignStr);
 		}
 
-		if (SlotParams->TryGetStringField(TEXT("v_align"), VAlignStr))
+		FString VAlignStr;
+		EVerticalAlignment VAlign;
+		if (TryGetVAlign(EffectiveParams, VAlignStr, VAlign))
 		{
-			OverlaySlotPtr->SetVerticalAlignment(ParseVAlign(VAlignStr));
+			OverlaySlotPtr->SetVerticalAlignment(VAlign);
 			AppliedSettings += FString::Printf(TEXT("v_align=%s "), *VAlignStr);
 		}
 	}
 
 	// ====== GridSlot ======
 	UGridSlot* GridSlotPtr = Cast<UGridSlot>(Widget->Slot);
-	if (GridSlotPtr)
+	if (IsValid(GridSlotPtr))
 	{
-		int32 Row = 0, Column = 0, RowSpan = 1, ColumnSpan = 1;
-		FString PaddingStr, HAlignStr, VAlignStr;
-
-		if (SlotParams->TryGetNumberField(TEXT("row"), Row))
+		int32 Row = 0;
+		if (TryGetIntValue(EffectiveParams, TEXT("row"), TEXT("Row"), TEXT("grid_row"), Row))
 		{
 			GridSlotPtr->SetRow(Row);
 			AppliedSettings += FString::Printf(TEXT("row=%d "), Row);
 		}
-		if (SlotParams->TryGetNumberField(TEXT("column"), Column))
+
+		int32 Column = 0;
+		if (TryGetIntValue(EffectiveParams, TEXT("column"), TEXT("Column"), TEXT("grid_column"), Column))
 		{
 			GridSlotPtr->SetColumn(Column);
 			AppliedSettings += FString::Printf(TEXT("column=%d "), Column);
 		}
-		if (SlotParams->TryGetNumberField(TEXT("row_span"), RowSpan))
+
+		int32 RowSpan = 1;
+		if (TryGetIntValue(EffectiveParams, TEXT("row_span"), TEXT("RowSpan"), TEXT("rowspan"), RowSpan))
 		{
 			GridSlotPtr->SetRowSpan(RowSpan);
 			AppliedSettings += FString::Printf(TEXT("row_span=%d "), RowSpan);
 		}
-		if (SlotParams->TryGetNumberField(TEXT("column_span"), ColumnSpan))
+
+		int32 ColumnSpan = 1;
+		if (TryGetIntValue(EffectiveParams, TEXT("column_span"), TEXT("ColumnSpan"), TEXT("columnspan"), ColumnSpan))
 		{
 			GridSlotPtr->SetColumnSpan(ColumnSpan);
 			AppliedSettings += FString::Printf(TEXT("column_span=%d "), ColumnSpan);
 		}
 
-		if (SlotParams->TryGetStringField(TEXT("padding"), PaddingStr))
+		int32 Layer = 0;
+		if (TryGetIntValue(EffectiveParams, TEXT("layer"), TEXT("Layer"), TEXT(""), Layer))
 		{
-			FMargin Padding;
-			if (ParseMargin(PaddingStr, Padding))
+			GridSlotPtr->SetLayer(Layer);
+			AppliedSettings += FString::Printf(TEXT("layer=%d "), Layer);
+		}
+
+		FVector2D Nudge;
+		const TSharedPtr<FJsonObject>* NudgeObj = nullptr;
+		FString NudgeStr;
+		if (EffectiveParams->TryGetObjectField(TEXT("nudge"), NudgeObj) || EffectiveParams->TryGetObjectField(TEXT("Nudge"), NudgeObj))
+		{
+			if (NudgeObj && NudgeObj->IsValid())
 			{
-				GridSlotPtr->SetPadding(Padding);
-				AppliedSettings += FString::Printf(TEXT("padding=(%.0f,%.0f,%.0f,%.0f) "), Padding.Left, Padding.Top, Padding.Right, Padding.Bottom);
+				double X = 0.0, Y = 0.0;
+				(*NudgeObj)->TryGetNumberField(TEXT("x"), X);
+				(*NudgeObj)->TryGetNumberField(TEXT("y"), Y);
+				GridSlotPtr->SetNudge(FVector2D(X, Y));
+				AppliedSettings += FString::Printf(TEXT("nudge=(%.1f,%.1f) "), X, Y);
+			}
+		}
+		else if (EffectiveParams->TryGetStringField(TEXT("nudge"), NudgeStr) || EffectiveParams->TryGetStringField(TEXT("Nudge"), NudgeStr))
+		{
+			if (ParseVector2D(NudgeStr, Nudge))
+			{
+				GridSlotPtr->SetNudge(Nudge);
+				AppliedSettings += FString::Printf(TEXT("nudge=(%.1f,%.1f) "), Nudge.X, Nudge.Y);
 			}
 		}
 
-		if (SlotParams->TryGetStringField(TEXT("h_align"), HAlignStr))
+		FMargin Padding;
+		if (TryGetMargin(EffectiveParams, TEXT("padding"), TEXT("Padding"), Padding))
 		{
-			GridSlotPtr->SetHorizontalAlignment(ParseHAlign(HAlignStr));
+			GridSlotPtr->SetPadding(Padding);
+			AppliedSettings += FString::Printf(TEXT("padding=(%.0f,%.0f,%.0f,%.0f) "), Padding.Left, Padding.Top, Padding.Right, Padding.Bottom);
+		}
+
+		FString HAlignStr;
+		EHorizontalAlignment HAlign;
+		if (TryGetHAlign(EffectiveParams, HAlignStr, HAlign))
+		{
+			GridSlotPtr->SetHorizontalAlignment(HAlign);
 			AppliedSettings += FString::Printf(TEXT("h_align=%s "), *HAlignStr);
 		}
-		if (SlotParams->TryGetStringField(TEXT("v_align"), VAlignStr))
+
+		FString VAlignStr;
+		EVerticalAlignment VAlign;
+		if (TryGetVAlign(EffectiveParams, VAlignStr, VAlign))
 		{
-			GridSlotPtr->SetVerticalAlignment(ParseVAlign(VAlignStr));
+			GridSlotPtr->SetVerticalAlignment(VAlign);
+			AppliedSettings += FString::Printf(TEXT("v_align=%s "), *VAlignStr);
+		}
+	}
+
+	// ====== UniformGridSlot ======
+	UUniformGridSlot* UniformSlot = Cast<UUniformGridSlot>(Widget->Slot);
+	if (IsValid(UniformSlot))
+	{
+		int32 Row = 0;
+		if (TryGetIntValue(EffectiveParams, TEXT("row"), TEXT("Row"), TEXT("grid_row"), Row))
+		{
+			UniformSlot->SetRow(Row);
+			AppliedSettings += FString::Printf(TEXT("row=%d "), Row);
+		}
+
+		int32 Column = 0;
+		if (TryGetIntValue(EffectiveParams, TEXT("column"), TEXT("Column"), TEXT("grid_column"), Column))
+		{
+			UniformSlot->SetColumn(Column);
+			AppliedSettings += FString::Printf(TEXT("column=%d "), Column);
+		}
+
+		FString HAlignStr;
+		EHorizontalAlignment HAlign;
+		if (TryGetHAlign(EffectiveParams, HAlignStr, HAlign))
+		{
+			UniformSlot->SetHorizontalAlignment(HAlign);
+			AppliedSettings += FString::Printf(TEXT("h_align=%s "), *HAlignStr);
+		}
+
+		FString VAlignStr;
+		EVerticalAlignment VAlign;
+		if (TryGetVAlign(EffectiveParams, VAlignStr, VAlign))
+		{
+			UniformSlot->SetVerticalAlignment(VAlign);
 			AppliedSettings += FString::Printf(TEXT("v_align=%s "), *VAlignStr);
 		}
 	}
 
 	// ====== ScrollBoxSlot ======
 	UScrollBoxSlot* ScrollSlot = Cast<UScrollBoxSlot>(Widget->Slot);
-	if (ScrollSlot)
+	if (IsValid(ScrollSlot))
 	{
-		FString PaddingStr, SizeRuleStr, HAlignStr;
-
-		if (SlotParams->TryGetStringField(TEXT("padding"), PaddingStr))
+		FMargin Padding;
+		if (TryGetMargin(EffectiveParams, TEXT("padding"), TEXT("Padding"), Padding))
 		{
-			FMargin Padding;
-			if (ParseMargin(PaddingStr, Padding))
-			{
-				ScrollSlot->SetPadding(Padding);
-				AppliedSettings += FString::Printf(TEXT("padding=(%.0f,%.0f,%.0f,%.0f) "), Padding.Left, Padding.Top, Padding.Right, Padding.Bottom);
-			}
+			ScrollSlot->SetPadding(Padding);
+			AppliedSettings += FString::Printf(TEXT("padding=(%.0f,%.0f,%.0f,%.0f) "), Padding.Left, Padding.Top, Padding.Right, Padding.Bottom);
 		}
 
-		if (SlotParams->TryGetStringField(TEXT("h_align"), HAlignStr))
+		FString HAlignStr;
+		EHorizontalAlignment HAlign;
+		if (TryGetHAlign(EffectiveParams, HAlignStr, HAlign))
 		{
-			ScrollSlot->SetHorizontalAlignment(ParseHAlign(HAlignStr));
+			ScrollSlot->SetHorizontalAlignment(HAlign);
 			AppliedSettings += FString::Printf(TEXT("h_align=%s "), *HAlignStr);
+		}
+
+		FString VAlignStr;
+		EVerticalAlignment VAlign;
+		if (TryGetVAlign(EffectiveParams, VAlignStr, VAlign))
+		{
+			ScrollSlot->SetVerticalAlignment(VAlign);
+			AppliedSettings += FString::Printf(TEXT("v_align=%s "), *VAlignStr);
 		}
 	}
 
 	// ====== WrapBoxSlot ======
 	UWrapBoxSlot* WrapSlot = Cast<UWrapBoxSlot>(Widget->Slot);
-	if (WrapSlot)
+	if (IsValid(WrapSlot))
 	{
-		FString PaddingStr, HAlignStr, VAlignStr;
-		bool bFillEmptySpace = false;
-
-		if (SlotParams->TryGetStringField(TEXT("padding"), PaddingStr))
+		FMargin Padding;
+		if (TryGetMargin(EffectiveParams, TEXT("padding"), TEXT("Padding"), Padding))
 		{
-			FMargin Padding;
-			if (ParseMargin(PaddingStr, Padding))
-			{
-				WrapSlot->SetPadding(Padding);
-				AppliedSettings += FString::Printf(TEXT("padding=(%.0f,%.0f,%.0f,%.0f) "), Padding.Left, Padding.Top, Padding.Right, Padding.Bottom);
-			}
+			WrapSlot->SetPadding(Padding);
+			AppliedSettings += FString::Printf(TEXT("padding=(%.0f,%.0f,%.0f,%.0f) "), Padding.Left, Padding.Top, Padding.Right, Padding.Bottom);
 		}
 
-		if (SlotParams->TryGetStringField(TEXT("h_align"), HAlignStr))
+		FString HAlignStr;
+		EHorizontalAlignment HAlign;
+		if (TryGetHAlign(EffectiveParams, HAlignStr, HAlign))
 		{
-			WrapSlot->SetHorizontalAlignment(ParseHAlign(HAlignStr));
+			WrapSlot->SetHorizontalAlignment(HAlign);
 			AppliedSettings += FString::Printf(TEXT("h_align=%s "), *HAlignStr);
 		}
 
-		if (SlotParams->TryGetStringField(TEXT("v_align"), VAlignStr))
+		FString VAlignStr;
+		EVerticalAlignment VAlign;
+		if (TryGetVAlign(EffectiveParams, VAlignStr, VAlign))
 		{
-			WrapSlot->SetVerticalAlignment(ParseVAlign(VAlignStr));
+			WrapSlot->SetVerticalAlignment(VAlign);
 			AppliedSettings += FString::Printf(TEXT("v_align=%s "), *VAlignStr);
 		}
 
-		if (SlotParams->TryGetBoolField(TEXT("fill_empty_space"), bFillEmptySpace))
+		bool bFillEmptySpace = false;
+		if (TryGetBoolValue(EffectiveParams, TEXT("fill_empty_space"), TEXT("FillEmptySpace"), TEXT("fill"), bFillEmptySpace))
 		{
 			WrapSlot->SetFillEmptySpace(bFillEmptySpace);
 			AppliedSettings += FString::Printf(TEXT("fill=%s "), bFillEmptySpace ? TEXT("true") : TEXT("false"));
+		}
+
+		float FillSpan = 0.0f;
+		if (TryGetFloatValue(EffectiveParams, TEXT("fill_span_when_less_than"), TEXT("FillSpanWhenLessThan"), FillSpan))
+		{
+			WrapSlot->SetFillSpanWhenLessThan(FillSpan);
+			AppliedSettings += FString::Printf(TEXT("fill_span_when_less_than=%.1f "), FillSpan);
+		}
+	}
+
+	// ====== WidgetSwitcherSlot ======
+	UWidgetSwitcherSlot* SwitcherSlot = Cast<UWidgetSwitcherSlot>(Widget->Slot);
+	if (IsValid(SwitcherSlot))
+	{
+		FMargin Padding;
+		if (TryGetMargin(EffectiveParams, TEXT("padding"), TEXT("Padding"), Padding))
+		{
+			SwitcherSlot->SetPadding(Padding);
+			AppliedSettings += FString::Printf(TEXT("padding=(%.0f,%.0f,%.0f,%.0f) "), Padding.Left, Padding.Top, Padding.Right, Padding.Bottom);
+		}
+
+		FString HAlignStr;
+		EHorizontalAlignment HAlign;
+		if (TryGetHAlign(EffectiveParams, HAlignStr, HAlign))
+		{
+			SwitcherSlot->SetHorizontalAlignment(HAlign);
+			AppliedSettings += FString::Printf(TEXT("h_align=%s "), *HAlignStr);
+		}
+
+		FString VAlignStr;
+		EVerticalAlignment VAlign;
+		if (TryGetVAlign(EffectiveParams, VAlignStr, VAlign))
+		{
+			SwitcherSlot->SetVerticalAlignment(VAlign);
+			AppliedSettings += FString::Printf(TEXT("v_align=%s "), *VAlignStr);
+		}
+	}
+
+	// ====== ScaleBoxSlot ======
+	UScaleBoxSlot* ScaleSlot = Cast<UScaleBoxSlot>(Widget->Slot);
+	if (IsValid(ScaleSlot))
+	{
+		FMargin Padding;
+		if (TryGetMargin(EffectiveParams, TEXT("padding"), TEXT("Padding"), Padding))
+		{
+			ScaleSlot->SetPadding(Padding);
+			AppliedSettings += FString::Printf(TEXT("padding=(%.0f,%.0f,%.0f,%.0f) "), Padding.Left, Padding.Top, Padding.Right, Padding.Bottom);
+		}
+
+		FString HAlignStr;
+		EHorizontalAlignment HAlign;
+		if (TryGetHAlign(EffectiveParams, HAlignStr, HAlign))
+		{
+			ScaleSlot->SetHorizontalAlignment(HAlign);
+			AppliedSettings += FString::Printf(TEXT("h_align=%s "), *HAlignStr);
+		}
+
+		FString VAlignStr;
+		EVerticalAlignment VAlign;
+		if (TryGetVAlign(EffectiveParams, VAlignStr, VAlign))
+		{
+			ScaleSlot->SetVerticalAlignment(VAlign);
+			AppliedSettings += FString::Printf(TEXT("v_align=%s "), *VAlignStr);
+		}
+	}
+
+	// ====== BorderSlot ======
+	UBorderSlot* BorderSlotPtr = Cast<UBorderSlot>(Widget->Slot);
+	if (IsValid(BorderSlotPtr))
+	{
+		FMargin Padding;
+		if (TryGetMargin(EffectiveParams, TEXT("padding"), TEXT("Padding"), Padding))
+		{
+			BorderSlotPtr->SetPadding(Padding);
+			AppliedSettings += FString::Printf(TEXT("padding=(%.0f,%.0f,%.0f,%.0f) "), Padding.Left, Padding.Top, Padding.Right, Padding.Bottom);
+		}
+
+		FString HAlignStr;
+		EHorizontalAlignment HAlign;
+		if (TryGetHAlign(EffectiveParams, HAlignStr, HAlign))
+		{
+			BorderSlotPtr->SetHorizontalAlignment(HAlign);
+			AppliedSettings += FString::Printf(TEXT("h_align=%s "), *HAlignStr);
+		}
+
+		FString VAlignStr;
+		EVerticalAlignment VAlign;
+		if (TryGetVAlign(EffectiveParams, VAlignStr, VAlign))
+		{
+			BorderSlotPtr->SetVerticalAlignment(VAlign);
+			AppliedSettings += FString::Printf(TEXT("v_align=%s "), *VAlignStr);
+		}
+	}
+
+	// ====== SizeBoxSlot ======
+	USizeBoxSlot* SizeSlot = Cast<USizeBoxSlot>(Widget->Slot);
+	if (IsValid(SizeSlot))
+	{
+		FMargin Padding;
+		if (TryGetMargin(EffectiveParams, TEXT("padding"), TEXT("Padding"), Padding))
+		{
+			SizeSlot->SetPadding(Padding);
+			AppliedSettings += FString::Printf(TEXT("padding=(%.0f,%.0f,%.0f,%.0f) "), Padding.Left, Padding.Top, Padding.Right, Padding.Bottom);
+		}
+
+		FString HAlignStr;
+		EHorizontalAlignment HAlign;
+		if (TryGetHAlign(EffectiveParams, HAlignStr, HAlign))
+		{
+			SizeSlot->SetHorizontalAlignment(HAlign);
+			AppliedSettings += FString::Printf(TEXT("h_align=%s "), *HAlignStr);
+		}
+
+		FString VAlignStr;
+		EVerticalAlignment VAlign;
+		if (TryGetVAlign(EffectiveParams, VAlignStr, VAlign))
+		{
+			SizeSlot->SetVerticalAlignment(VAlign);
+			AppliedSettings += FString::Printf(TEXT("v_align=%s "), *VAlignStr);
 		}
 	}
 
 	if (AppliedSettings.IsEmpty())
 	{
-		FString SlotType = Widget->Slot ? Widget->Slot->GetClass()->GetName() : TEXT("unknown");
-		Result.Errors.Add(FString::Printf(TEXT("No slot properties were applied. Widget '%s' has slot type '%s'. Check that you're providing the correct properties for this slot type."), *WidgetName, *SlotType));
+		FString SlotType = IsValid(Widget->Slot) ? Widget->Slot->GetClass()->GetName() : TEXT("unknown");
+		Result.Errors.Add(FString::Printf(TEXT("No slot properties were applied. Widget '%s' has slot type '%s'. Check that you're providing valid property names for this slot type."), *WidgetName, *SlotType));
 		return false;
 	}
 
+	Result.ResultMessage = FString::Printf(TEXT("Configured slot on '%s': %s"), *WidgetName, *AppliedSettings.TrimEnd());
 	return true;
 }
 
 FAgentFrameworkActionResult FAgentFrameworkWidgetActions::ExecuteInstantiateUIHierarchy(const TSharedRef<FJsonObject>& Params, FAgentFrameworkActionResult& Result)
 {
-	FString AssetPath = Params->GetStringField(TEXT("asset_path"));
+	FString AssetPath;
+	if (!UAgentFrameworkActionUtils::TryGetStringParam(Params, TEXT("asset_path"), AssetPath, Result.Errors, true))
+	{
+		return Result;
+	}
 
 	UWidgetBlueprint* WidgetBP = LoadWidgetBP(AssetPath, Result);
-	if (!WidgetBP) return Result;
+	if (!IsValid(WidgetBP)) return Result;
 
-	if (!WidgetBP->WidgetTree)
+	if (!IsValid(WidgetBP->WidgetTree))
 	{
 		Result.Errors.Add(TEXT("Widget Blueprint has no WidgetTree — recreate the asset."));
 		return Result;
 	}
 
 	const TArray<TSharedPtr<FJsonValue>>* WidgetsArray = nullptr;
-	if (!Params->TryGetArrayField(TEXT("widgets"), WidgetsArray))
+	if (!UAgentFrameworkActionUtils::TryGetArrayParam(Params, TEXT("widgets"), WidgetsArray, Result.Errors, true))
 	{
-		Result.Errors.Add(TEXT("Missing required array field: widgets"));
 		return Result;
 	}
 
@@ -2426,8 +2779,8 @@ FAgentFrameworkActionResult FAgentFrameworkWidgetActions::ExecuteInstantiateUIHi
 		}
 
 		FString WidgetClassName, WidgetName;
-		if (!WidgetObj->TryGetStringField(TEXT("widget_class"), WidgetClassName) ||
-			!WidgetObj->TryGetStringField(TEXT("widget_name"), WidgetName))
+		if (!UAgentFrameworkActionUtils::TryGetStringParam(WidgetObj, TEXT("widget_class"), WidgetClassName, Result.Errors, false) ||
+			!UAgentFrameworkActionUtils::TryGetStringParam(WidgetObj, TEXT("widget_name"), WidgetName, Result.Errors, false))
 		{
 			Result.Warnings.Add(TEXT("Skipping widget: missing widget_class or widget_name."));
 			continue;
@@ -2435,7 +2788,7 @@ FAgentFrameworkActionResult FAgentFrameworkWidgetActions::ExecuteInstantiateUIHi
 
 		// Resolve class
 		UClass* WidgetClass = ResolveWidgetClass(WidgetClassName);
-		if (!WidgetClass)
+		if (!IsValid(WidgetClass))
 		{
 			Result.Errors.Add(FString::Printf(TEXT("Widget class not found: '%s' for widget '%s'."), *WidgetClassName, *WidgetName));
 			return Result;
@@ -2443,7 +2796,7 @@ FAgentFrameworkActionResult FAgentFrameworkWidgetActions::ExecuteInstantiateUIHi
 
 		// Construct widget
 		UWidget* NewWidget = WidgetBP->WidgetTree->ConstructWidget<UWidget>(WidgetClass, FName(*WidgetName));
-		if (!NewWidget)
+		if (!IsValid(NewWidget))
 		{
 			Result.Errors.Add(FString::Printf(TEXT("Failed to construct widget '%s' of class '%s'."), *WidgetName, *WidgetClassName));
 			return Result;
@@ -2455,19 +2808,19 @@ FAgentFrameworkActionResult FAgentFrameworkWidgetActions::ExecuteInstantiateUIHi
 		// Attach to parent panel if specified
 		FString ParentWidgetName;
 		bool bAddedToParent = false;
-		if (WidgetObj->TryGetStringField(TEXT("parent_widget"), ParentWidgetName) && !ParentWidgetName.IsEmpty())
+		if (UAgentFrameworkActionUtils::TryGetStringParam(WidgetObj, TEXT("parent_widget"), ParentWidgetName, Result.Errors, false) && !ParentWidgetName.IsEmpty())
 		{
 			UWidget* ParentWidgetRaw = WidgetBP->WidgetTree->FindWidget(FName(*ParentWidgetName));
 			UPanelWidget* ParentPanel = Cast<UPanelWidget>(ParentWidgetRaw);
-			if (ParentPanel)
+			if (IsValid(ParentPanel))
 			{
 				ParentPanel->AddChild(NewWidget);
 				bAddedToParent = true;
 			}
-			else if (ParentWidgetRaw)
+			else if (IsValid(ParentWidgetRaw))
 			{
 				UContentWidget* ContentParent = Cast<UContentWidget>(ParentWidgetRaw);
-				if (ContentParent)
+				if (IsValid(ContentParent))
 				{
 					if (ContentParent->GetChildrenCount() > 0)
 					{
@@ -2480,7 +2833,7 @@ FAgentFrameworkActionResult FAgentFrameworkWidgetActions::ExecuteInstantiateUIHi
 		}
 
 		// If not added to parent and no root exists, set as root
-		if (!bAddedToParent && !WidgetBP->WidgetTree->RootWidget)
+		if (!bAddedToParent && !IsValid(WidgetBP->WidgetTree->RootWidget))
 		{
 			WidgetBP->WidgetTree->RootWidget = NewWidget;
 		}
@@ -2488,7 +2841,7 @@ FAgentFrameworkActionResult FAgentFrameworkWidgetActions::ExecuteInstantiateUIHi
 		{
 			// Try attaching to root panel if root is a panel
 			UPanelWidget* RootPanel = Cast<UPanelWidget>(WidgetBP->WidgetTree->RootWidget);
-			if (RootPanel)
+			if (IsValid(RootPanel))
 			{
 				RootPanel->AddChild(NewWidget);
 			}
@@ -2496,7 +2849,7 @@ FAgentFrameworkActionResult FAgentFrameworkWidgetActions::ExecuteInstantiateUIHi
 
 		// Apply properties
 		const TSharedPtr<FJsonObject>* PropertiesObj = nullptr;
-		if (WidgetObj->TryGetObjectField(TEXT("properties"), PropertiesObj))
+		if (UAgentFrameworkActionUtils::TryGetObjectParam(WidgetObj, TEXT("properties"), PropertiesObj, Result.Errors, false) && PropertiesObj && PropertiesObj->IsValid())
 		{
 			for (auto PropIt = (*PropertiesObj)->Values.CreateConstIterator(); PropIt; ++PropIt)
 			{
@@ -2514,7 +2867,7 @@ FAgentFrameworkActionResult FAgentFrameworkWidgetActions::ExecuteInstantiateUIHi
 
 		// Apply slot settings
 		const TSharedPtr<FJsonObject>* SlotObj = nullptr;
-		if (WidgetObj->TryGetObjectField(TEXT("slot"), SlotObj))
+		if (UAgentFrameworkActionUtils::TryGetObjectParam(WidgetObj, TEXT("slot"), SlotObj, Result.Errors, false) && SlotObj && SlotObj->IsValid())
 		{
 			if (ApplyWidgetSlotHelper(WidgetBP, NewWidget, *SlotObj, Result))
 			{
@@ -2524,7 +2877,7 @@ FAgentFrameworkActionResult FAgentFrameworkWidgetActions::ExecuteInstantiateUIHi
 
 		// Apply font settings
 		const TSharedPtr<FJsonObject>* FontObj = nullptr;
-		if (WidgetObj->TryGetObjectField(TEXT("font"), FontObj))
+		if (UAgentFrameworkActionUtils::TryGetObjectParam(WidgetObj, TEXT("font"), FontObj, Result.Errors, false) && FontObj && FontObj->IsValid())
 		{
 			if (ApplyWidgetFontHelper(WidgetBP, NewWidget, *FontObj, Result))
 			{
@@ -2534,7 +2887,7 @@ FAgentFrameworkActionResult FAgentFrameworkWidgetActions::ExecuteInstantiateUIHi
 
 		// Apply brush settings
 		const TSharedPtr<FJsonObject>* BrushObj = nullptr;
-		if (WidgetObj->TryGetObjectField(TEXT("brush"), BrushObj))
+		if (UAgentFrameworkActionUtils::TryGetObjectParam(WidgetObj, TEXT("brush"), BrushObj, Result.Errors, false) && BrushObj && BrushObj->IsValid())
 		{
 			if (ApplyWidgetBrushHelper(WidgetBP, NewWidget, *BrushObj, Result))
 			{
@@ -2544,7 +2897,7 @@ FAgentFrameworkActionResult FAgentFrameworkWidgetActions::ExecuteInstantiateUIHi
 
 		// Apply event bindings
 		const TSharedPtr<FJsonObject>* EventsObj = nullptr;
-		if (WidgetObj->TryGetObjectField(TEXT("events"), EventsObj))
+		if (UAgentFrameworkActionUtils::TryGetObjectParam(WidgetObj, TEXT("events"), EventsObj, Result.Errors, false) && EventsObj && EventsObj->IsValid())
 		{
 			for (auto EventIt = (*EventsObj)->Values.CreateConstIterator(); EventIt; ++EventIt)
 			{
@@ -2566,5 +2919,250 @@ FAgentFrameworkActionResult FAgentFrameworkWidgetActions::ExecuteInstantiateUIHi
 		TEXT("Successfully instantiated UI hierarchy in '%s': added %d widgets, configured %d properties, %d slots, %d fonts, %d brushes, %d event bindings."),
 		*AssetPath, AddedCount, ConfiguredProperties, ConfiguredSlots, ConfiguredFonts, ConfiguredBrushes, ConfiguredEvents);
 	Result.ModifiedAssets.Add(AssetPath);
+	return Result;
+}
+
+// ============================================================================
+// Phase B Missing Hooks
+// ============================================================================
+
+FAgentFrameworkActionResult FAgentFrameworkWidgetActions::ExecuteGetWidgetInfo(const TSharedRef<FJsonObject>& Params, FAgentFrameworkActionResult& Result)
+{
+	FString AssetPath, WidgetName;
+	if (!UAgentFrameworkActionUtils::TryGetStringParam(Params, TEXT("asset_path"), AssetPath, Result.Errors, true) ||
+		!UAgentFrameworkActionUtils::TryGetStringParam(Params, TEXT("widget_name"), WidgetName, Result.Errors, true))
+	{
+		return Result;
+	}
+
+	UWidgetBlueprint* WidgetBP = LoadWidgetBP(AssetPath, Result);
+	if (!IsValid(WidgetBP)) return Result;
+
+	UWidget* Widget = FindWidgetByName(WidgetBP, WidgetName, Result);
+	if (!IsValid(Widget)) return Result;
+
+	TSharedPtr<FJsonObject> InfoObj = MakeShared<FJsonObject>();
+	InfoObj->SetStringField(TEXT("name"), Widget->GetName());
+	InfoObj->SetStringField(TEXT("class"), Widget->GetClass()->GetName());
+	InfoObj->SetBoolField(TEXT("is_root"), IsValid(WidgetBP->WidgetTree) && Widget == WidgetBP->WidgetTree->RootWidget);
+
+	UPanelWidget* ParentPanel = Widget->GetParent();
+	if (IsValid(ParentPanel))
+	{
+		InfoObj->SetStringField(TEXT("parent"), ParentPanel->GetName());
+	}
+	else
+	{
+		InfoObj->SetStringField(TEXT("parent"), TEXT("(none)"));
+	}
+
+	if (IsValid(Widget->Slot))
+	{
+		InfoObj->SetStringField(TEXT("slot_type"), Widget->Slot->GetClass()->GetName());
+
+		TSharedPtr<FJsonObject> SlotPropsObj = MakeShared<FJsonObject>();
+		if (UCanvasPanelSlot* CanvasSlot = Cast<UCanvasPanelSlot>(Widget->Slot))
+		{
+			FAnchors Anchors = CanvasSlot->GetAnchors();
+			SlotPropsObj->SetStringField(TEXT("anchors_min"), FString::Printf(TEXT("%.2f,%.2f"), Anchors.Minimum.X, Anchors.Minimum.Y));
+			SlotPropsObj->SetStringField(TEXT("anchors_max"), FString::Printf(TEXT("%.2f,%.2f"), Anchors.Maximum.X, Anchors.Maximum.Y));
+			FMargin Offsets = CanvasSlot->GetOffsets();
+			SlotPropsObj->SetStringField(TEXT("offsets"), FString::Printf(TEXT("%.1f,%.1f,%.1f,%.1f"), Offsets.Left, Offsets.Top, Offsets.Right, Offsets.Bottom));
+			FVector2D Alignment = CanvasSlot->GetAlignment();
+			SlotPropsObj->SetStringField(TEXT("alignment"), FString::Printf(TEXT("%.2f,%.2f"), Alignment.X, Alignment.Y));
+			SlotPropsObj->SetBoolField(TEXT("auto_size"), CanvasSlot->GetAutoSize());
+			SlotPropsObj->SetNumberField(TEXT("z_order"), CanvasSlot->GetZOrder());
+		}
+		else if (UVerticalBoxSlot* VBSlot = Cast<UVerticalBoxSlot>(Widget->Slot))
+		{
+			FMargin Padding = VBSlot->GetPadding();
+			SlotPropsObj->SetStringField(TEXT("padding"), FString::Printf(TEXT("%.1f,%.1f,%.1f,%.1f"), Padding.Left, Padding.Top, Padding.Right, Padding.Bottom));
+			SlotPropsObj->SetStringField(TEXT("size_rule"), VBSlot->GetSize().SizeRule == ESlateSizeRule::Fill ? TEXT("Fill") : TEXT("Auto"));
+		}
+		else if (UHorizontalBoxSlot* HBSlot = Cast<UHorizontalBoxSlot>(Widget->Slot))
+		{
+			FMargin Padding = HBSlot->GetPadding();
+			SlotPropsObj->SetStringField(TEXT("padding"), FString::Printf(TEXT("%.1f,%.1f,%.1f,%.1f"), Padding.Left, Padding.Top, Padding.Right, Padding.Bottom));
+			SlotPropsObj->SetStringField(TEXT("size_rule"), HBSlot->GetSize().SizeRule == ESlateSizeRule::Fill ? TEXT("Fill") : TEXT("Auto"));
+		}
+		else if (UGridSlot* GridSlot = Cast<UGridSlot>(Widget->Slot))
+		{
+			SlotPropsObj->SetNumberField(TEXT("row"), GridSlot->GetRow());
+			SlotPropsObj->SetNumberField(TEXT("column"), GridSlot->GetColumn());
+			SlotPropsObj->SetNumberField(TEXT("row_span"), GridSlot->GetRowSpan());
+			SlotPropsObj->SetNumberField(TEXT("column_span"), GridSlot->GetColumnSpan());
+		}
+		InfoObj->SetObjectField(TEXT("slot_properties"), SlotPropsObj);
+	}
+
+	UPanelWidget* Panel = Cast<UPanelWidget>(Widget);
+	if (IsValid(Panel))
+	{
+		InfoObj->SetBoolField(TEXT("is_panel"), true);
+		InfoObj->SetNumberField(TEXT("child_count"), Panel->GetChildrenCount());
+
+		TArray<TSharedPtr<FJsonValue>> ChildrenArray;
+		for (int32 Index = 0; Index < Panel->GetChildrenCount(); ++Index)
+		{
+			UWidget* Child = Panel->GetChildAt(Index);
+			if (IsValid(Child))
+			{
+				ChildrenArray.Add(MakeShared<FJsonValueString>(Child->GetName()));
+			}
+		}
+		InfoObj->SetArrayField(TEXT("children"), ChildrenArray);
+	}
+	else
+	{
+		InfoObj->SetBoolField(TEXT("is_panel"), false);
+	}
+
+	// Key properties summary
+	TSharedPtr<FJsonObject> PropsObj = MakeShared<FJsonObject>();
+	PropsObj->SetBoolField(TEXT("bIsEnabled"), Widget->GetIsEnabled());
+	PropsObj->SetNumberField(TEXT("RenderOpacity"), Widget->GetRenderOpacity());
+
+	if (UTextBlock* TextBlock = Cast<UTextBlock>(Widget))
+	{
+		PropsObj->SetStringField(TEXT("Text"), TextBlock->GetText().ToString());
+	}
+	InfoObj->SetObjectField(TEXT("properties"), PropsObj);
+
+	FString OutputStr;
+	TSharedRef<TJsonWriter<>> Writer = TJsonWriterFactory<>::Create(&OutputStr);
+	FJsonSerializer::Serialize(InfoObj.ToSharedRef(), Writer);
+
+	Result.bSuccess = true;
+	Result.ResultMessage = OutputStr;
+	return Result;
+}
+
+FAgentFrameworkActionResult FAgentFrameworkWidgetActions::ExecuteClearPanelChildren(const TSharedRef<FJsonObject>& Params, FAgentFrameworkActionResult& Result)
+{
+	FString AssetPath, WidgetName;
+	if (!UAgentFrameworkActionUtils::TryGetStringParam(Params, TEXT("asset_path"), AssetPath, Result.Errors, true) ||
+		!UAgentFrameworkActionUtils::TryGetStringParam(Params, TEXT("widget_name"), WidgetName, Result.Errors, true))
+	{
+		return Result;
+	}
+
+	UWidgetBlueprint* WidgetBP = LoadWidgetBP(AssetPath, Result);
+	if (!IsValid(WidgetBP)) return Result;
+
+	UWidget* Widget = FindWidgetByName(WidgetBP, WidgetName, Result);
+	if (!IsValid(Widget)) return Result;
+
+	UPanelWidget* Panel = Cast<UPanelWidget>(Widget);
+	UContentWidget* Content = Cast<UContentWidget>(Widget);
+
+	int32 RemovedCount = 0;
+	if (IsValid(Panel))
+	{
+		RemovedCount = Panel->GetChildrenCount();
+		WidgetBP->Modify();
+		Panel->Modify();
+		Panel->ClearChildren();
+	}
+	else if (IsValid(Content))
+	{
+		RemovedCount = Content->GetChildrenCount();
+		WidgetBP->Modify();
+		Content->Modify();
+		Content->ClearChildren();
+	}
+	else
+	{
+		Result.Errors.Add(FString::Printf(TEXT("Widget '%s' (%s) is neither a UPanelWidget nor a UContentWidget and cannot contain children."), *WidgetName, *Widget->GetClass()->GetName()));
+		return Result;
+	}
+
+	CompileAndMarkDirty(WidgetBP);
+
+	Result.bSuccess = true;
+	Result.ResultMessage = FString::Printf(TEXT("Cleared %d children from panel widget '%s' in '%s'."), RemovedCount, *WidgetName, *AssetPath);
+	Result.ModifiedAssets.Add(AssetPath);
+	return Result;
+}
+
+FAgentFrameworkActionResult FAgentFrameworkWidgetActions::ExecuteGetWidgetSlots(const TSharedRef<FJsonObject>& Params, FAgentFrameworkActionResult& Result)
+{
+	FString AssetPath;
+	if (!UAgentFrameworkActionUtils::TryGetStringParam(Params, TEXT("asset_path"), AssetPath, Result.Errors, true))
+	{
+		return Result;
+	}
+
+	UWidgetBlueprint* WidgetBP = LoadWidgetBP(AssetPath, Result);
+	if (!IsValid(WidgetBP)) return Result;
+
+	TSharedPtr<FJsonObject> RootObj = MakeShared<FJsonObject>();
+	RootObj->SetStringField(TEXT("asset_path"), WidgetBP->GetPathName());
+
+	TArray<TSharedPtr<FJsonValue>> SlotsArray;
+	if (IsValid(WidgetBP->WidgetTree))
+	{
+		WidgetBP->WidgetTree->ForEachWidget([&](UWidget* Widget)
+		{
+			if (!IsValid(Widget) || !IsValid(Widget->Slot)) return;
+
+			TSharedPtr<FJsonObject> SlotItem = MakeShared<FJsonObject>();
+			SlotItem->SetStringField(TEXT("widget_name"), Widget->GetName());
+			SlotItem->SetStringField(TEXT("widget_class"), Widget->GetClass()->GetName());
+
+			UPanelWidget* Parent = Widget->GetParent();
+			if (IsValid(Parent))
+			{
+				SlotItem->SetStringField(TEXT("parent_name"), Parent->GetName());
+			}
+
+			SlotItem->SetStringField(TEXT("slot_type"), Widget->Slot->GetClass()->GetName());
+
+			TSharedPtr<FJsonObject> SlotPropsObj = MakeShared<FJsonObject>();
+			if (UCanvasPanelSlot* CanvasSlot = Cast<UCanvasPanelSlot>(Widget->Slot))
+			{
+				FAnchors Anchors = CanvasSlot->GetAnchors();
+				SlotPropsObj->SetStringField(TEXT("anchors_min"), FString::Printf(TEXT("%.2f,%.2f"), Anchors.Minimum.X, Anchors.Minimum.Y));
+				SlotPropsObj->SetStringField(TEXT("anchors_max"), FString::Printf(TEXT("%.2f,%.2f"), Anchors.Maximum.X, Anchors.Maximum.Y));
+				FMargin Offsets = CanvasSlot->GetOffsets();
+				SlotPropsObj->SetStringField(TEXT("offsets"), FString::Printf(TEXT("%.1f,%.1f,%.1f,%.1f"), Offsets.Left, Offsets.Top, Offsets.Right, Offsets.Bottom));
+				FVector2D Alignment = CanvasSlot->GetAlignment();
+				SlotPropsObj->SetStringField(TEXT("alignment"), FString::Printf(TEXT("%.2f,%.2f"), Alignment.X, Alignment.Y));
+				SlotPropsObj->SetBoolField(TEXT("auto_size"), CanvasSlot->GetAutoSize());
+				SlotPropsObj->SetNumberField(TEXT("z_order"), CanvasSlot->GetZOrder());
+			}
+			else if (UVerticalBoxSlot* VBSlot = Cast<UVerticalBoxSlot>(Widget->Slot))
+			{
+				FMargin Padding = VBSlot->GetPadding();
+				SlotPropsObj->SetStringField(TEXT("padding"), FString::Printf(TEXT("%.1f,%.1f,%.1f,%.1f"), Padding.Left, Padding.Top, Padding.Right, Padding.Bottom));
+				SlotPropsObj->SetStringField(TEXT("size_rule"), VBSlot->GetSize().SizeRule == ESlateSizeRule::Fill ? TEXT("Fill") : TEXT("Auto"));
+			}
+			else if (UHorizontalBoxSlot* HBSlot = Cast<UHorizontalBoxSlot>(Widget->Slot))
+			{
+				FMargin Padding = HBSlot->GetPadding();
+				SlotPropsObj->SetStringField(TEXT("padding"), FString::Printf(TEXT("%.1f,%.1f,%.1f,%.1f"), Padding.Left, Padding.Top, Padding.Right, Padding.Bottom));
+				SlotPropsObj->SetStringField(TEXT("size_rule"), HBSlot->GetSize().SizeRule == ESlateSizeRule::Fill ? TEXT("Fill") : TEXT("Auto"));
+			}
+			else if (UGridSlot* GridSlot = Cast<UGridSlot>(Widget->Slot))
+			{
+				SlotPropsObj->SetNumberField(TEXT("row"), GridSlot->GetRow());
+				SlotPropsObj->SetNumberField(TEXT("column"), GridSlot->GetColumn());
+				SlotPropsObj->SetNumberField(TEXT("row_span"), GridSlot->GetRowSpan());
+				SlotPropsObj->SetNumberField(TEXT("column_span"), GridSlot->GetColumnSpan());
+			}
+
+			SlotItem->SetObjectField(TEXT("slot_properties"), SlotPropsObj);
+			SlotsArray.Add(MakeShared<FJsonValueObject>(SlotItem));
+		});
+	}
+
+	RootObj->SetArrayField(TEXT("slots"), SlotsArray);
+	RootObj->SetNumberField(TEXT("total_slotted_widgets"), SlotsArray.Num());
+
+	FString OutputStr;
+	TSharedRef<TJsonWriter<>> Writer = TJsonWriterFactory<>::Create(&OutputStr);
+	FJsonSerializer::Serialize(RootObj.ToSharedRef(), Writer);
+
+	Result.bSuccess = true;
+	Result.ResultMessage = OutputStr;
 	return Result;
 }

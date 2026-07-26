@@ -5,14 +5,19 @@
 #include "CoreMinimal.h"
 #include "AgentFrameworkInterfaces.h"
 
+/**
+ * FAgentFrameworkSourceControlActions
+ *
+ * Action executor for Unreal Engine Source Control operations (checkout, add, revert, status, checkin, sync, history, diff).
+ */
 class AGENTFRAMEWORKACTIONS_API FAgentFrameworkSourceControlActions : public IAgentFrameworkActionExecutor
 {
 public:
-    FAgentFrameworkSourceControlActions();
-    virtual ~FAgentFrameworkSourceControlActions();
+	FAgentFrameworkSourceControlActions();
+	virtual ~FAgentFrameworkSourceControlActions();
 
-    virtual FName GetActionName() const override;
-    virtual FAgentFrameworkActionResult ExecuteAction(const TSharedRef<FJsonObject>& Params) override;
-    virtual TArray<FString> GetSupportedToolNames() const override;
-    virtual bool ValidateParams(const TSharedRef<FJsonObject>& Params, TArray<FString>& OutErrors) const override;
+	virtual FName GetActionName() const override;
+	virtual FAgentFrameworkActionResult ExecuteAction(const TSharedRef<FJsonObject>& Params) override;
+	virtual TArray<FString> GetSupportedToolNames() const override;
+	virtual bool ValidateParams(const TSharedRef<FJsonObject>& Params, TArray<FString>& OutErrors) const override;
 };

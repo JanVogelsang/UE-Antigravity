@@ -8,6 +8,58 @@ Configure an actor class for network replication in multiplayer UE games.
 ## Arguments
 - {{arg}}: Actor class to configure replication for
 ## Steps
+
+### Option A: Blueprint Native Tool Routes (In-Editor Asset Configuration)
+
+1. **Configure Actor Network Replication (`configure_actor_replication`)**:
+   Use `configure_actor_replication` to set network replication defaults on a Blueprint actor CDO:
+   ```json
+   {
+     "TargetAsset": "/Game/Blueprints/BP_NetworkPawn",
+     "bReplicates": true,
+     "bReplicateMovement": true,
+     "NetDormancy": "DORM_Never",
+     "NetUpdateFrequency": 100.0,
+     "NetPriority": 1.0
+   }
+   ```
+
+2. **Configure Variable Replication & RepNotify (`set_variable_replication`)**:
+   
+   - **Standard Variable Replication**:
+     ```json
+     {
+       "TargetAsset": "/Game/Blueprints/BP_NetworkPawn",
+       "VariableName": "Health",
+       "ReplicationType": "Replicated",
+       "ReplicationCondition": "COND_None"
+     }
+     ```
+
+   - **Replication with RepNotify Callback**:
+     Setting `ReplicationType` to `"RepNotify"` and specifying `RepNotifyFunc` will automatically generate the `OnRep_Shield` callback graph:
+     ```json
+     {
+       "TargetAsset": "/Game/Blueprints/BP_NetworkPawn",
+       "VariableName": "Shield",
+       "ReplicationType": "RepNotify",
+       "RepNotifyFunc": "OnRep_Shield",
+       "ReplicationCondition": "COND_None"
+     }
+     ```
+
+   - **Replication with Lifetime Condition (Owner Only / Skip Owner)**:
+     ```json
+     {
+       "TargetAsset": "/Game/Blueprints/BP_NetworkPawn",
+       "VariableName": "SecretData",
+       "ReplicationType": "Replicated",
+       "ReplicationCondition": "COND_OwnerOnly"
+     }
+     ```
+
+### Option B: C++ Code Patterns (Base Class Implementation)
+
 1. **Constructor**: Enable replication
    ```cpp
    bReplicates = true;

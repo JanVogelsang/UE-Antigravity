@@ -42,8 +42,6 @@ Config/
 # Packaging
 Packaged/
 
-# Dynamic local environment skill
-UnrealEngine/skills/unreal-env/
 
 # Python caching & environments
 __pycache__/
@@ -57,3 +55,10 @@ ENV/
 *.db
 vector_db_*/
 vector_db_*.zip
+
+# Temporary build logs and packages
+Packaged_*/
+*.log
+coverage_report.md
+benchmark_report.md
+

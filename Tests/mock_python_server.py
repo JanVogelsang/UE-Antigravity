@@ -43,10 +43,10 @@ def main():
                 query = arguments.get("query", "")
                 result_text = f"Result of query_cpp_ast for {query}:\n" + json.dumps([
                     {
-                        "name": "AMorphTargetActor",
-                        "fully_qualified_name": "AMorphTargetActor",
+                        "name": "AAgentFrameworkTestGameModeBase",
+                        "fully_qualified_name": "AAgentFrameworkTestGameModeBase",
                         "kind": "class",
-                        "file_path": os.path.expandvars(r"%USERPROFILE%\Documents\Unreal Projects\tau-game\Source\AMorphTargetActor.h"),
+                        "file_path": os.path.expandvars(r"%USERPROFILE%\Documents\Unreal Projects\AgentFrameworkTest\Source\AgentFrameworkTest\AgentFrameworkTestGameModeBase.h"),
                         "line_start": 10,
                         "line_end": 50,
                         "access_specifier": "public"

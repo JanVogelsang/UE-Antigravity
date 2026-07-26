@@ -56,6 +56,12 @@ private:
 	/** Query current world state actors. */
 	FAgentFrameworkActionResult ExecuteQueryWorldState(const TSharedRef<FJsonObject>& Params, FAgentFrameworkActionResult& Result);
 
+	/** Broadcast a script delegate on a runtime PIE UUserWidget or child widget. */
+	FAgentFrameworkActionResult ExecuteInvokePIEWidgetDelegate(const TSharedRef<FJsonObject>& Params, FAgentFrameworkActionResult& Result);
+
+	/** Query all active runtime UUserWidget instances in PIE. */
+	FAgentFrameworkActionResult ExecuteGetActiveRuntimeWidgets(const TSharedRef<FJsonObject>& Params, FAgentFrameworkActionResult& Result);
+
 	/** Whether PIE is currently running. */
 	static bool IsPIERunning();
 

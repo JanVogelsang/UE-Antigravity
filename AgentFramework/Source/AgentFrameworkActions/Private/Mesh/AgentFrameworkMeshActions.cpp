@@ -2,14 +2,33 @@
 
 #include "Mesh/AgentFrameworkMeshActions.h"
 #include "AgentFrameworkCoreModule.h"
+#include "AgentFrameworkActionUtils.h"
+
+// Engine & Asset includes
 #include "AssetToolsModule.h"
+#include "IAssetTools.h"
 #include "AssetRegistry/AssetRegistryModule.h"
 #include "AssetImportTask.h"
-#include "Factories/FbxFactory.h"
 #include "Engine/StaticMesh.h"
 #include "Misc/PackageName.h"
 #include "PhysicsEngine/BodySetup.h"
 #include "ScopedTransaction.h"
+#include "UDynamicMesh.h"
+#include "GeometryScript/MeshPrimitiveFunctions.h"
+#include "VT/RuntimeVirtualTextureVolume.h"
+#include "VT/RuntimeVirtualTexture.h"
+#include "Components/RuntimeVirtualTextureComponent.h"
+#include "PhysicsField/PhysicsFieldComponent.h"
+#include "Dataflow/DataflowObject.h"
+#include "ClothingAsset.h"
+#include "SparseVolumeTexture/SparseVolumeTexture.h"
+#include "EngineUtils.h"
+#include "UObject/SavePackage.h"
+
+#if WITH_EDITOR
+#include "Editor.h"
+#include "Sound/SoundBase.h"
+#endif
 
 FAgentFrameworkMeshActions::FAgentFrameworkMeshActions() {}
 FAgentFrameworkMeshActions::~FAgentFrameworkMeshActions() {}
@@ -34,29 +53,42 @@ TArray<FString> FAgentFrameworkMeshActions::GetSupportedToolNames() const
 bool FAgentFrameworkMeshActions::ValidateParams(const TSharedRef<FJsonObject>& Params, TArray<FString>& OutErrors) const
 {
 	FString ToolName;
-	Params->TryGetStringField(TEXT("_tool_name"), ToolName);
+	UAgentFrameworkActionUtils::TryGetStringParam(Params, TEXT("_tool_name"), ToolName, OutErrors, false);
+	if (ToolName.IsEmpty())
+	{
+		UAgentFrameworkActionUtils::TryGetStringParam(Params, TEXT("tool_name"), ToolName, OutErrors, false);
+	}
 
 	if (ToolName == TEXT("import_mesh"))
 	{
-		if (!Params->HasField(TEXT("source_file")))
+		FString SourceFile;
+		if (!UAgentFrameworkActionUtils::TryGetStringParam(Params, TEXT("source_file"), SourceFile, OutErrors, true))
 		{
-			OutErrors.Add(TEXT("Missing required field for import_mesh: source_file"));
 			return false;
 		}
 	}
 	else if (ToolName == TEXT("import_assets_batch"))
 	{
-		if (!Params->HasField(TEXT("source_files")))
+		TArray<FString> SourceFiles;
+		if (!UAgentFrameworkActionUtils::TryGetStringArrayParam(Params, TEXT("source_files"), SourceFiles, OutErrors, true))
 		{
-			OutErrors.Add(TEXT("Missing required field for import_assets_batch: source_files"));
 			return false;
 		}
 	}
-	else if (ToolName == TEXT("configure_static_mesh") || ToolName == TEXT("create_dynamic_mesh") || ToolName == TEXT("audit_nanite_settings"))
+	else if (ToolName == TEXT("configure_static_mesh") || ToolName == TEXT("create_dynamic_mesh") || ToolName == TEXT("audit_nanite_settings") || ToolName == TEXT("setup_dataflow_graph"))
 	{
-		if (!Params->HasField(TEXT("asset_path")))
+		FString AssetPath;
+		if (!UAgentFrameworkActionUtils::TryGetStringParam(Params, TEXT("asset_path"), AssetPath, OutErrors, true))
 		{
-			OutErrors.Add(TEXT("Missing required field: asset_path"));
+			return false;
+		}
+	}
+	else if (ToolName == TEXT("setup_runtime_virtual_texture"))
+	{
+		FString RVTVolumeName, RVTAssetPath;
+		if (!UAgentFrameworkActionUtils::TryGetStringParam(Params, TEXT("rvt_volume_name"), RVTVolumeName, OutErrors, true) ||
+			!UAgentFrameworkActionUtils::TryGetStringParam(Params, TEXT("rvt_asset_path"), RVTAssetPath, OutErrors, true))
+		{
 			return false;
 		}
 	}
@@ -73,7 +105,13 @@ FAgentFrameworkActionResult FAgentFrameworkMeshActions::ExecuteAction(const TSha
 	Result.bSuccess = false;
 
 	FString ToolName;
-	if (Params->TryGetStringField(TEXT("_tool_name"), ToolName) || Params->TryGetStringField(TEXT("tool_name"), ToolName))
+	UAgentFrameworkActionUtils::TryGetStringParam(Params, TEXT("_tool_name"), ToolName, Result.Errors, false);
+	if (ToolName.IsEmpty())
+	{
+		UAgentFrameworkActionUtils::TryGetStringParam(Params, TEXT("tool_name"), ToolName, Result.Errors, false);
+	}
+
+	if (!ToolName.IsEmpty())
 	{
 		if (ToolName == TEXT("configure_static_mesh"))       Result = ExecuteConfigureStaticMesh(Params, Result);
 		else if (ToolName == TEXT("create_dynamic_mesh"))    Result = ExecuteCreateDynamicMesh(Params, Result);
@@ -85,7 +123,7 @@ FAgentFrameworkActionResult FAgentFrameworkMeshActions::ExecuteAction(const TSha
 		else if (ToolName == TEXT("setup_sparse_volume_texture")) Result = ExecuteSetupSparseVolumeTexture(Params, Result);
 		else if (ToolName == TEXT("import_mesh") || ToolName == TEXT("import_assets_batch"))
 		{
-			// Skip direct return to fall through to import handling below
+			// Fall through to import handling below
 		}
 		else
 		{
@@ -100,25 +138,31 @@ FAgentFrameworkActionResult FAgentFrameworkMeshActions::ExecuteAction(const TSha
 			{
 				Transaction->Cancel();
 			}
+
+			if (Result.bSuccess)
+			{
+#if WITH_EDITOR
+				if (GEditor)
+				{
+					USoundBase* SuccessSound = LoadObject<USoundBase>(nullptr, TEXT("/Engine/EditorSounds/Notifications/CompileSuccess.CompileSuccess"));
+					if (IsValid(SuccessSound))
+					{
+						GEditor->PlayEditorSound(SuccessSound);
+					}
+				}
+#endif
+			}
+
 			return Result;
 		}
 	}
 
-	// Get source file paths
+	// Get source file paths for import_mesh / import_assets_batch
 	TArray<FString> SourceFiles;
-	const TArray<TSharedPtr<FJsonValue>>* FilesArray = nullptr;
-	if (Params->TryGetArrayField(TEXT("source_files"), FilesArray))
-	{
-		for (const auto& Val : *FilesArray)
-		{
-			FString Path;
-			if (Val->TryGetString(Path)) SourceFiles.Add(Path);
-		}
-	}
-	else
+	if (!UAgentFrameworkActionUtils::TryGetStringArrayParam(Params, TEXT("source_files"), SourceFiles, Result.Errors, false) || SourceFiles.Num() == 0)
 	{
 		FString SingleFile;
-		if (Params->TryGetStringField(TEXT("source_file"), SingleFile))
+		if (UAgentFrameworkActionUtils::TryGetStringParam(Params, TEXT("source_file"), SingleFile, Result.Errors, false) && !SingleFile.IsEmpty())
 		{
 			SourceFiles.Add(SingleFile);
 		}
@@ -135,7 +179,7 @@ FAgentFrameworkActionResult FAgentFrameworkMeshActions::ExecuteAction(const TSha
 	}
 
 	FString DestinationPath = TEXT("/Game/Meshes");
-	Params->TryGetStringField(TEXT("destination_path"), DestinationPath);
+	UAgentFrameworkActionUtils::TryGetStringParam(Params, TEXT("destination_path"), DestinationPath, Result.Errors, false);
 
 	// Create import tasks
 	IAssetTools& AssetTools = FModuleManager::LoadModuleChecked<FAssetToolsModule>("AssetTools").Get();
@@ -150,6 +194,10 @@ FAgentFrameworkActionResult FAgentFrameworkMeshActions::ExecuteAction(const TSha
 		}
 
 		UAssetImportTask* Task = NewObject<UAssetImportTask>();
+		if (!IsValid(Task))
+		{
+			continue;
+		}
 		Task->Filename = SourceFile;
 		Task->DestinationPath = DestinationPath;
 		Task->bAutomated = true;
@@ -173,9 +221,12 @@ FAgentFrameworkActionResult FAgentFrameworkMeshActions::ExecuteAction(const TSha
 	// Collect results
 	for (UAssetImportTask* Task : ImportTasks)
 	{
-		for (const FString& ImportedPath : Task->ImportedObjectPaths)
+		if (IsValid(Task))
 		{
-			Result.ModifiedAssets.Add(ImportedPath);
+			for (const FString& ImportedPath : Task->ImportedObjectPaths)
+			{
+				Result.ModifiedAssets.Add(ImportedPath);
+			}
 		}
 	}
 
@@ -187,20 +238,33 @@ FAgentFrameworkActionResult FAgentFrameworkMeshActions::ExecuteAction(const TSha
 		Transaction->Cancel();
 	}
 
+	if (Result.bSuccess)
+	{
+#if WITH_EDITOR
+		if (GEditor)
+		{
+			USoundBase* SuccessSound = LoadObject<USoundBase>(nullptr, TEXT("/Engine/EditorSounds/Notifications/CompileSuccess.CompileSuccess"));
+			if (IsValid(SuccessSound))
+			{
+				GEditor->PlayEditorSound(SuccessSound);
+			}
+		}
+#endif
+	}
+
 	return Result;
 }
 
 FAgentFrameworkActionResult FAgentFrameworkMeshActions::ExecuteConfigureStaticMesh(const TSharedRef<FJsonObject>& Params, FAgentFrameworkActionResult& Result)
 {
 	FString AssetPath;
-	if (!Params->TryGetStringField(TEXT("asset_path"), AssetPath))
+	if (!UAgentFrameworkActionUtils::TryGetStringParam(Params, TEXT("asset_path"), AssetPath, Result.Errors, true))
 	{
-		Result.Errors.Add(TEXT("Missing 'asset_path' parameter."));
 		return Result;
 	}
 
 	UStaticMesh* StaticMesh = LoadObject<UStaticMesh>(nullptr, *AssetPath);
-	if (!StaticMesh)
+	if (!IsValid(StaticMesh))
 	{
 		Result.Errors.Add(FString::Printf(TEXT("Failed to load Static Mesh at path: %s"), *AssetPath));
 		return Result;
@@ -208,21 +272,24 @@ FAgentFrameworkActionResult FAgentFrameworkMeshActions::ExecuteConfigureStaticMe
 
 	// Enable Nanite settings
 	bool bEnableNanite = false;
-	if (Params->TryGetBoolField(TEXT("enable_nanite"), bEnableNanite))
+	if (Params->HasField(TEXT("enable_nanite")))
 	{
-		FMeshNaniteSettings NaniteSettingsCopy = StaticMesh->GetNaniteSettings();
-		NaniteSettingsCopy.bEnabled = bEnableNanite;
-		StaticMesh->SetNaniteSettings(NaniteSettingsCopy);
+		if (UAgentFrameworkActionUtils::TryGetBoolParam(Params, TEXT("enable_nanite"), bEnableNanite, Result.Errors, false))
+		{
+			FMeshNaniteSettings NaniteSettingsCopy = StaticMesh->GetNaniteSettings();
+			NaniteSettingsCopy.bEnabled = bEnableNanite;
+			StaticMesh->SetNaniteSettings(NaniteSettingsCopy);
+		}
 	}
 
 	// LOD Generation settings
 	FString LodGeneration = TEXT("auto");
-	Params->TryGetStringField(TEXT("lod_generation"), LodGeneration);
+	UAgentFrameworkActionUtils::TryGetStringParam(Params, TEXT("lod_generation"), LodGeneration, Result.Errors, false);
 
 	if (LodGeneration == TEXT("auto") || LodGeneration == TEXT("manual"))
 	{
 		int32 LodCount = 4;
-		Params->TryGetNumberField(TEXT("lod_count"), LodCount);
+		UAgentFrameworkActionUtils::TryGetIntParam(Params, TEXT("lod_count"), LodCount, Result.Errors, false);
 		if (LodCount < 1) LodCount = 1;
 
 		StaticMesh->SetNumSourceModels(LodCount);
@@ -239,9 +306,10 @@ FAgentFrameworkActionResult FAgentFrameworkMeshActions::ExecuteConfigureStaticMe
 
 	// Collision Complexity
 	FString CollisionComplexity;
-	if (Params->TryGetStringField(TEXT("collision_complexity"), CollisionComplexity))
+	if (UAgentFrameworkActionUtils::TryGetStringParam(Params, TEXT("collision_complexity"), CollisionComplexity, Result.Errors, false) && !CollisionComplexity.IsEmpty())
 	{
-		if (UBodySetup* BodySetup = StaticMesh->GetBodySetup())
+		UBodySetup* BodySetup = StaticMesh->GetBodySetup();
+		if (IsValid(BodySetup))
 		{
 			if (CollisionComplexity == TEXT("simple"))
 			{
@@ -264,7 +332,7 @@ FAgentFrameworkActionResult FAgentFrameworkMeshActions::ExecuteConfigureStaticMe
 
 	// Lightmap Resolution
 	int32 LightmapResolution = 0;
-	if (Params->TryGetNumberField(TEXT("lightmap_resolution"), LightmapResolution) && LightmapResolution > 0)
+	if (UAgentFrameworkActionUtils::TryGetIntParam(Params, TEXT("lightmap_resolution"), LightmapResolution, Result.Errors, false) && LightmapResolution > 0)
 	{
 		StaticMesh->SetLightMapResolution(LightmapResolution);
 	}
@@ -279,28 +347,20 @@ FAgentFrameworkActionResult FAgentFrameworkMeshActions::ExecuteConfigureStaticMe
 	return Result;
 }
 
-#include "UDynamicMesh.h"
-#include "GeometryScript/MeshPrimitiveFunctions.h"
-#include "VT/RuntimeVirtualTextureVolume.h"
-#include "VT/RuntimeVirtualTexture.h"
-#include "Components/RuntimeVirtualTextureComponent.h"
-#include "PhysicsField/PhysicsFieldComponent.h"
-#include "Dataflow/DataflowObject.h"
-#include "ClothingAsset.h"
-#include "SparseVolumeTexture/SparseVolumeTexture.h"
-#include "EngineUtils.h"
-#include "UObject/SavePackage.h"
-
 FAgentFrameworkActionResult FAgentFrameworkMeshActions::ExecuteCreateDynamicMesh(const TSharedRef<FJsonObject>& Params, FAgentFrameworkActionResult& Result)
 {
-	FString AssetPath = Params->GetStringField(TEXT("asset_path"));
+	FString AssetPath;
+	if (!UAgentFrameworkActionUtils::TryGetStringParam(Params, TEXT("asset_path"), AssetPath, Result.Errors, true))
+	{
+		return Result;
+	}
 
 	FString PackagePath = FPackageName::GetLongPackagePath(AssetPath);
 	FString AssetName = FPackageName::GetShortName(AssetPath);
 	IAssetTools& AssetTools = FModuleManager::LoadModuleChecked<FAssetToolsModule>("AssetTools").Get();
 	UDynamicMesh* Mesh = Cast<UDynamicMesh>(AssetTools.CreateAsset(AssetName, PackagePath, UDynamicMesh::StaticClass(), nullptr));
 
-	if (!Mesh)
+	if (!IsValid(Mesh))
 	{
 		Result.Errors.Add(FString::Printf(TEXT("Failed to create UDynamicMesh at '%s'."), *AssetPath));
 		return Result;
@@ -322,13 +382,16 @@ FAgentFrameworkActionResult FAgentFrameworkMeshActions::ExecuteCreateDynamicMesh
 	);
 
 	UPackage* Package = Mesh->GetOutermost();
-	Package->MarkPackageDirty();
-	FString PackageFilename;
-	if (FPackageName::TryConvertLongPackageNameToFilename(Package->GetName(), PackageFilename, FPackageName::GetAssetPackageExtension()))
+	if (IsValid(Package))
 	{
-		FSavePackageArgs SaveArgs;
-		SaveArgs.TopLevelFlags = RF_Standalone;
-		UPackage::SavePackage(Package, Mesh, *PackageFilename, SaveArgs);
+		Package->MarkPackageDirty();
+		FString PackageFilename;
+		if (FPackageName::TryConvertLongPackageNameToFilename(Package->GetName(), PackageFilename, FPackageName::GetAssetPackageExtension()))
+		{
+			FSavePackageArgs SaveArgs;
+			SaveArgs.TopLevelFlags = RF_Standalone;
+			UPackage::SavePackage(Package, Mesh, *PackageFilename, SaveArgs);
+		}
 	}
 	FAssetRegistryModule::AssetCreated(Mesh);
 
@@ -340,9 +403,14 @@ FAgentFrameworkActionResult FAgentFrameworkMeshActions::ExecuteCreateDynamicMesh
 
 FAgentFrameworkActionResult FAgentFrameworkMeshActions::ExecuteAuditNaniteSettings(const TSharedRef<FJsonObject>& Params, FAgentFrameworkActionResult& Result)
 {
-	FString AssetPath = Params->GetStringField(TEXT("asset_path"));
+	FString AssetPath;
+	if (!UAgentFrameworkActionUtils::TryGetStringParam(Params, TEXT("asset_path"), AssetPath, Result.Errors, true))
+	{
+		return Result;
+	}
+
 	UStaticMesh* StaticMesh = LoadObject<UStaticMesh>(nullptr, *AssetPath);
-	if (!StaticMesh)
+	if (!IsValid(StaticMesh))
 	{
 		Result.Errors.Add(FString::Printf(TEXT("StaticMesh not found: '%s'"), *AssetPath));
 		return Result;
@@ -360,18 +428,27 @@ FAgentFrameworkActionResult FAgentFrameworkMeshActions::ExecuteAuditNaniteSettin
 
 FAgentFrameworkActionResult FAgentFrameworkMeshActions::ExecuteSetupRuntimeVirtualTexture(const TSharedRef<FJsonObject>& Params, FAgentFrameworkActionResult& Result)
 {
-	FString RVTVolumeName = Params->GetStringField(TEXT("rvt_volume_name"));
-	FString RVTAssetPath = Params->GetStringField(TEXT("rvt_asset_path"));
+	FString RVTVolumeName;
+	if (!UAgentFrameworkActionUtils::TryGetStringParam(Params, TEXT("rvt_volume_name"), RVTVolumeName, Result.Errors, true))
+	{
+		return Result;
+	}
+
+	FString RVTAssetPath;
+	if (!UAgentFrameworkActionUtils::TryGetStringParam(Params, TEXT("rvt_asset_path"), RVTAssetPath, Result.Errors, true))
+	{
+		return Result;
+	}
 
 	URuntimeVirtualTexture* RVTAsset = LoadObject<URuntimeVirtualTexture>(nullptr, *RVTAssetPath);
-	if (!RVTAsset)
+	if (!IsValid(RVTAsset))
 	{
 		Result.Errors.Add(FString::Printf(TEXT("RuntimeVirtualTexture asset not found at '%s'."), *RVTAssetPath));
 		return Result;
 	}
 
 	UWorld* World = GEditor ? GEditor->GetEditorWorldContext().World() : nullptr;
-	if (!World)
+	if (!IsValid(World))
 	{
 		Result.Errors.Add(TEXT("No active editor world found."));
 		return Result;
@@ -380,25 +457,31 @@ FAgentFrameworkActionResult FAgentFrameworkMeshActions::ExecuteSetupRuntimeVirtu
 	ARuntimeVirtualTextureVolume* RVTVolume = nullptr;
 	for (TActorIterator<ARuntimeVirtualTextureVolume> It(World); It; ++It)
 	{
-		if (It->GetName() == RVTVolumeName || It->GetActorLabel() == RVTVolumeName)
+		if (IsValid(*It) && (It->GetName() == RVTVolumeName || It->GetActorLabel() == RVTVolumeName))
 		{
 			RVTVolume = *It;
 			break;
 		}
 	}
 
-	if (!RVTVolume)
+	if (!IsValid(RVTVolume))
 	{
 		RVTVolume = World->SpawnActor<ARuntimeVirtualTextureVolume>();
-		RVTVolume->SetActorLabel(*RVTVolumeName);
+		if (IsValid(RVTVolume))
+		{
+			RVTVolume->SetActorLabel(*RVTVolumeName);
+		}
 	}
 
-	URuntimeVirtualTextureComponent* Component = RVTVolume->VirtualTextureComponent;
-	if (Component)
+	if (IsValid(RVTVolume))
 	{
-		Component->Modify();
-		Component->SetVirtualTexture(RVTAsset);
-		Component->MarkRenderStateDirty();
+		URuntimeVirtualTextureComponent* Component = RVTVolume->VirtualTextureComponent;
+		if (IsValid(Component))
+		{
+			Component->Modify();
+			Component->SetVirtualTexture(RVTAsset);
+			Component->MarkRenderStateDirty();
+		}
 	}
 
 	Result.bSuccess = true;
@@ -409,14 +492,14 @@ FAgentFrameworkActionResult FAgentFrameworkMeshActions::ExecuteSetupRuntimeVirtu
 FAgentFrameworkActionResult FAgentFrameworkMeshActions::ExecuteSetupChaosPhysics(const TSharedRef<FJsonObject>& Params, FAgentFrameworkActionResult& Result)
 {
 	UWorld* World = GEditor ? GEditor->GetEditorWorldContext().World() : nullptr;
-	if (!World)
+	if (!IsValid(World))
 	{
 		Result.Errors.Add(TEXT("No active editor world found."));
 		return Result;
 	}
 
 	UPhysicsFieldComponent* PhysicsField = NewObject<UPhysicsFieldComponent>();
-	if (!PhysicsField)
+	if (!IsValid(PhysicsField))
 	{
 		Result.Errors.Add(TEXT("Failed to instantiate UPhysicsFieldComponent."));
 		return Result;
@@ -429,27 +512,34 @@ FAgentFrameworkActionResult FAgentFrameworkMeshActions::ExecuteSetupChaosPhysics
 
 FAgentFrameworkActionResult FAgentFrameworkMeshActions::ExecuteSetupDataflowGraph(const TSharedRef<FJsonObject>& Params, FAgentFrameworkActionResult& Result)
 {
-	FString AssetPath = Params->GetStringField(TEXT("asset_path"));
+	FString AssetPath;
+	if (!UAgentFrameworkActionUtils::TryGetStringParam(Params, TEXT("asset_path"), AssetPath, Result.Errors, true))
+	{
+		return Result;
+	}
 
 	FString PackagePath = FPackageName::GetLongPackagePath(AssetPath);
 	FString AssetName = FPackageName::GetShortName(AssetPath);
 	IAssetTools& AssetTools = FModuleManager::LoadModuleChecked<FAssetToolsModule>("AssetTools").Get();
 	UDataflow* DataflowObj = Cast<UDataflow>(AssetTools.CreateAsset(AssetName, PackagePath, UDataflow::StaticClass(), nullptr));
 
-	if (!DataflowObj)
+	if (!IsValid(DataflowObj))
 	{
 		Result.Errors.Add(FString::Printf(TEXT("Failed to create UDataflow at '%s'."), *AssetPath));
 		return Result;
 	}
 
 	UPackage* Package = DataflowObj->GetOutermost();
-	Package->MarkPackageDirty();
-	FString PackageFilename;
-	if (FPackageName::TryConvertLongPackageNameToFilename(Package->GetName(), PackageFilename, FPackageName::GetAssetPackageExtension()))
+	if (IsValid(Package))
 	{
-		FSavePackageArgs SaveArgs;
-		SaveArgs.TopLevelFlags = RF_Standalone;
-		UPackage::SavePackage(Package, DataflowObj, *PackageFilename, SaveArgs);
+		Package->MarkPackageDirty();
+		FString PackageFilename;
+		if (FPackageName::TryConvertLongPackageNameToFilename(Package->GetName(), PackageFilename, FPackageName::GetAssetPackageExtension()))
+		{
+			FSavePackageArgs SaveArgs;
+			SaveArgs.TopLevelFlags = RF_Standalone;
+			UPackage::SavePackage(Package, DataflowObj, *PackageFilename, SaveArgs);
+		}
 	}
 	FAssetRegistryModule::AssetCreated(DataflowObj);
 
@@ -462,7 +552,7 @@ FAgentFrameworkActionResult FAgentFrameworkMeshActions::ExecuteSetupDataflowGrap
 FAgentFrameworkActionResult FAgentFrameworkMeshActions::ExecuteSetupClothingSimulation(const TSharedRef<FJsonObject>& Params, FAgentFrameworkActionResult& Result)
 {
 	UClothingAssetBase* ClothAsset = NewObject<UClothingAssetBase>();
-	if (!ClothAsset)
+	if (!IsValid(ClothAsset))
 	{
 		Result.Errors.Add(TEXT("Failed to instantiate Clothing Simulation asset."));
 		return Result;
@@ -476,7 +566,7 @@ FAgentFrameworkActionResult FAgentFrameworkMeshActions::ExecuteSetupClothingSimu
 FAgentFrameworkActionResult FAgentFrameworkMeshActions::ExecuteSetupSparseVolumeTexture(const TSharedRef<FJsonObject>& Params, FAgentFrameworkActionResult& Result)
 {
 	USparseVolumeTexture* SVT = NewObject<USparseVolumeTexture>();
-	if (!SVT)
+	if (!IsValid(SVT))
 	{
 		Result.Errors.Add(TEXT("Failed to instantiate Sparse Volume Texture."));
 		return Result;
