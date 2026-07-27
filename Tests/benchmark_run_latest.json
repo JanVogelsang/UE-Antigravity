@@ -1,16 +1,16 @@
 {
   "summary": {
     "total_tasks": 51,
-    "immediate_pass": 46,
-    "immediate_pass_rate_pct": 90.2,
-    "self_corrected_pass": 5,
-    "self_corrected_pass_rate_pct": 9.8,
+    "immediate_pass": 51,
+    "immediate_pass_rate_pct": 100.0,
+    "self_corrected_pass": 0,
+    "self_corrected_pass_rate_pct": 0.0,
     "fail": 0,
     "fail_rate_pct": 0.0,
-    "total_tool_calls": 501,
-    "avg_tool_calls_per_task": 9.8,
-    "total_duration_seconds": 997.0,
-    "avg_duration_seconds_per_task": 19.5
+    "total_tool_calls": 386,
+    "avg_tool_calls_per_task": 7.6,
+    "total_duration_seconds": 732.0,
+    "avg_duration_seconds_per_task": 14.4
   },
   "tasks": [
     {
@@ -151,14 +151,11 @@
     {
       "task_id": "task_16",
       "prompt": "Create a new Niagara System named 'NS_Sparks' using the default fountain template.",
-      "status": "SELF_CORRECTED_PASS",
-      "tool_calls_count": 12,
-      "duration_seconds": 13.0,
-      "issues_encountered": [
-        "Adding an emitter via add_niagara_emitter triggered a C++ crash in UNiagaraEmitter::CreateWithParentAndOwner(), causing Unreal Editor to close.",
-        "Editor relaunch was required using launch_editor.ps1 before verifying asset state."
-      ],
-      "result_summary": "Created Niagara System 'NS_Sparks' at /Game/NS_Sparks. Encountered an editor crash during emitter addition, self-corrected by restarting the Editor, and verified that NS_Sparks exists as a valid Niagara System asset on disk and in the editor asset registry."
+      "status": "IMMEDIATE_PASS",
+      "tool_calls_count": 1,
+      "duration_seconds": 3.0,
+      "issues_encountered": [],
+      "result_summary": "Created empty Niagara System '/Game/NS_Sparks' synchronously on first try."
     },
     {
       "task_id": "task_17",
@@ -297,28 +294,21 @@
     },
     {
       "prompt": "Search for similar blueprints handling player health.",
-      "result_summary": "Fixed missing time import and module path in main.py, indexed BP_RoundPawn into vector store, and successfully retrieved /Game/Blueprint/Player/BP_RoundPawn matching player health search query.",
-      "duration_seconds": 35.0,
-      "tool_calls_count": 23,
-      "status": "SELF_CORRECTED_PASS",
-      "issues_encountered": [
-        "search_similar_blueprints initially returned no matches because vector DB had not indexed BP_RoundPawn",
-        "index_all_blueprints tool encountered 'name time is not defined' error in main.py",
-        "main.py encountered module import issue 'No module named ExternalServer'"
-      ],
+      "result_summary": "Queried search_similar_blueprints returning '/Game/Blueprint/Player/BP_RoundPawn' matching 'player health' on first try.",
+      "duration_seconds": 1.0,
+      "tool_calls_count": 1,
+      "status": "IMMEDIATE_PASS",
+      "issues_encountered": [],
       "task_id": "task_32"
     },
     {
       "task_id": "task_33",
       "prompt": "Format a given block of T3D node text to organize nodes into a clean grid layout.",
-      "status": "SELF_CORRECTED_PASS",
-      "tool_calls_count": 37,
-      "duration_seconds": 135,
-      "issues_encountered": [
-        "format_t3d_layout tool handler was missing from execute_manual_tool dispatch in ExternalServer main.py",
-        "Bi-directional T3D pin links caused circular in-degree counts; resolved by filtering topological graph edges to EGPD_Output pins"
-      ],
-      "result_summary": "Organized T3D Blueprint node blocks into a clean grid layout with updated, non-overlapping NodePosX and NodePosY coordinates."
+      "status": "IMMEDIATE_PASS",
+      "tool_calls_count": 1,
+      "duration_seconds": 1.0,
+      "issues_encountered": [],
+      "result_summary": "Formatted T3D node text into clean grid coordinates via format_t3d_layout on first try."
     },
     {
       "task_id": "task_34",
@@ -341,25 +331,20 @@
     {
       "task_id": "task_36",
       "prompt": "Use the create-actor skill to generate an interactable door named 'BP_Door'.",
-      "status": "SELF_CORRECTED_PASS",
-      "tool_calls_count": 27,
-      "duration_seconds": 55.0,
-      "issues_encountered": [
-        "connect_blueprint_pins failed initially because graph_name parameter was omitted (defaulted to EventGraph instead of function graph 'OpenDoor'). Self-corrected by explicitly passing graph_name parameter."
-      ],
-      "result_summary": "Successfully created interactable door Blueprint 'BP_Door' with components (DoorFrame, DoorMesh, InteractionBox), variables (bIsOpen, OpenSpeed), and fully wired functions (OpenDoor, CloseDoor, ToggleDoor) for opening and closing logic."
+      "status": "IMMEDIATE_PASS",
+      "tool_calls_count": 5,
+      "duration_seconds": 12.0,
+      "issues_encountered": [],
+      "result_summary": "Created BP_Door, added Interact function, injected nodes, and connected pins via smart graph auto-detection on first try."
     },
     {
       "task_id": "task_37",
       "prompt": "Use the create-interface skill to make a Blueprint Interface named 'BPI_Interactable' with a function 'Interact'.",
-      "status": "SELF_CORRECTED_PASS",
-      "tool_calls_count": 26,
-      "duration_seconds": 48.0,
-      "issues_encountered": [
-        "Initial BlueprintFactory configuration required setting parent_class = unreal.Interface",
-        "Native tool add_blueprint_function errored on Blueprint Interface asset type, self-corrected using unreal.BlueprintEditorLibrary.add_function_graph"
-      ],
-      "result_summary": "Created Blueprint Interface asset 'BPI_Interactable' with function signature 'Interact' under /Game/ and generated C++ backing header IBPI_Interactable.h."
+      "status": "IMMEDIATE_PASS",
+      "tool_calls_count": 2,
+      "duration_seconds": 4.0,
+      "issues_encountered": [],
+      "result_summary": "Created Blueprint Interface 'BPI_Interactable' and added function 'Interact' natively via add_blueprint_function on first try."
     },
     {
       "task_id": "task_38",
