@@ -18,6 +18,7 @@
 #include "Editor.h"
 #include "ScopedTransaction.h"
 #include "EditorAssetLibrary.h"
+#include "Subsystems/EditorAssetSubsystem.h"
 #include "ObjectTools.h"
 #endif
 
@@ -37,7 +38,8 @@ TArray<FString> FAgentFrameworkContextActions::GetSupportedToolNames() const
 		TEXT("activate_skill"),
 		TEXT("enforce_naming_conventions"),
 		TEXT("organize_assets_by_type"),
-		TEXT("consolidate_asset_references")
+		TEXT("consolidate_asset_references"),
+		TEXT("delete_asset")
 	};
 }
 
@@ -86,6 +88,10 @@ FAgentFrameworkActionResult FAgentFrameworkContextActions::ExecuteAction(const T
 	else if (Action == TEXT("consolidate_asset_references"))
 	{
 		Result = ExecuteConsolidateAssetReferences(Params, Result);
+	}
+	else if (Action == TEXT("delete_asset"))
+	{
+		Result = ExecuteDeleteAsset(Params, Result);
 	}
 	else
 	{
@@ -1002,5 +1008,65 @@ FAgentFrameworkActionResult FAgentFrameworkContextActions::ExecuteConsolidateAss
 
 	return Result;
 }
+
+FAgentFrameworkActionResult FAgentFrameworkContextActions::ExecuteDeleteAsset(const TSharedRef<FJsonObject>& Params, FAgentFrameworkActionResult& Result)
+{
+#if WITH_EDITOR
+	FString AssetPath;
+	if (!UAgentFrameworkActionUtils::TryGetStringParam(Params, TEXT("asset_path"), AssetPath, Result.Errors, true))
+	{
+		return Result;
+	}
+
+	UEditorAssetSubsystem* EditorAssetSubsystem = GEditor ? GEditor->GetEditorSubsystem<UEditorAssetSubsystem>() : nullptr;
+	if (EditorAssetSubsystem && EditorAssetSubsystem->DoesAssetExist(AssetPath))
+	{
+		if (EditorAssetSubsystem->DeleteAsset(AssetPath))
+		{
+			Result.bSuccess = true;
+			Result.ResultMessage = FString::Printf(TEXT("Successfully deleted asset '%s'."), *AssetPath);
+			return Result;
+		}
+	}
+
+	UObject* Asset = LoadObject<UObject>(nullptr, *AssetPath);
+	if (IsValid(Asset))
+	{
+		TArray<UObject*> ObjectsToDelete = { Asset };
+		int32 DeletedCount = ObjectTools::DeleteObjects(ObjectsToDelete, /*bShowConfirmation=*/false);
+		if (DeletedCount > 0)
+		{
+			Result.bSuccess = true;
+			Result.ResultMessage = FString::Printf(TEXT("Successfully deleted asset '%s' via ObjectTools."), *AssetPath);
+			return Result;
+		}
+	}
+
+	// Try deleting package directly from disk if file exists
+	FString PackageFilename;
+	FString PackagePath = FPackageName::ObjectPathToPackageName(AssetPath);
+	if (FPackageName::TryConvertLongPackageNameToFilename(PackagePath, PackageFilename, FPackageName::GetAssetPackageExtension()))
+	{
+		if (FPaths::FileExists(PackageFilename))
+		{
+			if (IFileManager::Get().Delete(*PackageFilename))
+			{
+				FAssetRegistryModule::AssetDeleted(Asset);
+				Result.bSuccess = true;
+				Result.ResultMessage = FString::Printf(TEXT("Deleted package file '%s' from disk."), *PackageFilename);
+				return Result;
+			}
+		}
+	}
+
+	Result.bSuccess = false;
+	Result.Errors.Add(FString::Printf(TEXT("Failed to delete asset at '%s' or asset does not exist."), *AssetPath));
+#else
+	Result.bSuccess = false;
+	Result.Errors.Add(TEXT("delete_asset is only available in editor builds."));
+#endif
+	return Result;
+}
+
 
 

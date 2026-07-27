@@ -235,6 +235,22 @@
           "target_asset_path"
         ]
       }
+    },
+    {
+      "name": "delete_asset",
+      "description": "Delete an asset or package from the Unreal Engine project Content folder. Marks package for deletion, removes asset registry entry, and deletes the file from disk.",
+      "input_schema": {
+        "type": "object",
+        "properties": {
+          "asset_path": {
+            "type": "string",
+            "description": "Content package path or object path of the asset to delete (e.g. '/Game/AI/BT_Enemy' or '/Game/BP_TestActor')"
+          }
+        },
+        "required": [
+          "asset_path"
+        ]
+      }
     }
   ]
 }

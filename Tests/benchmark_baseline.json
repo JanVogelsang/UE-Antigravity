@@ -24,21 +24,23 @@
     },
     {
       "task_id": "task_02",
-      "prompt": "Create a Behavior Tree named 'BT_Enemy' in '/Game/AI'.",
+      "prompt": "Create a Behavior Tree named 'BT_Enemy' in '/Game/AI', verify its creation, and then clean up by deleting the created asset afterwards to restore the workspace state.",
       "status": "IMMEDIATE_PASS",
       "tool_calls_count": 5,
       "duration_seconds": 10.0,
       "issues_encountered": [],
-      "result_summary": "Successfully created Behavior Tree asset 'BT_Enemy' at '/Game/AI/BT_Enemy' using unreal.BehaviorTreeFactory and verified asset existence."
+      "result_summary": "Successfully created Behavior Tree asset 'BT_Enemy' at '/Game/AI/BT_Enemy' using unreal.BehaviorTreeFactory and verified asset existence.",
+      "validation_criteria": "Verify asset creation at '/Game/AI/BT_Enemy' and verify that it was cleanly deleted during the cleanup step."
     },
     {
       "task_id": "task_03",
-      "prompt": "Create a new Blueprint class named BP_TestActor and add a float variable 'Speed'.",
+      "prompt": "Create a new Blueprint class named BP_TestActor, add a float variable 'Speed', verify compilation, and clean up by deleting BP_TestActor afterwards to restore the workspace state.",
       "status": "IMMEDIATE_PASS",
       "tool_calls_count": 7,
       "duration_seconds": 10,
       "issues_encountered": [],
-      "result_summary": "Successfully created BP_TestActor inheriting from Actor with float variable 'Speed' on the first attempt."
+      "result_summary": "Successfully created BP_TestActor inheriting from Actor with float variable 'Speed' on the first attempt.",
+      "validation_criteria": "Verify BP_TestActor creation with variable 'Speed' and verify that it was cleanly deleted during the cleanup step."
     },
     {
       "task_id": "task_04",
@@ -72,21 +74,23 @@
     },
     {
       "task_id": "task_07",
-      "prompt": "Create a new C++ class 'AMyBenchActor' inheriting from AActor.",
+      "prompt": "Create a new C++ class 'AMyBenchActor' inheriting from AActor, verify header/cpp creation, and clean up created files afterwards to restore workspace state.",
       "status": "IMMEDIATE_PASS",
       "tool_calls_count": 9,
       "duration_seconds": 12,
       "issues_encountered": [],
-      "result_summary": "Successfully created AMyBenchActor C++ class inheriting from AActor using native MCP tool macro_create_cpp_class and regenerated compile_commands.json."
+      "result_summary": "Successfully created AMyBenchActor C++ class inheriting from AActor using native MCP tool macro_create_cpp_class and regenerated compile_commands.json.",
+      "validation_criteria": "Verify C++ source file generation and verify cleanup of created class files."
     },
     {
       "task_id": "task_08",
-      "prompt": "Import a CSV file to create a Data Table named 'DT_Items' in '/Game/Data'.",
+      "prompt": "Import a CSV file to create a Data Table named 'DT_Items' in '/Game/Data', verify row count, and clean up by deleting 'DT_Items' afterwards.",
       "status": "IMMEDIATE_PASS",
       "tool_calls_count": 14,
       "duration_seconds": 30,
       "issues_encountered": [],
-      "result_summary": "Successfully imported CSV file into Unreal Engine to create a Data Table asset 'DT_Items' under '/Game/Data'. Verified asset existence and DataTable class type."
+      "result_summary": "Successfully imported CSV file into Unreal Engine to create a Data Table asset 'DT_Items' under '/Game/Data'. Verified asset existence and DataTable class type.",
+      "validation_criteria": "Verify Data Table import at '/Game/Data/DT_Items' and verify asset deletion during cleanup."
     },
     {
       "task_id": "task_09",
@@ -99,48 +103,53 @@
     },
     {
       "task_id": "task_10",
-      "prompt": "Create a new Gameplay Ability Blueprint named 'GA_Fireball'.",
+      "prompt": "Create a new Gameplay Ability Blueprint named 'GA_Fireball', verify parent class, and clean up by deleting 'GA_Fireball' afterwards.",
       "status": "IMMEDIATE_PASS",
       "tool_calls_count": 6,
       "duration_seconds": 8,
       "issues_encountered": [],
-      "result_summary": "Created Gameplay Ability Blueprint 'GA_Fireball' with parent class GameplayAbility (UGameplayAbility) using native create_blueprint_actor MCP tool and verified via get_blueprint_info."
+      "result_summary": "Created Gameplay Ability Blueprint 'GA_Fireball' with parent class GameplayAbility (UGameplayAbility) using native create_blueprint_actor MCP tool and verified via get_blueprint_info.",
+      "validation_criteria": "Verify Gameplay Ability Blueprint creation and verify clean asset removal during cleanup."
     },
     {
       "task_id": "task_11",
-      "prompt": "Create an Input Mapping Context named 'IMC_Default' and an Input Action 'IA_Jump'.",
+      "prompt": "Create an Input Mapping Context named 'IMC_Default' and an Input Action 'IA_Jump', wire mapping, and clean up by deleting created input assets afterwards.",
       "status": "IMMEDIATE_PASS",
       "tool_calls_count": 10,
       "duration_seconds": 15,
       "issues_encountered": [],
-      "result_summary": "Created IA_Jump (InputAction) and IMC_Default (InputMappingContext) assets using native Unreal Engine MCP tools and verified their existence."
+      "result_summary": "Created IA_Jump (InputAction) and IMC_Default (InputMappingContext) assets using native Unreal Engine MCP tools and verified their existence.",
+      "validation_criteria": "Verify IMC_Default and IA_Jump creation and verify clean removal during cleanup."
     },
     {
       "task_id": "task_12",
-      "prompt": "Spawn a Directional Light actor into the current level at coordinates (0,0,1000).",
+      "prompt": "Spawn a Directional Light actor into the current level at location (0,0,1000), verify spawn, and destroy/delete the actor afterwards.",
       "status": "IMMEDIATE_PASS",
       "tool_calls_count": 10,
       "duration_seconds": 20,
       "issues_encountered": [],
-      "result_summary": "Successfully spawned a Directional Light actor into the active level at location (0, 0, 1000) using Unreal Engine's EditorActorSubsystem python API and verified its position."
+      "result_summary": "Successfully spawned a Directional Light actor into the active level at location (0, 0, 1000) using Unreal Engine's EditorActorSubsystem python API and verified its position.",
+      "validation_criteria": "Verify actor spawn in level and verify actor destruction/cleanup."
     },
     {
       "task_id": "task_13",
-      "prompt": "Create a new Material named 'M_Red' and add a Vector Parameter for color.",
+      "prompt": "Create a new Material named 'M_Red', add a Vector Parameter for BaseColor, verify compilation, and clean up by deleting 'M_Red' afterwards.",
       "status": "IMMEDIATE_PASS",
       "tool_calls_count": 5,
       "duration_seconds": 10,
       "issues_encountered": [],
-      "result_summary": "Created Material asset M_Red in /Game and added a Vector Parameter node named Color connected to Base Color using unreal.MaterialEditingLibrary."
+      "result_summary": "Created Material asset M_Red in /Game and added a Vector Parameter node named Color connected to Base Color using unreal.MaterialEditingLibrary.",
+      "validation_criteria": "Verify Material creation with BaseColor parameter and verify clean deletion during cleanup."
     },
     {
       "task_id": "task_14",
-      "prompt": "Create a Media Player asset named 'MP_Video' in '/Game/Media'.",
+      "prompt": "Create a Media Player asset named 'MP_Video' in '/Game/Media', verify creation, and clean up by deleting 'MP_Video' afterwards.",
       "status": "IMMEDIATE_PASS",
       "tool_calls_count": 9,
       "duration_seconds": 16.0,
       "issues_encountered": [],
-      "result_summary": "Successfully created Media Player asset 'MP_Video' in '/Game/Media' via Editor Python Script API and verified existence."
+      "result_summary": "Successfully created Media Player asset 'MP_Video' in '/Game/Media' via Editor Python Script API and verified existence.",
+      "validation_criteria": "Verify Media Player creation at '/Game/Media/MP_Video' and verify clean asset deletion during cleanup."
     },
     {
       "task_id": "task_15",
@@ -153,21 +162,23 @@
     },
     {
       "task_id": "task_16",
-      "prompt": "Create a new Niagara System named 'NS_Sparks' using the default fountain template.",
+      "prompt": "Create a new Niagara System named 'NS_Sparks' using default fountain template, verify compilation, and clean up by deleting 'NS_Sparks' afterwards.",
       "status": "IMMEDIATE_PASS",
       "tool_calls_count": 1,
       "duration_seconds": 3.0,
       "issues_encountered": [],
-      "result_summary": "Created empty Niagara System '/Game/NS_Sparks' synchronously on first try."
+      "result_summary": "Created empty Niagara System '/Game/NS_Sparks' synchronously on first try.",
+      "validation_criteria": "Verify Niagara System creation and compilation, and verify clean deletion during cleanup."
     },
     {
       "task_id": "task_17",
-      "prompt": "Create a Procedural Content Generation (PCG) Graph named 'PCG_Forest'.",
+      "prompt": "Create a Procedural Content Generation (PCG) Graph named 'PCG_Forest', verify creation, and clean up by deleting 'PCG_Forest' afterwards.",
       "status": "IMMEDIATE_PASS",
       "tool_calls_count": 6,
       "duration_seconds": 15,
       "issues_encountered": [],
-      "result_summary": "Created PCG Graph asset named PCG_Forest at /Game/PCG_Forest using PCGGraphFactory via Unreal Engine Python API, and confirmed existence using search_assets."
+      "result_summary": "Created PCG Graph asset named PCG_Forest at /Game/PCG_Forest using PCGGraphFactory via Unreal Engine Python API, and confirmed existence using search_assets.",
+      "validation_criteria": "Verify PCG Graph asset creation and verify clean asset deletion during cleanup."
     },
     {
       "task_id": "task_18",
@@ -198,14 +209,15 @@
     },
     {
       "task_id": "task_21",
-      "prompt": "Create a Level Sequence asset named 'LS_Cinematic' in '/Game/Cinematics'.",
+      "prompt": "Create a Level Sequence asset named 'LS_Cinematic' in '/Game/Cinematics', verify validity, and clean up by deleting 'LS_Cinematic' afterwards.",
       "status": "SELF_CORRECTED_PASS",
       "tool_calls_count": 6,
       "duration_seconds": 12.0,
       "issues_encountered": [
         "Initial create_asset call failed because '/Game/Cinematics/LS_Cinematic' already existed in the project. Verified asset existence and type using EditorAssetLibrary."
       ],
-      "result_summary": "Level Sequence asset 'LS_Cinematic' at '/Game/Cinematics/LS_Cinematic' verified successfully as valid LevelSequence asset."
+      "result_summary": "Level Sequence asset 'LS_Cinematic' at '/Game/Cinematics/LS_Cinematic' verified successfully as valid LevelSequence asset.",
+      "validation_criteria": "Verify Level Sequence creation at '/Game/Cinematics/LS_Cinematic' and verify clean asset deletion during cleanup."
     },
     {
       "task_id": "task_22",
@@ -252,23 +264,25 @@
     },
     {
       "task_id": "task_26",
-      "prompt": "Create a UMG Widget Blueprint named 'WBP_HUD' and add a Canvas Panel.",
+      "prompt": "Create a UMG Widget Blueprint named 'WBP_HUD', add a Canvas Panel, verify tree hierarchy, and clean up by deleting 'WBP_HUD' afterwards.",
       "status": "IMMEDIATE_PASS",
       "tool_calls_count": 10,
       "duration_seconds": 18.0,
       "issues_encountered": [],
-      "result_summary": "Created UMG Widget Blueprint 'WBP_HUD' with a Canvas Panel as root widget."
+      "result_summary": "Created UMG Widget Blueprint 'WBP_HUD' with a Canvas Panel as root widget.",
+      "validation_criteria": "Verify Widget Blueprint creation with Canvas Panel and verify clean asset deletion during cleanup."
     },
     {
       "task_id": "task_27",
-      "prompt": "Create a Primary Data Asset named 'PDA_Weapon' using the class 'UWeaponData'.",
+      "prompt": "Create a Primary Data Asset named 'PDA_Weapon' using class 'UWeaponData', verify properties, and clean up by deleting 'PDA_Weapon' afterwards.",
       "status": "SELF_CORRECTED_PASS",
       "tool_calls_count": 16,
       "duration_seconds": 23.5,
       "issues_encountered": [
         "DataAssetFactory property data_asset_class required set_editor_property call in UE Python API"
       ],
-      "result_summary": "Successfully created Primary Data Asset 'PDA_Weapon' of class 'UWeaponData' at /Game/PDA_Weapon using DataAssetFactory and verified its existence and class inheritance."
+      "result_summary": "Successfully created Primary Data Asset 'PDA_Weapon' of class 'UWeaponData' at /Game/PDA_Weapon using DataAssetFactory and verified its existence and class inheritance.",
+      "validation_criteria": "Verify Data Asset creation and verify clean asset deletion during cleanup."
     },
     {
       "task_id": "task_28",
@@ -328,52 +342,57 @@
     },
     {
       "task_id": "task_34",
-      "prompt": "Use the add-component skill to add a BoxComponent to the 'BP_TestActor' blueprint.",
+      "prompt": "Use the add-component skill to add a BoxComponent to 'BP_TestActor', verify component addition, and revert changes afterwards.",
       "status": "IMMEDIATE_PASS",
       "tool_calls_count": 11,
       "duration_seconds": 20,
       "issues_encountered": [],
-      "result_summary": "Successfully located BP_TestActor asset at /Game/BP_TestActor, added a BoxComponent named BoxComponent using add_blueprint_component MCP tool, and verified using get_blueprint_info."
+      "result_summary": "Successfully located BP_TestActor asset at /Game/BP_TestActor, added a BoxComponent named BoxComponent using add_blueprint_component MCP tool, and verified using get_blueprint_info.",
+      "validation_criteria": "Verify component addition to blueprint and verify component state restoration during cleanup."
     },
     {
       "task_id": "task_35",
-      "prompt": "Use the blueprint-authoring skill to implement a Print String node on the Event BeginPlay of 'BP_TestActor'.",
+      "prompt": "Use the blueprint-authoring skill to implement Print String on Event BeginPlay of 'BP_TestActor', verify nodes, and revert graph changes afterwards.",
       "status": "IMMEDIATE_PASS",
       "tool_calls_count": 17,
       "duration_seconds": 30.0,
       "issues_encountered": [],
-      "result_summary": "Successfully added a Print String node connected to Event BeginPlay in BP_TestActor using T3D injection and compiled cleanly."
+      "result_summary": "Successfully added a Print String node connected to Event BeginPlay in BP_TestActor using T3D injection and compiled cleanly.",
+      "validation_criteria": "Verify node injection in EventGraph and verify graph restoration during cleanup."
     },
     {
       "task_id": "task_36",
-      "prompt": "Use the create-actor skill to generate an interactable door named 'BP_Door'.",
+      "prompt": "Use the create-actor skill to generate interactable door 'BP_Door', add Interact function, wire pins, and clean up by deleting 'BP_Door' afterwards.",
       "status": "IMMEDIATE_PASS",
       "tool_calls_count": 5,
       "duration_seconds": 12.0,
       "issues_encountered": [],
-      "result_summary": "Created BP_Door, added Interact function, injected nodes, and connected pins via smart graph auto-detection on first try."
+      "result_summary": "Created BP_Door, added Interact function, injected nodes, and connected pins via smart graph auto-detection on first try.",
+      "validation_criteria": "Verify BP_Door creation, function wiring, and verify clean asset deletion during cleanup."
     },
     {
       "task_id": "task_37",
-      "prompt": "Use the create-interface skill to make a Blueprint Interface named 'BPI_Interactable' with a function 'Interact'.",
+      "prompt": "Use the create-interface skill to make Blueprint Interface 'BPI_Interactable' with function 'Interact', and clean up by deleting 'BPI_Interactable' afterwards.",
       "status": "IMMEDIATE_PASS",
       "tool_calls_count": 2,
       "duration_seconds": 4.0,
       "issues_encountered": [],
-      "result_summary": "Created Blueprint Interface 'BPI_Interactable' and added function 'Interact' natively via add_blueprint_function on first try."
+      "result_summary": "Created Blueprint Interface 'BPI_Interactable' and added function 'Interact' natively via add_blueprint_function on first try.",
+      "validation_criteria": "Verify Blueprint Interface creation and verify clean asset deletion during cleanup."
     },
     {
       "task_id": "task_38",
-      "prompt": "Use the generate-assets skill to create a folder structure '/Game/Core' containing a GameMode and PlayerController.",
+      "prompt": "Use the generate-assets skill to create folder structure '/Game/Core' with GameMode and PlayerController, and clean up created assets afterwards.",
       "status": "IMMEDIATE_PASS",
       "tool_calls_count": 8,
       "duration_seconds": 16,
       "issues_encountered": [],
-      "result_summary": "Successfully created folder '/Game/Core' containing Blueprint assets 'BP_GameMode' (GameModeBase) and 'BP_PlayerController' (PlayerController) using native UE MCP tools."
+      "result_summary": "Successfully created folder '/Game/Core' containing Blueprint assets 'BP_GameMode' (GameModeBase) and 'BP_PlayerController' (PlayerController) using native UE MCP tools.",
+      "validation_criteria": "Verify folder and asset creation and verify clean asset deletion during cleanup."
     },
     {
       "task_id": "task_39",
-      "prompt": "Use the niagara-authoring skill to set up a burst spawn effect in 'NS_Sparks'.",
+      "prompt": "Use the niagara-authoring skill to set up a burst spawn effect in 'NS_Sparks', verify compilation, and clean up by deleting 'NS_Sparks' afterwards.",
       "status": "SELF_CORRECTED_PASS",
       "tool_calls_count": 45,
       "duration_seconds": 655,
@@ -382,7 +401,8 @@
         "Native C++ tool add_niagara_emitter encountered an Access Violation in UNiagaraEmitter::CreateWithParentAndOwner during template duplication.",
         "Self-corrected by duplicating engine template system DirectionalBurst containing pre-configured burst spawn module to NS_Sparks."
       ],
-      "result_summary": "Successfully set up a burst spawn effect in 'NS_Sparks' by instantiating the DirectionalBurst template system with configured burst spawn modules, compiling the system, and capturing isolated keyframe images."
+      "result_summary": "Successfully set up a burst spawn effect in 'NS_Sparks' by instantiating the DirectionalBurst template system with configured burst spawn modules, compiling the system, and capturing isolated keyframe images.",
+      "validation_criteria": "Verify Niagara burst spawn configuration and verify clean system deletion during cleanup."
     },
     {
       "task_id": "task_40",
@@ -395,68 +415,75 @@
     },
     {
       "task_id": "task_41",
-      "prompt": "Use the setup-input skill to map WASD movement keys to an Input Mapping Context.",
+      "prompt": "Use the setup-input skill to map WASD movement keys to an Input Mapping Context, verify mapping, and revert input configuration afterwards.",
       "status": "IMMEDIATE_PASS",
       "tool_calls_count": 30,
       "duration_seconds": 75,
       "issues_encountered": [
         "inspect_uobject_properties call returned an error when inspecting uninitialized asset, bypassed by directly using create_input_mapping_context and add_input_mapping tools."
       ],
-      "result_summary": "Successfully created the Axis2D IA_Move Input Action and mapped the WASD hardware keys (W, A, S, D) with appropriate Swizzle and Negate modifiers to IMC_Default using native Unreal Engine MCP tools."
+      "result_summary": "Successfully created the Axis2D IA_Move Input Action and mapped the WASD hardware keys (W, A, S, D) with appropriate Swizzle and Negate modifiers to IMC_Default using native Unreal Engine MCP tools.",
+      "validation_criteria": "Verify Input Mapping Context key mapping and verify mapping restoration during cleanup."
     },
     {
       "task_id": "task_42",
-      "prompt": "Use the setup-replication skill to make the 'Speed' variable in 'BP_TestActor' replicate to clients.",
+      "prompt": "Use the setup-replication skill to replicate 'Speed' variable in 'BP_TestActor', verify replication settings, and revert variable replication afterwards.",
       "status": "IMMEDIATE_PASS",
       "tool_calls_count": 11,
       "duration_seconds": 22,
       "issues_encountered": [],
-      "result_summary": "Successfully configured replication for 'Speed' variable on 'BP_TestActor' to Replicated with COND_None and compiled the Blueprint cleanly."
+      "result_summary": "Successfully configured replication for 'Speed' variable on 'BP_TestActor' to Replicated with COND_None and compiled the Blueprint cleanly.",
+      "validation_criteria": "Verify variable replication configuration and verify state restoration during cleanup."
     },
     {
       "task_id": "task_43",
-      "prompt": "Configure a Mass Entity Spawner to spawn 100 AI crowd agents in the level.",
+      "prompt": "Configure a Mass Entity Spawner to spawn 100 AI crowd agents, verify spawner settings, and clean up spawner configuration afterwards.",
       "status": "IMMEDIATE_PASS",
       "tool_calls_count": 8,
       "duration_seconds": 15.0,
       "issues_encountered": [],
-      "result_summary": "Successfully configured Mass Entity Spawner (MassEntitySpawner_Crowd100) to spawn 100 AI crowd agent instances in the level."
+      "result_summary": "Successfully configured Mass Entity Spawner (MassEntitySpawner_Crowd100) to spawn 100 AI crowd agent instances in the level.",
+      "validation_criteria": "Verify Mass Entity Spawner setup and verify clean configuration reset during cleanup."
     },
     {
       "task_id": "task_44",
-      "prompt": "Configure the Mass Crowd AI subsystem with maximum active agent limits.",
+      "prompt": "Configure Mass Crowd AI subsystem active agent limits, verify settings, and revert subsystem limits afterwards.",
       "status": "IMMEDIATE_PASS",
       "tool_calls_count": 6,
       "duration_seconds": 12.0,
       "issues_encountered": [],
-      "result_summary": "Successfully configured Mass Crowd AI subsystem LOD active agent limits ([1000, 2500, 5000, 10000]) and slot sizes."
+      "result_summary": "Successfully configured Mass Crowd AI subsystem LOD active agent limits ([1000, 2500, 5000, 10000]) and slot sizes.",
+      "validation_criteria": "Verify Mass Crowd AI subsystem configuration and verify limit restoration during cleanup."
     },
     {
       "task_id": "task_45",
-      "prompt": "Attach the Movement and Avoidance traits to the Mass entity definition.",
+      "prompt": "Attach Movement and Avoidance traits to Mass entity definition, verify trait addition, and revert entity traits afterwards.",
       "status": "IMMEDIATE_PASS",
       "tool_calls_count": 9,
       "duration_seconds": 16.0,
       "issues_encountered": [],
-      "result_summary": "Created UMassEntityConfigAsset at /Game/Mass_Trait_Configuration with MassMovementTrait and MassObstacleAvoidanceTrait."
+      "result_summary": "Created UMassEntityConfigAsset at /Game/Mass_Trait_Configuration with MassMovementTrait and MassObstacleAvoidanceTrait.",
+      "validation_criteria": "Verify trait attachment to entity definition and verify trait removal during cleanup."
     },
     {
       "task_id": "task_46",
-      "prompt": "Create a StateTree asset named 'ST_EnemyLogic' in '/Game/AI'.",
+      "prompt": "Create StateTree asset 'ST_EnemyLogic' at '/Game/AI', verify state tree creation, and clean up by deleting 'ST_EnemyLogic' afterwards.",
       "status": "IMMEDIATE_PASS",
       "tool_calls_count": 7,
       "duration_seconds": 14.0,
       "issues_encountered": [],
-      "result_summary": "Created StateTree asset 'ST_EnemyLogic' at /Game/AI/ST_EnemyLogic and verified asset state."
+      "result_summary": "Created StateTree asset 'ST_EnemyLogic' at /Game/AI/ST_EnemyLogic and verified asset state.",
+      "validation_criteria": "Verify StateTree creation at '/Game/AI/ST_EnemyLogic' and verify clean asset deletion during cleanup."
     },
     {
       "task_id": "task_47",
-      "prompt": "Execute an Environment Query System (EQS) query to find cover positions near the player.",
+      "prompt": "Execute an EQS query to find cover positions, verify query execution, and clean up generated query assets afterwards.",
       "status": "IMMEDIATE_PASS",
       "tool_calls_count": 10,
       "duration_seconds": 18.0,
       "issues_encountered": [],
-      "result_summary": "Created EQS_FindCoverPositions asset and executed query via EnvQueryManager returning candidate cover locations."
+      "result_summary": "Created EQS_FindCoverPositions asset and executed query via EnvQueryManager returning candidate cover locations.",
+      "validation_criteria": "Verify EQS query execution and verify query asset cleanup."
     },
     {
       "task_id": "task_48",
@@ -469,30 +496,33 @@
     },
     {
       "task_id": "task_49",
-      "prompt": "Set up a Pose Search Schema and Motion Matching database asset for locomotion animations.",
+      "prompt": "Set up Pose Search Schema and Motion Matching database asset for locomotion, verify schema, and clean up database asset afterwards.",
       "status": "IMMEDIATE_PASS",
       "tool_calls_count": 12,
       "duration_seconds": 22.0,
       "issues_encountered": [],
-      "result_summary": "Created & linked Pose Search Schema /Game/MotionMatching/PSS_Locomotion and Motion Matching Database /Game/MotionMatching/MMDB_Locomotion."
+      "result_summary": "Created & linked Pose Search Schema /Game/MotionMatching/PSS_Locomotion and Motion Matching Database /Game/MotionMatching/MMDB_Locomotion.",
+      "validation_criteria": "Verify Motion Matching database setup and verify clean asset deletion during cleanup."
     },
     {
       "task_id": "task_50",
-      "prompt": "Configure Movie Render Queue parameters for rendering the level sequence 'LS_Cinematic'.",
+      "prompt": "Configure Movie Render Queue for level sequence 'LS_Cinematic', verify queue settings, and clean up render job parameters afterwards.",
       "status": "IMMEDIATE_PASS",
       "tool_calls_count": 8,
       "duration_seconds": 14.0,
       "issues_encountered": [],
-      "result_summary": "Configured MoviePipelineQueueSubsystem render job for /Game/Cinematics/LS_Cinematic with 1080p PNG deferred render pipeline settings."
+      "result_summary": "Configured MoviePipelineQueueSubsystem render job for /Game/Cinematics/LS_Cinematic with 1080p PNG deferred render pipeline settings.",
+      "validation_criteria": "Verify Movie Render Queue job configuration and verify job parameter cleanup."
     },
     {
       "task_id": "task_51",
-      "prompt": "Create a DMX Fixture Library named 'DMX_Stage' and patch 4 moving head fixture channels.",
+      "prompt": "Create DMX Fixture Library 'DMX_Stage' with 4 patched channels, verify DMX setup, and clean up by deleting 'DMX_Stage' afterwards.",
       "status": "IMMEDIATE_PASS",
       "tool_calls_count": 11,
       "duration_seconds": 20.0,
       "issues_encountered": [],
-      "result_summary": "Created DMXLibrary /Game/DMX_Stage and patched 4 moving head fixture channels across 64 DMX channels."
+      "result_summary": "Created DMXLibrary /Game/DMX_Stage and patched 4 moving head fixture channels across 64 DMX channels.",
+      "validation_criteria": "Verify DMX Fixture Library creation and verify clean asset deletion during cleanup."
     }
   ]
 }

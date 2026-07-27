@@ -33,4 +33,5 @@ private:
     FAgentFrameworkActionResult ExecuteEnforceNamingConventions(const TSharedRef<FJsonObject>& Params, FAgentFrameworkActionResult& Result);
     FAgentFrameworkActionResult ExecuteOrganizeAssetsByType(const TSharedRef<FJsonObject>& Params, FAgentFrameworkActionResult& Result);
     FAgentFrameworkActionResult ExecuteConsolidateAssetReferences(const TSharedRef<FJsonObject>& Params, FAgentFrameworkActionResult& Result);
+    FAgentFrameworkActionResult ExecuteDeleteAsset(const TSharedRef<FJsonObject>& Params, FAgentFrameworkActionResult& Result);
 };

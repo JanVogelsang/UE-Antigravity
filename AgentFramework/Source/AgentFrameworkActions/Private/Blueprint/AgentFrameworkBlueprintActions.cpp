@@ -2940,6 +2940,38 @@ FAgentFrameworkActionResult FAgentFrameworkBlueprintActions::ExecuteConnectPins(
 			}
 		}
 	}
+
+	auto GraphContainsNodes = [](UEdGraph* Graph, const FString& SrcName, const FString& DstName) -> bool
+	{
+		if (!IsValid(Graph)) return false;
+		bool bHasSrc = false, bHasDst = false;
+		for (UEdGraphNode* Node : Graph->Nodes)
+		{
+			if (!IsValid(Node)) continue;
+			if (Node->GetName() == SrcName) bHasSrc = true;
+			if (Node->GetName() == DstName) bHasDst = true;
+			if (bHasSrc && bHasDst) return true;
+		}
+		return bHasDst || (bHasSrc && bHasDst);
+	};
+
+	if (!IsValid(TargetGraph) || !GraphContainsNodes(TargetGraph, SourceNode, TargetNode))
+	{
+		TArray<UEdGraph*> AllGraphs;
+		AllGraphs.Append(Blueprint->FunctionGraphs);
+		AllGraphs.Append(Blueprint->UbergraphPages);
+		AllGraphs.Append(Blueprint->MacroGraphs);
+
+		for (UEdGraph* G : AllGraphs)
+		{
+			if (IsValid(G) && GraphContainsNodes(G, SourceNode, TargetNode))
+			{
+				TargetGraph = G;
+				break;
+			}
+		}
+	}
+
 	if (!IsValid(TargetGraph))
 	{
 		Result.Errors.Add(FString::Printf(

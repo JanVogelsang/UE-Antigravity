@@ -171,6 +171,15 @@ FAgentFrameworkActionResult FAgentFrameworkNiagaraActions::ExecuteCreateSystem(c
 	FString PackagePath = FPackageName::GetLongPackagePath(AssetPath);
 	FString AssetName = FPackageName::GetShortName(AssetPath);
 
+	UNiagaraSystem* ExistingSystem = LoadObject<UNiagaraSystem>(nullptr, *AssetPath);
+	if (IsValid(ExistingSystem))
+	{
+		Result.bSuccess = true;
+		Result.ResultMessage = FString::Printf(TEXT("Niagara System '%s' already exists."), *AssetName);
+		Result.ModifiedAssets.Add(AssetPath);
+		return Result;
+	}
+
 	FAssetToolsModule& AssetToolsModule = FModuleManager::LoadModuleChecked<FAssetToolsModule>("AssetTools");
 	IAssetTools& AssetTools = AssetToolsModule.Get();
 	UNiagaraSystemFactoryNew* Factory = NewObject<UNiagaraSystemFactoryNew>();
