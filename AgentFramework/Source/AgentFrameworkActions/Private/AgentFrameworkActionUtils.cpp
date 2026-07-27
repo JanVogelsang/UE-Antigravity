@@ -1,6 +1,7 @@
 // Copyright 2026 AgentFramework. All Rights Reserved.
 
 #include "AgentFrameworkActionUtils.h"
+#include "UObject/SavePackage.h"
 #include "Misc/ScopeLock.h"
 #include "HAL/CriticalSection.h"
 #include "Serialization/JsonSerializer.h"
@@ -459,4 +460,17 @@ void FAgentFrameworkScopedTelemetry::SetResult(bool bInSuccess, const TArray<FSt
 	bSuccess = bInSuccess;
 	Errors = InErrors;
 	bResultSet = true;
+}
+
+bool UAgentFrameworkActionUtils::SaveAssetPackage(UPackage* Package, UObject* Asset, const FString& PackageFileName)
+{
+	if (!Package || !Asset || PackageFileName.IsEmpty())
+	{
+		return false;
+	}
+
+	Package->FullyLoad();
+
+	FSavePackageArgs SaveArgs;
+	return UPackage::SavePackage(Package, Asset, *PackageFileName, SaveArgs);
 }

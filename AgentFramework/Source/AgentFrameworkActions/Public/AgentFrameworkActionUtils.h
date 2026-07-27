@@ -219,4 +219,9 @@ public:
 	 */
 	UFUNCTION(BlueprintCallable, Category = "AgentFramework|Telemetry")
 	static void ClearTelemetryData();
+
+	/**
+	 * Fully loads a package if needed and saves it safely using UPackage::SavePackage, preventing engine assertion crashes.
+	 */
+	static bool SaveAssetPackage(UPackage* Package, UObject* Asset, const FString& PackageFileName);
 };

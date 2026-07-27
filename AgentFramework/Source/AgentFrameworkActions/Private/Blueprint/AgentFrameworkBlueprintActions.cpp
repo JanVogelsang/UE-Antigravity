@@ -2070,6 +2070,10 @@ FAgentFrameworkActionResult FAgentFrameworkBlueprintActions::ExecuteInjectNodesT
 
 	// Parse and sanitize Pin connections in T3DText before passing to editor utilities
 	FString SanitizedT3DText = T3DText;
+
+	// Remap legacy or variant module prefixes for K2Nodes to standard BlueprintGraph module
+	SanitizedT3DText = SanitizedT3DText.Replace(TEXT("/Script/UnrealEd.K2Node_"), TEXT("/Script/BlueprintGraph.K2Node_"));
+	SanitizedT3DText = SanitizedT3DText.Replace(TEXT("Class=/Script/UnrealEd.K2Node_"), TEXT("Class=/Script/BlueprintGraph.K2Node_"));
 	{
 		TMap<FString, TSet<FString>> T3DNodesAndPins;
 		TArray<FString> Lines;
@@ -2814,13 +2818,13 @@ bool FAgentFrameworkBlueprintActions::ConnectPinsHelper(
 
 	if (!IsValid(SrcNode))
 	{
-		Result.Errors.Add(FString::Printf(TEXT("Source node '%s' not found in graph '%s'."), *SourceNode, *TargetGraph->GetName()));
+		Result.Errors.Add(FString::Printf(TEXT("Source node '%s' not found in graph '%s'. [AI HINT: If this node is inside a function or macro, pass 'graph_name' explicitly.]"), *SourceNode, *TargetGraph->GetName()));
 		return false;
 	}
 
 	if (!IsValid(DstNode))
 	{
-		Result.Errors.Add(FString::Printf(TEXT("Target node '%s' not found in graph '%s'."), *TargetNode, *TargetGraph->GetName()));
+		Result.Errors.Add(FString::Printf(TEXT("Target node '%s' not found in graph '%s'. [AI HINT: If this node is inside a function or macro, pass 'graph_name' explicitly.]"), *TargetNode, *TargetGraph->GetName()));
 		return false;
 	}
 

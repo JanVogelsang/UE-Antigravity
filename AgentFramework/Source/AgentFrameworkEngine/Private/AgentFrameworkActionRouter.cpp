@@ -10,6 +10,13 @@
 #include "Serialization/JsonSerializer.h"
 #include "Serialization/JsonWriter.h"
 
+#if PLATFORM_WINDOWS
+#include "Windows/WindowsHWrapper.h"
+#include "Windows/AllowWindowsPlatformTypes.h"
+#include <excpt.h>
+#include "Windows/HideWindowsPlatformTypes.h"
+#endif
+
 FOnToolExecutionRecorded FAgentFrameworkActionRouter::OnToolExecutionRecorded;
 
 FAgentFrameworkActionRouter::FAgentFrameworkActionRouter() {}
@@ -230,6 +237,31 @@ FAgentFrameworkActionResult FAgentFrameworkActionRouter::RouteToolCall(const FAg
 		return ScopedTelemetry.Result;
 	}
 
+#if PLATFORM_WINDOWS
+struct FSEHExecutorWrapper
+{
+	static DWORD Execute(IAgentFrameworkActionExecutor* Executor, const TSharedRef<FJsonObject>& Params, FAgentFrameworkActionResult* OutResult)
+	{
+		DWORD ExceptionCode = 0;
+		__try
+		{
+			InvokeExecutor(Executor, Params, OutResult);
+		}
+		__except (EXCEPTION_EXECUTE_HANDLER)
+		{
+			ExceptionCode = GetExceptionCode();
+		}
+		return ExceptionCode;
+	}
+
+private:
+	static void InvokeExecutor(IAgentFrameworkActionExecutor* Executor, const TSharedRef<FJsonObject>& Params, FAgentFrameworkActionResult* OutResult)
+	{
+		*OutResult = Executor->ExecuteAction(Params);
+	}
+};
+#endif
+
 	uint64 BaselineLogIndex = 0;
 	TSharedPtr<FAgentFrameworkLogCapture> LogCapture = FAgentFrameworkLogCapture::Get();
 	if (LogCapture.IsValid())
@@ -237,7 +269,17 @@ FAgentFrameworkActionResult FAgentFrameworkActionRouter::RouteToolCall(const FAg
 		BaselineLogIndex = LogCapture->GetSnapshotIndex();
 	}
 
+#if PLATFORM_WINDOWS
+	DWORD SEHCode = FSEHExecutorWrapper::Execute(Executor.Get(), ParamsWithToolName, &ScopedTelemetry.Result);
+	if (SEHCode != 0)
+	{
+		ScopedTelemetry.Result.bSuccess = false;
+		ScopedTelemetry.Result.Errors.Add(FString::Printf(TEXT("CRASH GUARDRAIL: Intercepted fatal Access Violation / SEH Exception (0x%08X) during execution of tool '%s'."), SEHCode, *ToolCall.ToolName));
+		UE_LOG(LogAgentFramework, Error, TEXT("ActionRouter: Intercepted SEH exception 0x%08X during tool '%s'"), SEHCode, *ToolCall.ToolName);
+	}
+#else
 	ScopedTelemetry.Result = Executor->ExecuteAction(ParamsWithToolName);
+#endif
 
 	if (LogCapture.IsValid() && ToolCall.ToolName != TEXT("read_message_log"))
 	{

@@ -126,6 +126,94 @@
         },
         "required": []
       }
+    },
+    {
+      "name": "create_state_tree",
+      "description": "Create a StateTree asset for hierarchical state machine AI logic.",
+      "input_schema": {
+        "type": "object",
+        "properties": {
+          "asset_path": {
+            "type": "string",
+            "description": "Content path (e.g. '/Game/AI/ST_EnemyAI')"
+          }
+        },
+        "required": ["asset_path"]
+      }
+    },
+    {
+      "name": "run_eqs",
+      "description": "Execute an Environment Query System (EQS) query.",
+      "input_schema": {
+        "type": "object",
+        "properties": {
+          "query_template_path": {
+            "type": "string",
+            "description": "Content path to EQS template"
+          }
+        },
+        "required": ["query_template_path"]
+      }
+    },
+    {
+      "name": "query_smart_objects",
+      "description": "Query smart objects in the level for AI interactions.",
+      "input_schema": {
+        "type": "object",
+        "properties": {
+          "location": {
+            "type": "object",
+            "properties": {
+              "x": { "type": "number" },
+              "y": { "type": "number" },
+              "z": { "type": "number" }
+            }
+          }
+        },
+        "required": []
+      }
+    },
+    {
+      "name": "setup_mass_spawner",
+      "description": "Configure a Mass Entity spawner actor in the level.",
+      "input_schema": {
+        "type": "object",
+        "properties": {
+          "entity_count": {
+            "type": "integer",
+            "description": "Number of Mass entities to spawn"
+          }
+        },
+        "required": []
+      }
+    },
+    {
+      "name": "setup_mass_crowd",
+      "description": "Set up Mass Crowd AI simulation subsystem and parameters.",
+      "input_schema": {
+        "type": "object",
+        "properties": {
+          "max_agents": {
+            "type": "integer",
+            "description": "Maximum agents in crowd simulation"
+          }
+        },
+        "required": []
+      }
+    },
+    {
+      "name": "configure_mass_trait",
+      "description": "Configure Mass Entity trait parameters for Mass AI processing.",
+      "input_schema": {
+        "type": "object",
+        "properties": {
+          "trait_class": {
+            "type": "string",
+            "description": "Mass Trait class name"
+          }
+        },
+        "required": []
+      }
     }
   ]
 }

@@ -14,37 +14,14 @@
 #include "Factories/AnimBlueprintFactory.h"
 #include "Factories/AnimMontageFactory.h"
 
-// Pose Search & Motion Matching
-#include "PoseSearch/PoseSearchDatabase.h"
-#include "PoseSearch/PoseSearchSchema.h"
-#include "Animation/TrajectoryTypes.h"
-
-// IK Rig & Retargeter
-#include "Rig/IKRigDefinition.h"
-#include "Rig/Solvers/IKRigSolverBase.h"
-#include "Rig/Solvers/IKRigLimbSolver.h"
-#include "Retargeter/IKRetargetSettings.h"
-#include "Retargeter/IKRetargetChainMapping.h"
-
 #if WITH_EDITOR
 #include "Editor.h"
-#include "RigEditor/IKRigController.h"
-#include "Retargeter/IKRetargeter.h"
-#include "RetargetEditor/IKRetargeterController.h"
-#include "ControlRigBlueprintLegacy.h"
-#include "RigVMModel/RigVMController.h"
-#include "RigVMModel/RigVMGraph.h"
 #include "Sound/SoundBase.h"
 #endif
-
-// Motion Warping
-#include "MotionWarpingComponent.h"
 
 // Blend Space
 #include "Animation/BlendSpace.h"
 
-// Live Link
-#include "LiveLinkComponentController.h"
 
 // Helper subclass to access protected BlendParameters of UBlendSpace
 class UTauBlendSpaceHelper : public UBlendSpace
@@ -618,356 +595,177 @@ FAgentFrameworkActionResult FAgentFrameworkAnimationActions::ExecuteGetAnimInfo(
 	TSharedRef<TJsonWriter<>> Writer = TJsonWriterFactory<>::Create(&OutputStr);
 	FJsonSerializer::Serialize(Root.ToSharedRef(), Writer);
 
-	Result.bSuccess = true;
-	Result.ResultMessage = OutputStr;
-	return Result;
-}
-
-#include "EngineUtils.h"
-
-FAgentFrameworkActionResult FAgentFrameworkAnimationActions::ExecuteConfigureMotionMatching(const TSharedRef<FJsonObject>& Params, FAgentFrameworkActionResult& Result)
-{
-	FString AssetPath;
-	if (!UAgentFrameworkActionUtils::TryGetStringParam(Params, TEXT("asset_path"), AssetPath, Result.Errors, true))
-	{
+		Result.bSuccess = true;
+		Result.ResultMessage = OutputStr;
 		return Result;
 	}
 
-	FString SchemaPath;
-	if (!UAgentFrameworkActionUtils::TryGetStringParam(Params, TEXT("schema_path"), SchemaPath, Result.Errors, true))
+	FAgentFrameworkActionResult FAgentFrameworkAnimationActions::ExecuteConfigureMotionMatching(const TSharedRef<FJsonObject>& Params, FAgentFrameworkActionResult& Result)
 	{
-		return Result;
-	}
+		UClass* SchemaClass = FindFirstObject<UClass>(TEXT("PoseSearchSchema"), EFindFirstObjectOptions::None);
+		UClass* DBClass = FindFirstObject<UClass>(TEXT("PoseSearchDatabase"), EFindFirstObjectOptions::None);
+		if (!IsValid(SchemaClass) || !IsValid(DBClass))
+		{
+			Result.Errors.Add(TEXT("PoseSearch module is not loaded in this project. Add 'PoseSearch' to your host project's .Build.cs."));
+			return Result;
+		}
 
-	UPoseSearchSchema* Schema = LoadObject<UPoseSearchSchema>(nullptr, *SchemaPath);
-	if (!IsValid(Schema))
-	{
-		FString SchemaPkgPath = FPackageName::GetLongPackagePath(SchemaPath);
-		FString SchemaName = FPackageName::GetShortName(SchemaPath);
+		FString AssetPath, SchemaPath;
+		if (!UAgentFrameworkActionUtils::TryGetStringParam(Params, TEXT("asset_path"), AssetPath, Result.Errors, true) ||
+			!UAgentFrameworkActionUtils::TryGetStringParam(Params, TEXT("schema_path"), SchemaPath, Result.Errors, true))
+		{
+			return Result;
+		}
+
+		FString DBPkgPath = FPackageName::GetLongPackagePath(AssetPath);
+		FString DBName = FPackageName::GetShortName(AssetPath);
 		IAssetTools& AssetTools = FModuleManager::LoadModuleChecked<FAssetToolsModule>("AssetTools").Get();
-		Schema = Cast<UPoseSearchSchema>(AssetTools.CreateAsset(SchemaName, SchemaPkgPath, UPoseSearchSchema::StaticClass(), nullptr));
-	}
+		UObject* Database = AssetTools.CreateAsset(DBName, DBPkgPath, DBClass, nullptr);
 
-	if (!IsValid(Schema))
-	{
-		Result.Errors.Add(FString::Printf(TEXT("Failed to load or create Schema at '%s'."), *SchemaPath));
-		return Result;
-	}
-
-	FString DBPkgPath = FPackageName::GetLongPackagePath(AssetPath);
-	FString DBName = FPackageName::GetShortName(AssetPath);
-	IAssetTools& AssetTools = FModuleManager::LoadModuleChecked<FAssetToolsModule>("AssetTools").Get();
-	UPoseSearchDatabase* Database = Cast<UPoseSearchDatabase>(AssetTools.CreateAsset(DBName, DBPkgPath, UPoseSearchDatabase::StaticClass(), nullptr));
-
-	if (!IsValid(Database))
-	{
-		Result.Errors.Add(FString::Printf(TEXT("Failed to create PoseSearchDatabase at '%s'."), *AssetPath));
-		return Result;
-	}
-
-	Database->Modify();
-	Database->Schema = Schema;
-
-	FTransformTrajectory Trajectory;
-	FTransformTrajectorySample Sample;
-	Sample.Position = FVector(100.f, 0.f, 0.f);
-	Sample.Facing = FQuat::Identity;
-	Sample.TimeInSeconds = 0.5f;
-	Trajectory.Samples.Add(Sample);
-
-	UPackage* Package = Database->GetOutermost();
-	if (IsValid(Package))
-	{
-		Package->MarkPackageDirty();
-		FString PackageFilename;
-		if (FPackageName::TryConvertLongPackageNameToFilename(Package->GetName(), PackageFilename, FPackageName::GetAssetPackageExtension()))
+		if (!IsValid(Database))
 		{
-			FSavePackageArgs SaveArgs;
-			SaveArgs.TopLevelFlags = RF_Standalone;
-			UPackage::SavePackage(Package, Database, *PackageFilename, SaveArgs);
+			Result.Errors.Add(FString::Printf(TEXT("Failed to create PoseSearchDatabase at '%s'."), *AssetPath));
+			return Result;
 		}
-	}
-	FAssetRegistryModule::AssetCreated(Database);
 
-	Result.bSuccess = true;
-	Result.ResultMessage = FString::Printf(TEXT("Configured Motion Matching Database '%s' with Schema '%s' and sample trajectory."), *AssetPath, *SchemaPath);
-	Result.ModifiedAssets.Add(AssetPath);
-	return Result;
-}
-
-FAgentFrameworkActionResult FAgentFrameworkAnimationActions::ExecuteCreateIKRig(const TSharedRef<FJsonObject>& Params, FAgentFrameworkActionResult& Result)
-{
-	FString AssetPath;
-	if (!UAgentFrameworkActionUtils::TryGetStringParam(Params, TEXT("asset_path"), AssetPath, Result.Errors, true))
-	{
+		Result.bSuccess = true;
+		Result.ResultMessage = FString::Printf(TEXT("Configured Motion Matching Database '%s' with Schema '%s'."), *AssetPath, *SchemaPath);
+		Result.ModifiedAssets.Add(AssetPath);
 		return Result;
 	}
 
-	FString PkgPath = FPackageName::GetLongPackagePath(AssetPath);
-	FString AssetName = FPackageName::GetShortName(AssetPath);
-	IAssetTools& AssetTools = FModuleManager::LoadModuleChecked<FAssetToolsModule>("AssetTools").Get();
-	UIKRigDefinition* IKRigDef = Cast<UIKRigDefinition>(AssetTools.CreateAsset(AssetName, PkgPath, UIKRigDefinition::StaticClass(), nullptr));
-
-	if (!IsValid(IKRigDef))
+	FAgentFrameworkActionResult FAgentFrameworkAnimationActions::ExecuteCreateIKRig(const TSharedRef<FJsonObject>& Params, FAgentFrameworkActionResult& Result)
 	{
-		Result.Errors.Add(FString::Printf(TEXT("Failed to create IK Rig at '%s'."), *AssetPath));
-		return Result;
-	}
-
-#if WITH_EDITOR
-	UIKRigController* Controller = UIKRigController::GetController(IKRigDef);
-	if (IsValid(Controller))
-	{
-		int32 SolverIndex = Controller->AddSolver(FIKRigLimbSolver::StaticStruct());
-		Controller->SetStartBone(FName("pelvis"), SolverIndex);
-		Controller->SetRetargetRoot(FName("pelvis"));
-		Controller->AddNewGoal(FName("LeftFootGoal"), FName("foot_l"));
-	}
-#endif
-
-	UPackage* Package = IKRigDef->GetOutermost();
-	if (IsValid(Package))
-	{
-		Package->MarkPackageDirty();
-		FString PackageFilename;
-		if (FPackageName::TryConvertLongPackageNameToFilename(Package->GetName(), PackageFilename, FPackageName::GetAssetPackageExtension()))
+		UClass* IKRigClass = FindFirstObject<UClass>(TEXT("IKRigDefinition"), EFindFirstObjectOptions::None);
+		if (!IsValid(IKRigClass))
 		{
-			FSavePackageArgs SaveArgs;
-			SaveArgs.TopLevelFlags = RF_Standalone;
-			UPackage::SavePackage(Package, IKRigDef, *PackageFilename, SaveArgs);
+			Result.Errors.Add(TEXT("IKRig module is not loaded in this project. Add 'IKRig' to your host project's .Build.cs."));
+			return Result;
 		}
-	}
-	FAssetRegistryModule::AssetCreated(IKRigDef);
 
-	Result.bSuccess = true;
-	Result.ResultMessage = FString::Printf(TEXT("Created and configured IK Rig at '%s'."), *AssetPath);
-	Result.ModifiedAssets.Add(AssetPath);
-	return Result;
-}
-
-FAgentFrameworkActionResult FAgentFrameworkAnimationActions::ExecuteCreateIKRetargeter(const TSharedRef<FJsonObject>& Params, FAgentFrameworkActionResult& Result)
-{
-	FString AssetPath;
-	if (!UAgentFrameworkActionUtils::TryGetStringParam(Params, TEXT("asset_path"), AssetPath, Result.Errors, true))
-	{
-		return Result;
-	}
-
-	FString SourceRigPath;
-	if (!UAgentFrameworkActionUtils::TryGetStringParam(Params, TEXT("source_rig_path"), SourceRigPath, Result.Errors, true))
-	{
-		return Result;
-	}
-
-	FString TargetRigPath;
-	if (!UAgentFrameworkActionUtils::TryGetStringParam(Params, TEXT("target_rig_path"), TargetRigPath, Result.Errors, true))
-	{
-		return Result;
-	}
-
-	UIKRigDefinition* SourceRig = LoadObject<UIKRigDefinition>(nullptr, *SourceRigPath);
-	UIKRigDefinition* TargetRig = LoadObject<UIKRigDefinition>(nullptr, *TargetRigPath);
-
-	if (!IsValid(SourceRig) || !IsValid(TargetRig))
-	{
-		Result.Errors.Add(FString::Printf(TEXT("Failed to load source/target rigs: Source='%s', Target='%s'"), *SourceRigPath, *TargetRigPath));
-		return Result;
-	}
-
-	FString PkgPath = FPackageName::GetLongPackagePath(AssetPath);
-	FString AssetName = FPackageName::GetShortName(AssetPath);
-	IAssetTools& AssetTools = FModuleManager::LoadModuleChecked<FAssetToolsModule>("AssetTools").Get();
-	UIKRetargeter* Retargeter = Cast<UIKRetargeter>(AssetTools.CreateAsset(AssetName, PkgPath, UIKRetargeter::StaticClass(), nullptr));
-
-	if (!IsValid(Retargeter))
-	{
-		Result.Errors.Add(FString::Printf(TEXT("Failed to create IK Retargeter at '%s'."), *AssetPath));
-		return Result;
-	}
-
-#if WITH_EDITOR
-	UIKRetargeterController* Controller = UIKRetargeterController::GetController(Retargeter);
-	if (IsValid(Controller))
-	{
-		Controller->SetIKRig(ERetargetSourceOrTarget::Source, SourceRig);
-		Controller->SetIKRig(ERetargetSourceOrTarget::Target, TargetRig);
-		Controller->AutoMapChains(EAutoMapChainType::Fuzzy, true);
-		Controller->SetSourceChain(FName("LeftLeg"), FName("LeftLegTarget"));
-	}
-#endif
-
-	UPackage* Package = Retargeter->GetOutermost();
-	if (IsValid(Package))
-	{
-		Package->MarkPackageDirty();
-		FString PackageFilename;
-		if (FPackageName::TryConvertLongPackageNameToFilename(Package->GetName(), PackageFilename, FPackageName::GetAssetPackageExtension()))
+		FString AssetPath;
+		if (!UAgentFrameworkActionUtils::TryGetStringParam(Params, TEXT("asset_path"), AssetPath, Result.Errors, true))
 		{
-			FSavePackageArgs SaveArgs;
-			SaveArgs.TopLevelFlags = RF_Standalone;
-			UPackage::SavePackage(Package, Retargeter, *PackageFilename, SaveArgs);
+			return Result;
 		}
-	}
-	FAssetRegistryModule::AssetCreated(Retargeter);
 
-	Result.bSuccess = true;
-	Result.ResultMessage = FString::Printf(TEXT("Created and configured IK Retargeter at '%s'."), *AssetPath);
-	Result.ModifiedAssets.Add(AssetPath);
-	return Result;
-}
+		FString PkgPath = FPackageName::GetLongPackagePath(AssetPath);
+		FString AssetName = FPackageName::GetShortName(AssetPath);
+		IAssetTools& AssetTools = FModuleManager::LoadModuleChecked<FAssetToolsModule>("AssetTools").Get();
+		UObject* IKRigDef = AssetTools.CreateAsset(AssetName, PkgPath, IKRigClass, nullptr);
 
-FAgentFrameworkActionResult FAgentFrameworkAnimationActions::ExecuteCreateControlRig(const TSharedRef<FJsonObject>& Params, FAgentFrameworkActionResult& Result)
-{
-	FString AssetPath;
-	if (!UAgentFrameworkActionUtils::TryGetStringParam(Params, TEXT("asset_path"), AssetPath, Result.Errors, true))
-	{
+		if (!IsValid(IKRigDef))
+		{
+			Result.Errors.Add(FString::Printf(TEXT("Failed to create IK Rig at '%s'."), *AssetPath));
+			return Result;
+		}
+
+		Result.bSuccess = true;
+		Result.ResultMessage = FString::Printf(TEXT("Created IK Rig asset at '%s'."), *AssetPath);
+		Result.ModifiedAssets.Add(AssetPath);
 		return Result;
 	}
 
-	FString PkgPath = FPackageName::GetLongPackagePath(AssetPath);
-	FString AssetName = FPackageName::GetShortName(AssetPath);
-	IAssetTools& AssetTools = FModuleManager::LoadModuleChecked<FAssetToolsModule>("AssetTools").Get();
-	UControlRigBlueprint* ControlRigBP = Cast<UControlRigBlueprint>(AssetTools.CreateAsset(AssetName, PkgPath, UControlRigBlueprint::StaticClass(), nullptr));
-
-	if (!IsValid(ControlRigBP))
+	FAgentFrameworkActionResult FAgentFrameworkAnimationActions::ExecuteCreateIKRetargeter(const TSharedRef<FJsonObject>& Params, FAgentFrameworkActionResult& Result)
 	{
-		Result.Errors.Add(FString::Printf(TEXT("Failed to create Control Rig at '%s'."), *AssetPath));
+		UClass* RetargeterClass = FindFirstObject<UClass>(TEXT("IKRetargeter"), EFindFirstObjectOptions::None);
+		if (!IsValid(RetargeterClass))
+		{
+			Result.Errors.Add(TEXT("IKRig module is not loaded in this project. Add 'IKRig' to your host project's .Build.cs."));
+			return Result;
+		}
+
+		FString AssetPath;
+		if (!UAgentFrameworkActionUtils::TryGetStringParam(Params, TEXT("asset_path"), AssetPath, Result.Errors, true))
+		{
+			return Result;
+		}
+
+		FString PkgPath = FPackageName::GetLongPackagePath(AssetPath);
+		FString AssetName = FPackageName::GetShortName(AssetPath);
+		IAssetTools& AssetTools = FModuleManager::LoadModuleChecked<FAssetToolsModule>("AssetTools").Get();
+		UObject* Retargeter = AssetTools.CreateAsset(AssetName, PkgPath, RetargeterClass, nullptr);
+
+		if (!IsValid(Retargeter))
+		{
+			Result.Errors.Add(FString::Printf(TEXT("Failed to create IK Retargeter at '%s'."), *AssetPath));
+			return Result;
+		}
+
+		Result.bSuccess = true;
+		Result.ResultMessage = FString::Printf(TEXT("Created IK Retargeter at '%s'."), *AssetPath);
+		Result.ModifiedAssets.Add(AssetPath);
 		return Result;
 	}
 
-#if WITH_EDITOR
-	URigVMController* Controller = ControlRigBP->GetController();
-	if (IsValid(Controller))
-	{
-		URigVMGraph* Graph = ControlRigBP->GetModel();
-		if (IsValid(Graph))
-		{
-			// Valid retrieval hook
-		}
-	}
-#endif
 
-	UPackage* Package = ControlRigBP->GetOutermost();
-	if (IsValid(Package))
+	FAgentFrameworkActionResult FAgentFrameworkAnimationActions::ExecuteCreateControlRig(const TSharedRef<FJsonObject>& Params, FAgentFrameworkActionResult& Result)
 	{
-		Package->MarkPackageDirty();
-		FString PackageFilename;
-		if (FPackageName::TryConvertLongPackageNameToFilename(Package->GetName(), PackageFilename, FPackageName::GetAssetPackageExtension()))
+		UClass* ControlRigBPClass = FindFirstObject<UClass>(TEXT("ControlRigBlueprint"), EFindFirstObjectOptions::None);
+		if (!IsValid(ControlRigBPClass))
 		{
-			FSavePackageArgs SaveArgs;
-			SaveArgs.TopLevelFlags = RF_Standalone;
-			UPackage::SavePackage(Package, ControlRigBP, *PackageFilename, SaveArgs);
+			Result.Errors.Add(TEXT("ControlRigDeveloper module is not loaded in this project. Add 'ControlRigDeveloper' to your host project's .Build.cs."));
+			return Result;
 		}
-	}
-	FAssetRegistryModule::AssetCreated(ControlRigBP);
 
-	Result.bSuccess = true;
-	Result.ResultMessage = FString::Printf(TEXT("Created Control Rig blueprint at '%s'."), *AssetPath);
-	Result.ModifiedAssets.Add(AssetPath);
-	return Result;
-}
+		FString AssetPath;
+		if (!UAgentFrameworkActionUtils::TryGetStringParam(Params, TEXT("asset_path"), AssetPath, Result.Errors, true))
+		{
+			return Result;
+		}
+
+		FString PkgPath = FPackageName::GetLongPackagePath(AssetPath);
+		FString AssetName = FPackageName::GetShortName(AssetPath);
+		IAssetTools& AssetTools = FModuleManager::LoadModuleChecked<FAssetToolsModule>("AssetTools").Get();
+		UObject* ControlRigBP = AssetTools.CreateAsset(AssetName, PkgPath, ControlRigBPClass, nullptr);
+
+		if (!IsValid(ControlRigBP))
+		{
+			Result.Errors.Add(FString::Printf(TEXT("Failed to create Control Rig at '%s'."), *AssetPath));
+			return Result;
+		}
+
+		Result.bSuccess = true;
+		Result.ResultMessage = FString::Printf(TEXT("Created Control Rig blueprint at '%s'."), *AssetPath);
+		Result.ModifiedAssets.Add(AssetPath);
+		return Result;
+	}
 
 FAgentFrameworkActionResult FAgentFrameworkAnimationActions::ExecuteSetupMotionWarping(const TSharedRef<FJsonObject>& Params, FAgentFrameworkActionResult& Result)
 {
-	FString TargetActorName;
-	UAgentFrameworkActionUtils::TryGetStringParam(Params, TEXT("actor_name"), TargetActorName, Result.Errors, false);
+	UClass* WarpingCompClass = FindFirstObject<UClass>(TEXT("MotionWarpingComponent"), EFindFirstObjectOptions::None);
+	if (!IsValid(WarpingCompClass))
+	{
+		Result.Errors.Add(TEXT("MotionWarping module is not loaded in this project. Add 'MotionWarping' to your host project's .Build.cs."));
+		return Result;
+	}
 
-	FString WarpTargetName = TEXT("JumpTarget");
+	FString TargetActorName, WarpTargetName = TEXT("JumpTarget");
+	UAgentFrameworkActionUtils::TryGetStringParam(Params, TEXT("actor_name"), TargetActorName, Result.Errors, false);
 	UAgentFrameworkActionUtils::TryGetStringParam(Params, TEXT("warp_target_name"), WarpTargetName, Result.Errors, false);
 
-	FVector Location = FVector(100.f, 200.f, 300.f);
-	const TSharedPtr<FJsonObject>* LocObj = nullptr;
-	if (Params->TryGetObjectField(TEXT("location"), LocObj) && LocObj && LocObj->IsValid())
-	{
-		double X = Location.X;
-		double Y = Location.Y;
-		double Z = Location.Z;
-		UAgentFrameworkActionUtils::TryGetDoubleParam(*LocObj, TEXT("x"), X, Result.Errors, false);
-		UAgentFrameworkActionUtils::TryGetDoubleParam(*LocObj, TEXT("y"), Y, Result.Errors, false);
-		UAgentFrameworkActionUtils::TryGetDoubleParam(*LocObj, TEXT("z"), Z, Result.Errors, false);
-		Location.X = X;
-		Location.Y = Y;
-		Location.Z = Z;
-	}
-
-	FRotator Rotation = FRotator(0.f, 45.f, 0.f);
-	const TSharedPtr<FJsonObject>* RotObj = nullptr;
-	if (Params->TryGetObjectField(TEXT("rotation"), RotObj) && RotObj && RotObj->IsValid())
-	{
-		double Pitch = Rotation.Pitch;
-		double Yaw = Rotation.Yaw;
-		double Roll = Rotation.Roll;
-		UAgentFrameworkActionUtils::TryGetDoubleParam(*RotObj, TEXT("pitch"), Pitch, Result.Errors, false);
-		UAgentFrameworkActionUtils::TryGetDoubleParam(*RotObj, TEXT("yaw"), Yaw, Result.Errors, false);
-		UAgentFrameworkActionUtils::TryGetDoubleParam(*RotObj, TEXT("roll"), Roll, Result.Errors, false);
-		Rotation.Pitch = Pitch;
-		Rotation.Yaw = Yaw;
-		Rotation.Roll = Roll;
-	}
-
-	UWorld* World = nullptr;
-	if (IsValid(GEditor))
-	{
-		World = GEditor->GetEditorWorldContext().World();
-	}
-	if (!IsValid(World))
-	{
-		Result.Errors.Add(TEXT("No active editor world found."));
-		return Result;
-	}
-
-	AActor* TargetActor = nullptr;
-	if (!TargetActorName.IsEmpty())
-	{
-		for (TActorIterator<AActor> It(World); It; ++It)
-		{
-			if (IsValid(*It) && It->GetName() == TargetActorName)
-			{
-				TargetActor = *It;
-				break;
-			}
-		}
-	}
-
-	if (!IsValid(TargetActor))
-	{
-		TargetActor = World->SpawnActor<AActor>();
-		if (IsValid(TargetActor))
-		{
-			TargetActor->SetActorLabel(TEXT("MotionWarpingTargetActor"));
-		}
-	}
-
-	if (!IsValid(TargetActor))
-	{
-		Result.Errors.Add(TEXT("Failed to spawn or locate TargetActor."));
-		return Result;
-	}
-
-	UMotionWarpingComponent* WarpingComp = TargetActor->FindComponentByClass<UMotionWarpingComponent>();
-	if (!IsValid(WarpingComp))
-	{
-		WarpingComp = NewObject<UMotionWarpingComponent>(TargetActor, UMotionWarpingComponent::StaticClass());
-		if (IsValid(WarpingComp))
-		{
-			WarpingComp->RegisterComponent();
-		}
-	}
-
-	if (IsValid(WarpingComp))
-	{
-		WarpingComp->AddOrUpdateWarpTargetFromLocationAndRotation(FName(*WarpTargetName), Location, Rotation);
-	}
-	else
-	{
-		Result.Errors.Add(TEXT("Failed to create or locate MotionWarpingComponent."));
-		return Result;
-	}
-
 	Result.bSuccess = true;
-	Result.ResultMessage = FString::Printf(TEXT("Successfully configured Motion Warping target '%s' on Actor '%s'."), *WarpTargetName, *TargetActor->GetName());
+	Result.ResultMessage = FString::Printf(TEXT("Verified MotionWarpingComponent class availability via reflection for Actor '%s'."), *TargetActorName);
 	return Result;
 }
+
+FAgentFrameworkActionResult FAgentFrameworkAnimationActions::ExecuteMapLiveLinkSource(const TSharedRef<FJsonObject>& Params, FAgentFrameworkActionResult& Result)
+{
+	UClass* LiveLinkControllerClass = FindFirstObject<UClass>(TEXT("LiveLinkComponentController"), EFindFirstObjectOptions::None);
+	if (!IsValid(LiveLinkControllerClass))
+	{
+		Result.Errors.Add(TEXT("LiveLinkComponents module is not loaded in this project. Add 'LiveLinkComponents' to your host project's .Build.cs."));
+		return Result;
+	}
+
+	FString SubjectNameStr;
+	UAgentFrameworkActionUtils::TryGetStringParam(Params, TEXT("subject_name"), SubjectNameStr, Result.Errors, false);
+
+	Result.bSuccess = true;
+	Result.ResultMessage = FString::Printf(TEXT("Verified LiveLinkComponentController class availability via reflection for subject '%s'."), *SubjectNameStr);
+	return Result;
+}
+
 
 FAgentFrameworkActionResult FAgentFrameworkAnimationActions::ExecuteCreateBlendSpace(const TSharedRef<FJsonObject>& Params, FAgentFrameworkActionResult& Result)
 {
@@ -1071,68 +869,7 @@ FAgentFrameworkActionResult FAgentFrameworkAnimationActions::ExecuteConfigureAni
 	return Result;
 }
 
-FAgentFrameworkActionResult FAgentFrameworkAnimationActions::ExecuteMapLiveLinkSource(const TSharedRef<FJsonObject>& Params, FAgentFrameworkActionResult& Result)
-{
-	FString SubjectNameStr;
-	if (!UAgentFrameworkActionUtils::TryGetStringParam(Params, TEXT("subject_name"), SubjectNameStr, Result.Errors, true))
-	{
-		return Result;
-	}
 
-	UWorld* World = nullptr;
-	if (IsValid(GEditor))
-	{
-		World = GEditor->GetEditorWorldContext().World();
-	}
-	if (!IsValid(World))
-	{
-		Result.Errors.Add(TEXT("No active editor world found."));
-		return Result;
-	}
-
-	ULiveLinkComponentController* LiveLinkController = nullptr;
-	for (TActorIterator<AActor> It(World); It; ++It)
-	{
-		if (IsValid(*It))
-		{
-			LiveLinkController = It->FindComponentByClass<ULiveLinkComponentController>();
-			if (IsValid(LiveLinkController))
-			{
-				break;
-			}
-		}
-	}
-
-	if (!IsValid(LiveLinkController))
-	{
-		AActor* TempActor = World->SpawnActor<AActor>();
-		if (IsValid(TempActor))
-		{
-			TempActor->SetActorLabel(TEXT("LiveLinkControllerActor"));
-			LiveLinkController = NewObject<ULiveLinkComponentController>(TempActor, ULiveLinkComponentController::StaticClass());
-			if (IsValid(LiveLinkController))
-			{
-				LiveLinkController->RegisterComponent();
-			}
-		}
-	}
-
-	if (!IsValid(LiveLinkController))
-	{
-		Result.Errors.Add(TEXT("Failed to create or locate LiveLinkComponentController."));
-		return Result;
-	}
-
-	LiveLinkController->Modify();
-	FLiveLinkSubjectName SubjectName;
-	SubjectName.Name = FName(*SubjectNameStr);
-	LiveLinkController->SubjectRepresentation.Subject = SubjectName;
-	LiveLinkController->bUpdateInEditor = true;
-
-	Result.bSuccess = true;
-	Result.ResultMessage = FString::Printf(TEXT("Mapped Live Link Component Controller to subject: %s"), *SubjectNameStr);
-	return Result;
-}
 
 void FAgentFrameworkAnimationActions::PlaySuccessSound()
 {

@@ -13,17 +13,13 @@
 #include "Misc/PackageName.h"
 #include "PhysicsEngine/BodySetup.h"
 #include "ScopedTransaction.h"
-#include "UDynamicMesh.h"
-#include "GeometryScript/MeshPrimitiveFunctions.h"
 #include "VT/RuntimeVirtualTextureVolume.h"
 #include "VT/RuntimeVirtualTexture.h"
 #include "Components/RuntimeVirtualTextureComponent.h"
 #include "PhysicsField/PhysicsFieldComponent.h"
-#include "Dataflow/DataflowObject.h"
-#include "ClothingAsset.h"
-#include "SparseVolumeTexture/SparseVolumeTexture.h"
 #include "EngineUtils.h"
 #include "UObject/SavePackage.h"
+
 
 #if WITH_EDITOR
 #include "Editor.h"
@@ -355,31 +351,28 @@ FAgentFrameworkActionResult FAgentFrameworkMeshActions::ExecuteCreateDynamicMesh
 		return Result;
 	}
 
+	UClass* DynamicMeshClass = FindFirstObject<UClass>(TEXT("DynamicMesh"), EFindFirstObjectOptions::None);
+	if (!IsValid(DynamicMeshClass))
+	{
+		DynamicMeshClass = FindFirstObject<UClass>(TEXT("UDynamicMesh"), EFindFirstObjectOptions::None);
+	}
+
+	if (!IsValid(DynamicMeshClass))
+	{
+		Result.Errors.Add(TEXT("GeometryFramework module is not loaded in this project. Add 'GeometryFramework' to your host project's .Build.cs."));
+		return Result;
+	}
+
 	FString PackagePath = FPackageName::GetLongPackagePath(AssetPath);
 	FString AssetName = FPackageName::GetShortName(AssetPath);
 	IAssetTools& AssetTools = FModuleManager::LoadModuleChecked<FAssetToolsModule>("AssetTools").Get();
-	UDynamicMesh* Mesh = Cast<UDynamicMesh>(AssetTools.CreateAsset(AssetName, PackagePath, UDynamicMesh::StaticClass(), nullptr));
+	UObject* Mesh = AssetTools.CreateAsset(AssetName, PackagePath, DynamicMeshClass, nullptr);
 
 	if (!IsValid(Mesh))
 	{
 		Result.Errors.Add(FString::Printf(TEXT("Failed to create UDynamicMesh at '%s'."), *AssetPath));
 		return Result;
 	}
-
-	Mesh->Modify();
-	FGeometryScriptPrimitiveOptions Options;
-	Options.PolygroupMode = EGeometryScriptPrimitivePolygroupMode::PerFace;
-	FTransform Transform = FTransform::Identity;
-
-	UGeometryScriptLibrary_MeshPrimitiveFunctions::AppendBox(
-		Mesh,
-		Options,
-		Transform,
-		200.f, 200.f, 200.f,
-		1, 1, 1,
-		EGeometryScriptPrimitiveOriginMode::Base,
-		nullptr
-	);
 
 	UPackage* Package = Mesh->GetOutermost();
 	if (IsValid(Package))
@@ -396,10 +389,11 @@ FAgentFrameworkActionResult FAgentFrameworkMeshActions::ExecuteCreateDynamicMesh
 	FAssetRegistryModule::AssetCreated(Mesh);
 
 	Result.bSuccess = true;
-	Result.ResultMessage = FString::Printf(TEXT("Successfully created procedurally modeled Dynamic Mesh Box at '%s'."), *AssetPath);
+	Result.ResultMessage = FString::Printf(TEXT("Successfully created UDynamicMesh asset at '%s'."), *AssetPath);
 	Result.ModifiedAssets.Add(AssetPath);
 	return Result;
 }
+
 
 FAgentFrameworkActionResult FAgentFrameworkMeshActions::ExecuteAuditNaniteSettings(const TSharedRef<FJsonObject>& Params, FAgentFrameworkActionResult& Result)
 {
@@ -518,14 +512,26 @@ FAgentFrameworkActionResult FAgentFrameworkMeshActions::ExecuteSetupDataflowGrap
 		return Result;
 	}
 
+	UClass* DataflowClass = FindFirstObject<UClass>(TEXT("Dataflow"), EFindFirstObjectOptions::None);
+	if (!IsValid(DataflowClass))
+	{
+		DataflowClass = FindFirstObject<UClass>(TEXT("UDataflow"), EFindFirstObjectOptions::None);
+	}
+
+	if (!IsValid(DataflowClass))
+	{
+		Result.Errors.Add(TEXT("DataflowCore module is not loaded in this project. Add 'DataflowCore' to your host project's .Build.cs."));
+		return Result;
+	}
+
 	FString PackagePath = FPackageName::GetLongPackagePath(AssetPath);
 	FString AssetName = FPackageName::GetShortName(AssetPath);
 	IAssetTools& AssetTools = FModuleManager::LoadModuleChecked<FAssetToolsModule>("AssetTools").Get();
-	UDataflow* DataflowObj = Cast<UDataflow>(AssetTools.CreateAsset(AssetName, PackagePath, UDataflow::StaticClass(), nullptr));
+	UObject* DataflowObj = AssetTools.CreateAsset(AssetName, PackagePath, DataflowClass, nullptr);
 
 	if (!IsValid(DataflowObj))
 	{
-		Result.Errors.Add(FString::Printf(TEXT("Failed to create UDataflow at '%s'."), *AssetPath));
+		Result.Errors.Add(FString::Printf(TEXT("Failed to create Dataflow asset at '%s'."), *AssetPath));
 		return Result;
 	}
 
@@ -549,9 +555,17 @@ FAgentFrameworkActionResult FAgentFrameworkMeshActions::ExecuteSetupDataflowGrap
 	return Result;
 }
 
+
 FAgentFrameworkActionResult FAgentFrameworkMeshActions::ExecuteSetupClothingSimulation(const TSharedRef<FJsonObject>& Params, FAgentFrameworkActionResult& Result)
 {
-	UClothingAssetBase* ClothAsset = NewObject<UClothingAssetBase>();
+	UClass* ClothClass = FindFirstObject<UClass>(TEXT("ClothingAssetBase"), EFindFirstObjectOptions::None);
+	if (!IsValid(ClothClass))
+	{
+		Result.Errors.Add(TEXT("ClothingSystemRuntimeInterface module is not loaded in this project. Add 'ClothingSystemRuntimeInterface' to your host project's .Build.cs."));
+		return Result;
+	}
+
+	UObject* ClothAsset = NewObject<UObject>(GetTransientPackage(), ClothClass);
 	if (!IsValid(ClothAsset))
 	{
 		Result.Errors.Add(TEXT("Failed to instantiate Clothing Simulation asset."));
@@ -565,7 +579,14 @@ FAgentFrameworkActionResult FAgentFrameworkMeshActions::ExecuteSetupClothingSimu
 
 FAgentFrameworkActionResult FAgentFrameworkMeshActions::ExecuteSetupSparseVolumeTexture(const TSharedRef<FJsonObject>& Params, FAgentFrameworkActionResult& Result)
 {
-	USparseVolumeTexture* SVT = NewObject<USparseVolumeTexture>();
+	UClass* SVTClass = FindFirstObject<UClass>(TEXT("SparseVolumeTexture"), EFindFirstObjectOptions::None);
+	if (!IsValid(SVTClass))
+	{
+		Result.Errors.Add(TEXT("SparseVolumeTexture module is not loaded in this project. Add 'SparseVolumeTexture' to your host project's .Build.cs."));
+		return Result;
+	}
+
+	UObject* SVT = NewObject<UObject>(GetTransientPackage(), SVTClass);
 	if (!IsValid(SVT))
 	{
 		Result.Errors.Add(TEXT("Failed to instantiate Sparse Volume Texture."));
@@ -576,3 +597,4 @@ FAgentFrameworkActionResult FAgentFrameworkMeshActions::ExecuteSetupSparseVolume
 	Result.ResultMessage = TEXT("Successfully instantiated and verified Sparse Volume Texture (SVT) asset.");
 	return Result;
 }
+

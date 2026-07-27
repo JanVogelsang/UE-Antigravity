@@ -199,6 +199,26 @@ def get_document_count() -> int:
                 pass
     return 0
 
+def upsert_documents(documents: List[str], metadatas: List[Dict[str, Any]], ids: List[str]) -> bool:
+    """
+    Upserts documents into the unreal_docs collection.
+    """
+    with _init_lock:
+        collection_ref = _collection
+    if collection_ref is None:
+        return False
+    try:
+        _ensure_imports()
+        collection_ref.upsert(
+            ids=ids,
+            documents=documents,
+            metadatas=metadatas
+        )
+        return True
+    except Exception as e:
+        logger.error(f"Failed to upsert documents: {e}")
+        return False
+
 def semantic_search(query: str, n_results: int = 5) -> List[Dict[str, Any]]:
     """
     Queries the unreal_docs collection for semantic similarity.

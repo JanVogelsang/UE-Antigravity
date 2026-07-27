@@ -349,21 +349,28 @@ FAgentFrameworkActionResult FAgentFrameworkCppActions::ExecuteTriggerCompile(FAg
 {
 #if WITH_LIVE_CODING
 	ILiveCodingModule* LiveCoding = FModuleManager::GetModulePtr<ILiveCodingModule>(LIVE_CODING_MODULE_NAME);
-	if (LiveCoding && LiveCoding->IsEnabledForSession())
+	if (LiveCoding)
 	{
-		if (LiveCoding->IsCompiling())
+		if (!LiveCoding->IsEnabledForSession())
 		{
-			Result.bSuccess = false;
-			Result.Errors.Add(TEXT("Live Coding compilation is already in progress. Please wait for it to complete."));
-			Result.ResultMessage = TEXT("Compilation blocked — compile already in progress.");
+			LiveCoding->EnableForSession(true);
+		}
+		if (LiveCoding->IsEnabledForSession())
+		{
+			if (LiveCoding->IsCompiling())
+			{
+				Result.bSuccess = false;
+				Result.Errors.Add(TEXT("Live Coding compilation is already in progress. Please wait for it to complete."));
+				Result.ResultMessage = TEXT("Compilation blocked — compile already in progress.");
+				return Result;
+			}
+
+			UE_LOG(LogAgentFramework, Log, TEXT("CppActions: Triggering Live Coding compilation..."));
+			LiveCoding->Compile();
+			Result.bSuccess = true;
+			Result.ResultMessage = TEXT("Live Coding compilation triggered. Check editor status bar for progress.");
 			return Result;
 		}
-
-		UE_LOG(LogAgentFramework, Log, TEXT("CppActions: Triggering Live Coding compilation..."));
-		LiveCoding->Compile();
-		Result.bSuccess = true;
-		Result.ResultMessage = TEXT("Live Coding compilation triggered. Check editor status bar for progress.");
-		return Result;
 	}
 #endif
 

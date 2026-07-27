@@ -16,11 +16,7 @@ public class AgentFrameworkActions : ModuleRules
 			"Json",
 			"JsonUtilities",
 			"AgentFrameworkCore",
-			"AgentFrameworkEngine",
-			"MassEntity",
-			"StructUtils",
-			"MassSpawner",
-			"MassCommon"
+			"AgentFrameworkEngine"
 		});
 
 		PrivateDependencyModuleNames.AddRange(new string[]
@@ -34,8 +30,6 @@ public class AgentFrameworkActions : ModuleRules
 			"BlueprintGraph",
 			"GraphEditor",
 			"MaterialEditor",
-			"Landscape",
-			"FoliageEdit",
 			"SourceControl",
 			"DesktopPlatform",
 			"Settings",
@@ -86,49 +80,7 @@ public class AgentFrameworkActions : ModuleRules
 			// Niagara Support
 			"Niagara",
 			"NiagaraCore",
-			"NiagaraEditor",
-			// New features and subsystems dependencies
-			"PoseSearch",
-			"IKRig",
-			"IKRigEditor",
-			"ControlRig",
-			"ControlRigDeveloper",
-			"MotionWarping",
-			"StateTreeModule",
-			"MassCrowd",
-			"SmartObjectsModule",
-			"PCG",
-			"GeometryScriptingCore",
-			"MovieRenderPipelineCore",
-			"MetasoundEngine",
-			"MetasoundFrontend",
-			"MetasoundEditor",
-			"AudioModulation",
-			"Blutility",
-			"DisplayCluster",
-			"LiveLink",
-			"LiveLinkComponents",
-			"DMXRuntime",
-			"VCamCore",
-			"CineCameraRigs",
-			"StageMonitor",
-			"Chaos",
-			"ChaosVehicles",
-			"PixelStreaming",
-			"DataflowCore",
-			"DataflowEngine",
-			"AugmentedReality",
-			"ClothingSystemEditor",
-			"ClothingSystemRuntimeCommon",
-			"ClothingSystemRuntimeInterface",
-			"SparseVolumeTexture",
-			"NNE",
-			"ChaosVehiclesEngine",
-			"GeometryCollectionEngine",
-			"Foliage",
-			"GeometryFramework",
-			"MediaAssets",
-			"AudioEditor"
+			"NiagaraEditor"
 		});
 
 		// Conditionally add Python support

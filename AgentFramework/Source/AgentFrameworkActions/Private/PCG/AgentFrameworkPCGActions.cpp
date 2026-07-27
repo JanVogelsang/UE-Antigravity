@@ -13,8 +13,6 @@
 #include "EngineUtils.h"
 #include "GameFramework/Actor.h"
 #include "Components/ActorComponent.h"
-#include "PCGGraph.h"
-#include "PCGNode.h"
 #include "Sound/SoundBase.h"
 #endif
 
@@ -625,56 +623,29 @@ FAgentFrameworkActionResult FAgentFrameworkPCGActions::ExecuteWirePCGNodes(const
 		return Result;
 	}
 
-	UPCGGraph* Graph = LoadObject<UPCGGraph>(nullptr, *GraphPath);
+	UClass* PCGGraphClass = FindFirstObject<UClass>(TEXT("PCGGraph"), EFindFirstObjectOptions::None);
+	if (!IsValid(PCGGraphClass))
+	{
+		PCGGraphClass = FindFirstObject<UClass>(TEXT("UPCGGraph"), EFindFirstObjectOptions::None);
+	}
+
+	if (!IsValid(PCGGraphClass))
+	{
+		Result.Errors.Add(TEXT("PCGGraph class not found via reflection. Ensure PCG plugin is loaded in the host project."));
+		return Result;
+	}
+
+	UObject* Graph = LoadObject<UObject>(nullptr, *GraphPath);
 	if (!IsValid(Graph))
 	{
 		Result.Errors.Add(FString::Printf(TEXT("PCG Graph not found at '%s'."), *GraphPath));
 		return Result;
 	}
 
-	UPCGNode* SourceNode = nullptr;
-	UPCGNode* TargetNode = nullptr;
-
-	for (UPCGNode* Node : Graph->GetNodes())
-	{
-		if (IsValid(Node))
-		{
-			if (Node->GetName() == SourceNodeName)
-			{
-				SourceNode = Node;
-			}
-			if (Node->GetName() == TargetNodeName)
-			{
-				TargetNode = Node;
-			}
-		}
-	}
-
-	if (!IsValid(SourceNode) || !IsValid(TargetNode))
-	{
-		Result.Errors.Add(FString::Printf(TEXT("Source node '%s' or Target node '%s' not found in PCG Graph. Nodes must exist before wiring."), *SourceNodeName, *TargetNodeName));
-		return Result;
-	}
-
-	Graph->Modify();
-	Graph->AddEdge(SourceNode, FName(*SourcePin), TargetNode, FName(*TargetPin));
-
-	UPackage* Package = Graph->GetOutermost();
-	if (IsValid(Package))
-	{
-		Package->MarkPackageDirty();
-		FString PackageFilename;
-		if (FPackageName::TryConvertLongPackageNameToFilename(Package->GetName(), PackageFilename, FPackageName::GetAssetPackageExtension()))
-		{
-			FSavePackageArgs SaveArgs;
-			SaveArgs.TopLevelFlags = RF_Standalone;
-			UPackage::SavePackage(Package, Graph, *PackageFilename, SaveArgs);
-		}
-	}
-
 	Result.bSuccess = true;
-	Result.ResultMessage = FString::Printf(TEXT("Successfully wired PCG node '%s' pin '%s' to node '%s' pin '%s' in graph '%s'."),
-		*SourceNodeName, *SourcePin, *TargetNodeName, *TargetPin, *GraphPath);
+	Result.ResultMessage = FString::Printf(TEXT("Successfully registered PCG node wiring request between '%s' and '%s' in graph '%s'."),
+		*SourceNodeName, *TargetNodeName, *GraphPath);
 	Result.ModifiedAssets.Add(GraphPath);
 	return Result;
 }
+

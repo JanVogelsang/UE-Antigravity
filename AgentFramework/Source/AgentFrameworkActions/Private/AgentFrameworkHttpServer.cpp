@@ -18,6 +18,8 @@
 #include "Modules/ModuleManager.h"
 #include "Editor.h"
 #include "Containers/Ticker.h"
+#include "Framework/Notifications/NotificationManager.h"
+#include "Widgets/Notifications/SNotificationList.h"
 
 #include "Animation/AgentFrameworkAnimationActions.h"
 #include "BehaviorTree/AgentFrameworkBehaviorTreeActions.h"
@@ -157,7 +159,16 @@ bool FAgentFrameworkHttpServer::HandleListToolsRequest(const FHttpServerRequest&
 		TEXT("validation_tools.json"),
 		TEXT("task_tools.json"),
 		TEXT("meta_tools.json"),
-		TEXT("build_tools.json")
+		TEXT("build_tools.json"),
+		TEXT("blueprint_tools.json"),
+		TEXT("widget_tools.json"),
+		TEXT("cpp_tools.json"),
+		TEXT("python_tools.json"),
+		TEXT("diagnostics_tools.json"),
+		TEXT("input_tools.json"),
+		TEXT("enhanced_input_tools.json"),
+		TEXT("pie_tools.json"),
+		TEXT("niagara_tools.json")
 	};
 
 	TArray<FString> Files;
@@ -276,6 +287,7 @@ namespace
 
 			TSharedPtr<FJsonObject> ResultObj = MakeShared<FJsonObject>();
 			ResultObj->SetBoolField(TEXT("bSuccess"), Result.bSuccess);
+			ResultObj->SetBoolField(TEXT("bRequiresHumanVerification"), Result.bRequiresHumanVerification);
 			ResultObj->SetStringField(TEXT("ResultMessage"), Result.ResultMessage);
 
 			TArray<TSharedPtr<FJsonValue>> ErrorsArr;
@@ -327,6 +339,7 @@ namespace
 
 			TSharedPtr<FJsonObject> ResultObj = MakeShared<FJsonObject>();
 			ResultObj->SetBoolField(TEXT("bSuccess"), Result.bSuccess);
+			ResultObj->SetBoolField(TEXT("bRequiresHumanVerification"), Result.bRequiresHumanVerification);
 			ResultObj->SetStringField(TEXT("ResultMessage"), Result.ResultMessage);
 
 			TArray<TSharedPtr<FJsonValue>> ErrorsArr;
@@ -451,6 +464,20 @@ bool FAgentFrameworkHttpServer::HandleExecuteToolRequest(const FHttpServerReques
 					else
 					{
 						Waiter->Result.Errors.Add(ResponseText);
+						FString LowerResp = ResponseText.ToLower();
+						if (LowerResp.Contains(TEXT("captcha")) || LowerResp.Contains(TEXT("verification")) || LowerResp.Contains(TEXT("security check")) || LowerResp.Contains(TEXT("human")))
+						{
+							Waiter->Result.bRequiresHumanVerification = true;
+							Async(EAsyncExecution::TaskGraphMainThread, []()
+							{
+								FNotificationInfo Info(FText::FromString(
+									TEXT("AI Agent Action Blocked: Epic AI Assistant requires human verification (CAPTCHA). Please complete verification in Unreal Editor.")));
+								Info.bUseSuccessFailIcons = true;
+								Info.ExpireDuration = 10.0f;
+								Info.bFireAndForget = true;
+								FSlateNotificationManager::Get().AddNotification(Info);
+							});
+						}
 					}
 					Waiter->SendResponse();
 				}));
@@ -482,6 +509,7 @@ bool FAgentFrameworkHttpServer::HandleExecuteToolRequest(const FHttpServerReques
 
 		TSharedPtr<FJsonObject> ResultObj = MakeShared<FJsonObject>();
 		ResultObj->SetBoolField(TEXT("bSuccess"), Result.bSuccess);
+		ResultObj->SetBoolField(TEXT("bRequiresHumanVerification"), Result.bRequiresHumanVerification);
 		ResultObj->SetStringField(TEXT("ResultMessage"), Result.ResultMessage);
 		
 		TArray<TSharedPtr<FJsonValue>> ErrorsArr;

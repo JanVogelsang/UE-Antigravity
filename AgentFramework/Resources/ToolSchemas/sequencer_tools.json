@@ -101,6 +101,24 @@
         },
         "required": ["asset_path", "track_type", "time"]
       }
+    },
+    {
+      "name": "configure_movie_render_job",
+      "description": "Configure Movie Render Queue job settings for offline rendering of Level Sequences.",
+      "input_schema": {
+        "type": "object",
+        "properties": {
+          "sequence_path": {
+            "type": "string",
+            "description": "Content path to Level Sequence"
+          },
+          "output_dir": {
+            "type": "string",
+            "description": "Output directory for rendered frames"
+          }
+        },
+        "required": ["sequence_path"]
+      }
     }
   ]
 }

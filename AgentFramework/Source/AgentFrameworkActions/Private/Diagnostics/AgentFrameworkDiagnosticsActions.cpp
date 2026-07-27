@@ -12,6 +12,9 @@
 #include "UObject/Class.h"
 #include "UObject/UnrealType.h"
 
+#include "Engine/StaticMesh.h"
+#include "StaticMeshResources.h"
+
 #if WITH_EDITOR
 #include "Editor.h"
 #include "Sound/SoundBase.h"
@@ -346,7 +349,28 @@ FAgentFrameworkActionResult FAgentFrameworkDiagnosticsActions::ExecuteInspectUOb
 
 	if (!TargetObject)
 	{
-		Result.Errors.Add(FString::Printf(TEXT("Failed to load object at path: %s"), *ObjectPath));
+		// Generic CDO Fallback: Search for class name to inspect Class Default Object
+		FString ClassName = ObjectPath;
+		if (ClassName.StartsWith(TEXT("U")) || ClassName.StartsWith(TEXT("A")))
+		{
+			ClassName = ClassName.RightChop(1);
+		}
+
+		UClass* FoundClass = FindFirstObject<UClass>(*ObjectPath, EFindFirstObjectOptions::None);
+		if (!FoundClass)
+		{
+			FoundClass = FindFirstObject<UClass>(*ClassName, EFindFirstObjectOptions::None);
+		}
+
+		if (FoundClass)
+		{
+			TargetObject = FoundClass->GetDefaultObject();
+		}
+	}
+
+	if (!TargetObject)
+	{
+		Result.Errors.Add(FString::Printf(TEXT("Failed to load object or resolve Class Default Object at path: %s"), *ObjectPath));
 		return Result;
 	}
 
@@ -363,6 +387,20 @@ FAgentFrameworkActionResult FAgentFrameworkDiagnosticsActions::ExecuteInspectUOb
 			const void* PropAddr = Prop->ContainerPtrToValuePtr<void>(TargetObject);
 			Prop->ExportTextItem_Direct(ValueStr, PropAddr, nullptr, TargetObject, PPF_None);
 			PropertiesObj->SetStringField(Prop->GetName(), ValueStr);
+		}
+	}
+
+	// Generic Asset Metrics Extraction for Static Mesh
+	if (UStaticMesh* StaticMesh = Cast<UStaticMesh>(TargetObject))
+	{
+		if (FStaticMeshRenderData* RenderData = StaticMesh->GetRenderData())
+		{
+			if (RenderData->LODResources.Num() > 0)
+			{
+				const FStaticMeshLODResources& LOD0 = RenderData->LODResources[0];
+				PropertiesObj->SetNumberField(TEXT("LOD0_VertexCount"), LOD0.GetNumVertices());
+				PropertiesObj->SetNumberField(TEXT("LOD0_TriangleCount"), LOD0.GetNumTriangles());
+			}
 		}
 	}
 

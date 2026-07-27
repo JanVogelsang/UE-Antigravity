@@ -67,3 +67,11 @@ If you are developing or running the External Python MCP server or any stdio-bas
      ```
 3. **Non-Blocking Handshake**: Do not perform heavy synchronous blocking actions (like AST parsing or index building) during the MCP server startup lifecycle. Move heavy initialization to a background worker thread so the stdio initialization handshake completes immediately.
 
+---
+
+## 5. Unreal Engine Python API Search
+
+When writing Python scripts to automate tasks in Unreal Engine:
+1. **Never guess API signatures**: Unreal Engine Python API methods frequently change or deprecate across engine versions (e.g. UE 5.8 vs 5.4).
+2. **Use Vector Search**: Query `search_vector_db` with terms like `"unreal.SourceControl"` or `"screenshot python"` to retrieve the exact class, function, and parameter signatures parsed directly from `unreal.pyi`.
+

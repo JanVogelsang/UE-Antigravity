@@ -92,15 +92,14 @@ static bool SaveAssetPackage(UPackage* Package, UObject* Asset, const FString& A
 		return false;
 	}
 
+	Package->FullyLoad();
 	Asset->MarkPackageDirty();
 	FAssetRegistryModule::AssetCreated(Asset);
 
 	FString PackageFileName = FPackageName::LongPackageNameToFilename(
 		AssetPath, FPackageName::GetAssetPackageExtension());
 
-	FSavePackageArgs SaveArgs;
-	SaveArgs.TopLevelFlags = RF_Public | RF_Standalone;
-	return UPackage::SavePackage(Package, Asset, *PackageFileName, SaveArgs);
+	return UAgentFrameworkActionUtils::SaveAssetPackage(Package, Asset, PackageFileName);
 }
 
 // Helper: find FKey from string name
@@ -448,9 +447,7 @@ FAgentFrameworkActionResult FAgentFrameworkInputActions::ExecuteAddInputMapping(
 	FString PackageFileName = FPackageName::LongPackageNameToFilename(
 		Package->GetName(), FPackageName::GetAssetPackageExtension());
 
-	FSavePackageArgs SaveArgs;
-	SaveArgs.TopLevelFlags = RF_Public | RF_Standalone;
-	if (!UPackage::SavePackage(Package, IMC, *PackageFileName, SaveArgs))
+	if (!UAgentFrameworkActionUtils::SaveAssetPackage(Package, IMC, PackageFileName))
 	{
 		Result.Errors.Add(FString::Printf(TEXT("Failed to save modified IMC to disk: %s"), *IMCPath));
 		return Result;
@@ -947,9 +944,7 @@ FAgentFrameworkActionResult FAgentFrameworkInputActions::ExecuteConfigureInputMa
 	FString PackageFileName = FPackageName::LongPackageNameToFilename(
 		Package->GetName(), FPackageName::GetAssetPackageExtension());
 
-	FSavePackageArgs SaveArgs;
-	SaveArgs.TopLevelFlags = RF_Public | RF_Standalone;
-	if (!UPackage::SavePackage(Package, IMC, *PackageFileName, SaveArgs))
+	if (!UAgentFrameworkActionUtils::SaveAssetPackage(Package, IMC, PackageFileName))
 	{
 		Result.Errors.Add(FString::Printf(TEXT("Failed to save modified IMC to disk: %s"), *IMCPath));
 		return Result;

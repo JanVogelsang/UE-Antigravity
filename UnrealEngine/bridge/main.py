@@ -222,7 +222,17 @@ async def call_agentframework_tool(name, arguments, profile):
             resp = await client.post("http://127.0.0.1:18777/api/execute_tool", json=payload, timeout=None)
             ue_result = resp.json()
             bSuccess = ue_result.get("bSuccess", False)
+            bRequiresHumanVerification = ue_result.get("bRequiresHumanVerification", False)
             msg = ue_result.get("ResultMessage", "")
+            errors = ue_result.get("Errors", [])
+            
+            if bRequiresHumanVerification:
+                err_details = " | ".join(errors) if errors else msg
+                verification_text = f"[REQUIRES_HUMAN_VERIFICATION] Human verification (CAPTCHA) required: {err_details}. Please notify the user to complete verification in Unreal Editor."
+                return {
+                    "content": [{"type": "text", "text": verification_text}],
+                    "isError": True
+                }
             
             content = []
             image_support = profile.get("image_support", False)
@@ -238,9 +248,10 @@ async def call_agentframework_tool(name, arguments, profile):
                     "mimeType": "image/png"
                 })
             else:
+                out_text = msg if bSuccess else (" | ".join(errors) if errors else msg)
                 content.append({
                     "type": "text",
-                    "text": msg
+                    "text": out_text
                 })
                 
             return {

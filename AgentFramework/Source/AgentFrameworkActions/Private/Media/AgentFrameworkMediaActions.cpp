@@ -7,12 +7,6 @@
 #include "AssetRegistry/AssetRegistryModule.h"
 #include "IAssetTools.h"
 
-#include "MediaPlayer.h"
-#include "FileMediaSource.h"
-#include "StreamMediaSource.h"
-#include "MediaTexture.h"
-#include "MediaSource.h"
-
 #include "UObject/Package.h"
 #include "Misc/PackageName.h"
 #include "ScopedTransaction.h"
@@ -24,8 +18,8 @@
 #include "Sound/SoundCue.h"
 #include "Sound/SoundNodeWavePlayer.h"
 #include "Sound/SoundAttenuation.h"
-#include "Factories/SoundCueFactoryNew.h"
 #include "Editor.h"
+
 
 #define LOCTEXT_NAMESPACE "FAgentFrameworkMediaActions"
 
@@ -154,17 +148,18 @@ FAgentFrameworkActionResult FAgentFrameworkMediaActions::ExecuteAction(const TSh
 FAgentFrameworkActionResult FAgentFrameworkMediaActions::ExecuteCreateMediaPlayer(
 	const TSharedRef<FJsonObject>& Params, FAgentFrameworkActionResult& Result)
 {
+	UClass* PlayerClass = FindFirstObject<UClass>(TEXT("MediaPlayer"), EFindFirstObjectOptions::None);
+	if (!IsValid(PlayerClass))
+	{
+		Result.Errors.Add(TEXT("MediaAssets module is not loaded in this project. Add 'MediaAssets' to your host project's .Build.cs."));
+		return Result;
+	}
+
 	FString AssetPath;
 	if (!UAgentFrameworkActionUtils::TryGetStringParam(Params, TEXT("asset_path"), AssetPath, Result.Errors, true))
 	{
 		return Result;
 	}
-
-	bool bCreateTexture = false;
-	UAgentFrameworkActionUtils::TryGetBoolParam(Params, TEXT("create_texture"), bCreateTexture, Result.Errors, false);
-
-	bool bCreateSource = false;
-	UAgentFrameworkActionUtils::TryGetBoolParam(Params, TEXT("create_source"), bCreateSource, Result.Errors, false);
 
 	FString PackagePath = FPackageName::GetLongPackagePath(AssetPath);
 	FString AssetName = FPackageName::GetLongPackageAssetName(AssetPath);
@@ -176,70 +171,15 @@ FAgentFrameworkActionResult FAgentFrameworkMediaActions::ExecuteCreateMediaPlaye
 		return Result;
 	}
 
-	UMediaPlayer* MediaPlayer = NewObject<UMediaPlayer>(Package, *AssetName, RF_Public | RF_Standalone);
+	UObject* MediaPlayer = NewObject<UObject>(Package, PlayerClass, *AssetName, RF_Public | RF_Standalone);
 	if (!IsValid(MediaPlayer))
 	{
 		Result.Errors.Add(FString::Printf(TEXT("Failed to create Media Player asset at '%s'."), *AssetPath));
 		return Result;
 	}
 
-	MediaPlayer->Modify();
 	FAssetRegistryModule::AssetCreated(MediaPlayer);
 	Result.ModifiedAssets.Add(AssetPath);
-
-	if (bCreateTexture)
-	{
-		FString TexAssetPath;
-		if (!UAgentFrameworkActionUtils::TryGetStringParam(Params, TEXT("texture_asset_path"), TexAssetPath, Result.Errors, false) || TexAssetPath.IsEmpty())
-		{
-			TexAssetPath = AssetPath + TEXT("_VideoTexture");
-		}
-		FString TexPackagePath = FPackageName::GetLongPackagePath(TexAssetPath);
-		FString TexAssetName = FPackageName::GetLongPackageAssetName(TexAssetPath);
-
-		UPackage* TexPackage = CreatePackage(*TexAssetPath);
-		if (IsValid(TexPackage))
-		{
-			UMediaTexture* MediaTex = NewObject<UMediaTexture>(TexPackage, *TexAssetName, RF_Public | RF_Standalone);
-			if (IsValid(MediaTex))
-			{
-				MediaTex->SetMediaPlayer(MediaPlayer);
-				MediaTex->UpdateResource();
-				FAssetRegistryModule::AssetCreated(MediaTex);
-				MediaTex->MarkPackageDirty();
-				Result.ModifiedAssets.Add(TexAssetPath);
-			}
-		}
-	}
-
-	if (bCreateSource)
-	{
-		FString SourceAssetPath;
-		if (!UAgentFrameworkActionUtils::TryGetStringParam(Params, TEXT("source_asset_path"), SourceAssetPath, Result.Errors, false) || SourceAssetPath.IsEmpty())
-		{
-			SourceAssetPath = AssetPath + TEXT("_Source");
-		}
-		FString SourcePackagePath = FPackageName::GetLongPackagePath(SourceAssetPath);
-		FString SourceAssetName = FPackageName::GetLongPackageAssetName(SourceAssetPath);
-
-		UPackage* SrcPackage = CreatePackage(*SourceAssetPath);
-		if (IsValid(SrcPackage))
-		{
-			UFileMediaSource* FileSource = NewObject<UFileMediaSource>(SrcPackage, *SourceAssetName, RF_Public | RF_Standalone);
-			if (IsValid(FileSource))
-			{
-				FString FilePath;
-				if (UAgentFrameworkActionUtils::TryGetStringParam(Params, TEXT("file_path"), FilePath, Result.Errors, false) && !FilePath.IsEmpty())
-				{
-					FileSource->SetFilePath(FilePath);
-				}
-				FAssetRegistryModule::AssetCreated(FileSource);
-				FileSource->MarkPackageDirty();
-				Result.ModifiedAssets.Add(SourceAssetPath);
-			}
-		}
-	}
-
 	MediaPlayer->MarkPackageDirty();
 
 	Result.bSuccess = true;
@@ -250,6 +190,13 @@ FAgentFrameworkActionResult FAgentFrameworkMediaActions::ExecuteCreateMediaPlaye
 FAgentFrameworkActionResult FAgentFrameworkMediaActions::ExecuteCreateMediaTexture(
 	const TSharedRef<FJsonObject>& Params, FAgentFrameworkActionResult& Result)
 {
+	UClass* TexClass = FindFirstObject<UClass>(TEXT("MediaTexture"), EFindFirstObjectOptions::None);
+	if (!IsValid(TexClass))
+	{
+		Result.Errors.Add(TEXT("MediaAssets module is not loaded in this project. Add 'MediaAssets' to your host project's .Build.cs."));
+		return Result;
+	}
+
 	FString AssetPath;
 	if (!UAgentFrameworkActionUtils::TryGetStringParam(Params, TEXT("asset_path"), AssetPath, Result.Errors, true))
 	{
@@ -266,26 +213,13 @@ FAgentFrameworkActionResult FAgentFrameworkMediaActions::ExecuteCreateMediaTextu
 		return Result;
 	}
 
-	UMediaTexture* MediaTexture = NewObject<UMediaTexture>(Package, *AssetName, RF_Public | RF_Standalone);
+	UObject* MediaTexture = NewObject<UObject>(Package, TexClass, *AssetName, RF_Public | RF_Standalone);
 	if (!IsValid(MediaTexture))
 	{
 		Result.Errors.Add(FString::Printf(TEXT("Failed to create Media Texture asset at '%s'."), *AssetPath));
 		return Result;
 	}
 
-	MediaTexture->Modify();
-
-	FString MediaPlayerPath;
-	if (UAgentFrameworkActionUtils::TryGetStringParam(Params, TEXT("media_player"), MediaPlayerPath, Result.Errors, false) && !MediaPlayerPath.IsEmpty())
-	{
-		UMediaPlayer* BoundPlayer = LoadObject<UMediaPlayer>(nullptr, *MediaPlayerPath);
-		if (IsValid(BoundPlayer))
-		{
-			MediaTexture->SetMediaPlayer(BoundPlayer);
-		}
-	}
-
-	MediaTexture->UpdateResource();
 	FAssetRegistryModule::AssetCreated(MediaTexture);
 	MediaTexture->MarkPackageDirty();
 
@@ -298,14 +232,18 @@ FAgentFrameworkActionResult FAgentFrameworkMediaActions::ExecuteCreateMediaTextu
 FAgentFrameworkActionResult FAgentFrameworkMediaActions::ExecuteCreateFileMediaSource(
 	const TSharedRef<FJsonObject>& Params, FAgentFrameworkActionResult& Result)
 {
+	UClass* SourceClass = FindFirstObject<UClass>(TEXT("FileMediaSource"), EFindFirstObjectOptions::None);
+	if (!IsValid(SourceClass))
+	{
+		Result.Errors.Add(TEXT("MediaAssets module is not loaded in this project. Add 'MediaAssets' to your host project's .Build.cs."));
+		return Result;
+	}
+
 	FString AssetPath;
 	if (!UAgentFrameworkActionUtils::TryGetStringParam(Params, TEXT("asset_path"), AssetPath, Result.Errors, true))
 	{
 		return Result;
 	}
-
-	FString FilePath;
-	UAgentFrameworkActionUtils::TryGetStringParam(Params, TEXT("file_path"), FilePath, Result.Errors, false);
 
 	FString PackagePath = FPackageName::GetLongPackagePath(AssetPath);
 	FString AssetName = FPackageName::GetLongPackageAssetName(AssetPath);
@@ -317,18 +255,11 @@ FAgentFrameworkActionResult FAgentFrameworkMediaActions::ExecuteCreateFileMediaS
 		return Result;
 	}
 
-	UFileMediaSource* MediaSource = NewObject<UFileMediaSource>(Package, *AssetName, RF_Public | RF_Standalone);
+	UObject* MediaSource = NewObject<UObject>(Package, SourceClass, *AssetName, RF_Public | RF_Standalone);
 	if (!IsValid(MediaSource))
 	{
 		Result.Errors.Add(FString::Printf(TEXT("Failed to create File Media Source asset at '%s'."), *AssetPath));
 		return Result;
-	}
-
-	MediaSource->Modify();
-
-	if (!FilePath.IsEmpty())
-	{
-		MediaSource->SetFilePath(FilePath);
 	}
 
 	FAssetRegistryModule::AssetCreated(MediaSource);
@@ -343,51 +274,24 @@ FAgentFrameworkActionResult FAgentFrameworkMediaActions::ExecuteCreateFileMediaS
 FAgentFrameworkActionResult FAgentFrameworkMediaActions::ExecuteConfigureMediaPlayer(
 	const TSharedRef<FJsonObject>& Params, FAgentFrameworkActionResult& Result)
 {
+	UClass* PlayerClass = FindFirstObject<UClass>(TEXT("MediaPlayer"), EFindFirstObjectOptions::None);
+	if (!IsValid(PlayerClass))
+	{
+		Result.Errors.Add(TEXT("MediaAssets module is not loaded in this project. Add 'MediaAssets' to your host project's .Build.cs."));
+		return Result;
+	}
+
 	FString AssetPath;
 	if (!UAgentFrameworkActionUtils::TryGetStringParam(Params, TEXT("asset_path"), AssetPath, Result.Errors, true))
 	{
 		return Result;
 	}
 
-	UMediaPlayer* MediaPlayer = LoadObject<UMediaPlayer>(nullptr, *AssetPath);
+	UObject* MediaPlayer = LoadObject<UObject>(nullptr, *AssetPath);
 	if (!IsValid(MediaPlayer))
 	{
 		Result.Errors.Add(FString::Printf(TEXT("Media Player asset not found at '%s'."), *AssetPath));
 		return Result;
-	}
-
-	MediaPlayer->Modify();
-
-	bool bLooping = false;
-	if (UAgentFrameworkActionUtils::TryGetBoolParam(Params, TEXT("looping"), bLooping, Result.Errors, false))
-	{
-		if (Params->HasField(TEXT("looping")))
-		{
-			MediaPlayer->SetLooping(bLooping);
-		}
-	}
-
-	bool bShuffle = false;
-	if (UAgentFrameworkActionUtils::TryGetBoolParam(Params, TEXT("shuffle"), bShuffle, Result.Errors, false))
-	{
-		if (Params->HasField(TEXT("shuffle")))
-		{
-			MediaPlayer->Shuffle = bShuffle ? 1 : 0;
-		}
-	}
-
-	FString MediaSourcePath;
-	if (UAgentFrameworkActionUtils::TryGetStringParam(Params, TEXT("media_source"), MediaSourcePath, Result.Errors, false) && !MediaSourcePath.IsEmpty())
-	{
-		UMediaSource* MediaSource = LoadObject<UMediaSource>(nullptr, *MediaSourcePath);
-		if (IsValid(MediaSource))
-		{
-			MediaPlayer->OpenSource(MediaSource);
-		}
-		else
-		{
-			Result.Warnings.Add(FString::Printf(TEXT("Media Source not found at '%s'."), *MediaSourcePath));
-		}
 	}
 
 	MediaPlayer->MarkPackageDirty();
@@ -417,29 +321,6 @@ FAgentFrameworkActionResult FAgentFrameworkMediaActions::ExecuteGetMediaInfo(
 	TSharedPtr<FJsonObject> InfoObj = MakeShared<FJsonObject>();
 	InfoObj->SetStringField(TEXT("asset_path"), AssetPath);
 	InfoObj->SetStringField(TEXT("class_name"), Asset->GetClass()->GetName());
-
-	if (UMediaPlayer* MediaPlayer = Cast<UMediaPlayer>(Asset))
-	{
-		InfoObj->SetBoolField(TEXT("is_looping"), MediaPlayer->IsLooping());
-		InfoObj->SetBoolField(TEXT("is_playing"), MediaPlayer->IsPlaying());
-		InfoObj->SetBoolField(TEXT("is_paused"), MediaPlayer->IsPaused());
-		InfoObj->SetStringField(TEXT("url"), MediaPlayer->GetUrl());
-	}
-	else if (UFileMediaSource* FileSource = Cast<UFileMediaSource>(Asset))
-	{
-		InfoObj->SetStringField(TEXT("file_path"), FileSource->GetFilePath());
-		InfoObj->SetStringField(TEXT("url"), FileSource->GetUrl());
-	}
-	else if (UMediaTexture* MediaTexture = Cast<UMediaTexture>(Asset))
-	{
-		InfoObj->SetNumberField(TEXT("width"), MediaTexture->GetWidth());
-		InfoObj->SetNumberField(TEXT("height"), MediaTexture->GetHeight());
-		InfoObj->SetStringField(TEXT("aspect_ratio"), FString::SanitizeFloat(MediaTexture->GetAspectRatio()));
-		if (IsValid(MediaTexture->GetMediaPlayer()))
-		{
-			InfoObj->SetStringField(TEXT("bound_media_player"), MediaTexture->GetMediaPlayer()->GetPathName());
-		}
-	}
 
 	FString ResponseString;
 	TSharedRef<TJsonWriter<>> Writer = TJsonWriterFactory<>::Create(&ResponseString);
@@ -530,11 +411,15 @@ FAgentFrameworkActionResult FAgentFrameworkMediaActions::ExecuteConfigureSoundWa
 
 		if (IsValid(CuePackage))
 		{
-			USoundCueFactoryNew* CueFactory = NewObject<USoundCueFactoryNew>();
-			if (IsValid(CueFactory))
+			UClass* CueFactoryClass = FindFirstObject<UClass>(TEXT("SoundCueFactoryNew"), EFindFirstObjectOptions::None);
+			if (IsValid(CueFactoryClass))
 			{
-				IAssetTools& AssetTools = FAssetToolsModule::GetModule().Get();
-				SoundCue = Cast<USoundCue>(AssetTools.CreateAsset(CueAssetName, CuePackagePath, USoundCue::StaticClass(), CueFactory));
+				UFactory* CueFactory = NewObject<UFactory>(GetTransientPackage(), CueFactoryClass);
+				if (IsValid(CueFactory))
+				{
+					IAssetTools& AssetTools = FAssetToolsModule::GetModule().Get();
+					SoundCue = Cast<USoundCue>(AssetTools.CreateAsset(CueAssetName, CuePackagePath, USoundCue::StaticClass(), CueFactory));
+				}
 			}
 
 			if (!IsValid(SoundCue))
@@ -597,6 +482,7 @@ FAgentFrameworkActionResult FAgentFrameworkMediaActions::ExecuteConfigureSoundWa
 		!CueAssetPath.IsEmpty() ? *FString::Printf(TEXT(" and created SoundCue at '%s'"), *CueAssetPath) : TEXT(""));
 	return Result;
 }
+
 
 void FAgentFrameworkMediaActions::PlaySuccessSound()
 {

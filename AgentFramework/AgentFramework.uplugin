@@ -71,10 +71,6 @@
 		},
 
 		{
-			"Name": "StructUtils",
-			"Enabled": true
-		},
-		{
 			"Name": "MassGameplay",
 			"Enabled": true
 		},

@@ -100,3 +100,6 @@ Configure an actor class for network replication in multiplayer UE games.
    ```
 
 5. **Required include**: `#include "Net/UnrealNetwork.h"`
+
+## Python API Tip (UE 5.8)
+- To set replication on a Blueprint CDO via Unreal Python: `cdo = bp.get_editor_property('generated_class').get_default_object()`, call `cdo.set_replicates(True)`, and compile with `unreal.BlueprintEditorLibrary.compile_blueprint(bp)`.

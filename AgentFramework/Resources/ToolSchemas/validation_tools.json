@@ -39,6 +39,48 @@
         },
         "required": []
       }
+    },
+    {
+      "name": "validate_map",
+      "description": "Run map check validation on a target map level asset.",
+      "input_schema": {
+        "type": "object",
+        "properties": {
+          "map_path": {
+            "type": "string",
+            "description": "Path to the map level asset (e.g. '/Game/Maps/MainMap')"
+          }
+        },
+        "required": ["map_path"]
+      }
+    },
+    {
+      "name": "validate_naming_conventions",
+      "description": "Check if assets under a directory conform to project naming conventions.",
+      "input_schema": {
+        "type": "object",
+        "properties": {
+          "folder_path": {
+            "type": "string",
+            "description": "Directory path to validate (e.g. '/Game/Blueprints')"
+          }
+        },
+        "required": ["folder_path"]
+      }
+    },
+    {
+      "name": "validate_redirectors",
+      "description": "Check for remaining asset redirectors in specified paths.",
+      "input_schema": {
+        "type": "object",
+        "properties": {
+          "folder_path": {
+            "type": "string",
+            "description": "Folder path to scan for redirectors (e.g. '/Game/')"
+          }
+        },
+        "required": []
+      }
     }
   ]
 }

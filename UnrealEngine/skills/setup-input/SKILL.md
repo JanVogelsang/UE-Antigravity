@@ -107,3 +107,4 @@ Configure the Enhanced Input system with Input Actions, Mapping Contexts, key ma
 - Ensure `"EnhancedInput"` is added to `PublicDependencyModuleNames` in the project's `.Build.cs` file.
 - Include `EnhancedInput/Public/EnhancedInputComponent.h`.
 - The project must have the EnhancedInput plugin enabled.
+- **Python API Tip (UE 5.8)**: When mapping keys via Unreal Python, instantiate `unreal.Key()` with `key.set_editor_property('key_name', 'Space')`, construct `mapping = unreal.EnhancedActionKeyMapping()`, set `action` and `key`, and append `mapping` to `imc.get_editor_property('mappings')` before calling `unreal.EditorAssetLibrary.save_loaded_asset(imc)`.

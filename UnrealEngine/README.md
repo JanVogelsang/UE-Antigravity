@@ -187,3 +187,23 @@ The bridge uses a lightweight C++ executable (`bridge.exe`) to proxy requests. T
 Alternatively, you can compile it manually:
 1. Open a terminal in the plugin directory.
 2. Run `src/build_bridge.bat` (requires Visual Studio C++ build tools installed).
+
+---
+
+## Interface Contracts
+
+### Client / Bridge ↔ Internal C++ Server
+- **Protocol**: JSON-RPC over stdio (Bridge) mapped to HTTP POST `/api/execute_tool` (Editor port 18777).
+- **Standard Payload**:
+  - Request: `{"name": "<tool_name>", "arguments": { ... }}`
+  - Response: `{"bSuccess": true, "ResultMessage": "...", "Errors": [], "Warnings": []}`
+
+### Client ↔ External Python Server
+- **Protocol**: Standard MCP (JSON-RPC 2.0 over stdio).
+- **Exposed Tools**:
+  - `query_cpp_ast`
+  - `generate_compile_commands`
+  - `search_vector_db`
+  - `search_similar_blueprints`
+  - `index_all_blueprints`
+  - `format_t3d_layout`

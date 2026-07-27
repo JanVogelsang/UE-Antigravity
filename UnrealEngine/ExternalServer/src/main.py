@@ -19,6 +19,7 @@ import json
 import sqlite3
 import asyncio
 import math
+import time
 from typing import Optional
 import logging
 import winreg
@@ -1757,7 +1758,126 @@ async def format_t3d_layout(t3d_text: str) -> str:
     formatted T3D text with updated NodePosX and NodePosY coordinates.
     Use this BEFORE calling inject_blueprint_nodes_t3d to beautify node layouts.
     """
-    return t3d_text
+    if not t3d_text or not t3d_text.strip():
+        return t3d_text
+
+    import re
+
+    lines = t3d_text.splitlines()
+    nodes = []
+    current_node = None
+    depth = 0
+
+    # Step 1: Parse top-level node blocks
+    for i, line in enumerate(lines):
+        stripped = line.strip()
+        if stripped.startswith("Begin Object"):
+            depth += 1
+            if depth == 1:
+                name_match = re.search(r'Name="([^"]+)"', line)
+                node_name = name_match.group(1) if name_match else f"Node_{len(nodes)}"
+                current_node = {
+                    "start_line": i,
+                    "end_line": -1,
+                    "name": node_name,
+                    "class": line,
+                    "links": [],
+                }
+        elif stripped.startswith("End Object"):
+            if depth == 1 and current_node:
+                current_node["end_line"] = i
+                nodes.append(current_node)
+                current_node = None
+            depth = max(0, depth - 1)
+
+        if depth >= 1 and current_node:
+            if "LinkedTo=" in line:
+                if 'Direction="EGPD_Output"' in line or 'Direction="EGPD_Input"' not in line:
+                    matches = re.findall(r'LinkedTo=\(([^ ")]+)', line)
+                    for target in matches:
+                        current_node["links"].append(target)
+
+    if not nodes:
+        return t3d_text
+
+    # Step 2: Calculate topological rank or grid position for nodes
+    name_to_node = {n["name"]: n for n in nodes}
+    in_degree = {n["name"]: 0 for n in nodes}
+    adj = {n["name"]: [] for n in nodes}
+
+    for n in nodes:
+        for target in n["links"]:
+            target_name = target.split()[0]
+            if target_name in name_to_node and target_name != n["name"]:
+                adj[n["name"]].append(target_name)
+                in_degree[target_name] += 1
+
+    rank = {n["name"]: 0 for n in nodes}
+    queue = [name for name, deg in in_degree.items() if deg == 0]
+    visited = set()
+
+    while queue:
+        curr = queue.pop(0)
+        visited.add(curr)
+        curr_rank = rank[curr]
+        for neighbor in adj[curr]:
+            rank[neighbor] = max(rank[neighbor], curr_rank + 1)
+            in_degree[neighbor] -= 1
+            if in_degree[neighbor] == 0:
+                queue.append(neighbor)
+
+    for n in nodes:
+        if n["name"] not in visited:
+            rank[n["name"]] = 0
+
+    rank_groups = {}
+    for n in nodes:
+        r = rank[n["name"]]
+        rank_groups.setdefault(r, []).append(n)
+
+    X_SPACING = 350
+    Y_SPACING = 200
+    START_X = 100
+    START_Y = 100
+
+    node_pos = {}
+    for r in sorted(rank_groups.keys()):
+        group = rank_groups[r]
+        for row_idx, n in enumerate(group):
+            pos_x = START_X + r * X_SPACING
+            pos_y = START_Y + row_idx * Y_SPACING
+            node_pos[n["name"]] = (pos_x, pos_y)
+
+    # Step 3: Reconstruct lines with updated NodePosX and NodePosY
+    new_lines = list(lines)
+    for n in sorted(nodes, key=lambda x: x["start_line"], reverse=True):
+        pos_x, pos_y = node_pos[n["name"]]
+        start = n["start_line"]
+        end = n["end_line"]
+
+        has_x = False
+        has_y = False
+        for idx in range(start, end + 1):
+            line_str = new_lines[idx]
+            if re.match(r'^\s*NodePosX=', line_str):
+                indent = line_str[:len(line_str) - len(line_str.lstrip())]
+                new_lines[idx] = f"{indent}NodePosX={pos_x}"
+                has_x = True
+            elif re.match(r'^\s*NodePosY=', line_str):
+                indent = line_str[:len(line_str) - len(line_str.lstrip())]
+                new_lines[idx] = f"{indent}NodePosY={pos_y}"
+                has_y = True
+
+        insert_lines = []
+        if not has_x:
+            insert_lines.append(f"   NodePosX={pos_x}")
+        if not has_y:
+            insert_lines.append(f"   NodePosY={pos_y}")
+
+        if insert_lines:
+            new_lines[start + 1:start + 1] = insert_lines
+
+    return "\n".join(new_lines)
 
 # --- Blueprint Sync Helpers ---
 def get_unreal_port_sync() -> int:
@@ -2370,6 +2490,8 @@ async def execute_manual_tool(name: str, arguments: dict) -> str:
         return await search_similar_blueprints(**arguments)
     elif name == "index_all_blueprints":
         return await index_all_blueprints()
+    elif name == "format_t3d_layout":
+        return await format_t3d_layout(**arguments)
     elif name in ("inspect_macro_expansion", "query_macro_expansion"):
         macro_arg = arguments.get("macro_name") or arguments.get("query")
         fp_arg = arguments.get("file_path")
@@ -2422,7 +2544,10 @@ def main():
     logger.info(f"Initializing vector database for Unreal Engine {ue_version} at {vector_db_dir}")
     
     try:
-        from ExternalServer.src import vector_store
+        try:
+            from ExternalServer.src import vector_store
+        except ModuleNotFoundError:
+            import vector_store
         vector_store.initialize_db(str(vector_db_dir), ue_version)
     except Exception as e:
         logger.error(f"Failed to initialize vector store: {e}")

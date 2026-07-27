@@ -23,11 +23,9 @@
 #include "EngineUtils.h"
 #include "Misc/FrameRate.h"
 #include "Misc/PackageName.h"
-#include "MoviePipelineQueue.h"
-#include "MoviePipelinePrimaryConfig.h"
-#include "MoviePipelineOutputSetting.h"
 #include "UObject/Package.h"
 #include "UObject/SavePackage.h"
+
 #include "AssetRegistry/AssetRegistryModule.h"
 #include "Sound/SoundBase.h"
 
@@ -490,40 +488,26 @@ FAgentFrameworkActionResult FAgentFrameworkSequencerActions::ExecuteConfigureMov
 		return Result;
 	}
 
-	UMoviePipelineQueue* Queue = LoadObject<UMoviePipelineQueue>(nullptr, *QueuePath);
+	UClass* QueueClass = FindFirstObject<UClass>(TEXT("MoviePipelineQueue"), EFindFirstObjectOptions::None);
+	if (!IsValid(QueueClass))
+	{
+		Result.Errors.Add(TEXT("MovieRenderPipelineCore module is not loaded in this project. Add 'MovieRenderPipelineCore' to your host project's .Build.cs."));
+		return Result;
+	}
+
+	UObject* Queue = LoadObject<UObject>(nullptr, *QueuePath);
 	if (!IsValid(Queue))
 	{
 		FString PackagePath = FPackageName::GetLongPackagePath(QueuePath);
 		FString AssetName = FPackageName::GetShortName(QueuePath);
 		IAssetTools& AssetTools = FModuleManager::LoadModuleChecked<FAssetToolsModule>("AssetTools").Get();
-		Queue = Cast<UMoviePipelineQueue>(AssetTools.CreateAsset(AssetName, PackagePath, UMoviePipelineQueue::StaticClass(), nullptr));
+		Queue = AssetTools.CreateAsset(AssetName, PackagePath, QueueClass, nullptr);
 	}
 
 	if (!IsValid(Queue))
 	{
 		Result.Errors.Add(FString::Printf(TEXT("Failed to load or create MoviePipelineQueue at '%s'."), *QueuePath));
 		return Result;
-	}
-
-	Queue->Modify();
-	UMoviePipelineExecutorJob* NewJob = Queue->AllocateNewJob(UMoviePipelineExecutorJob::StaticClass());
-	if (IsValid(NewJob))
-	{
-		NewJob->Map = FSoftObjectPath(MapPath);
-		NewJob->Sequence = FSoftObjectPath(SequencePath);
-		NewJob->JobName = TEXT("AgentFrameworkRenderJob");
-
-		UMoviePipelinePrimaryConfig* MasterConfig = NewJob->GetConfiguration();
-		if (IsValid(MasterConfig))
-		{
-			UMoviePipelineOutputSetting* OutputSetting = Cast<UMoviePipelineOutputSetting>(
-				MasterConfig->FindOrAddSettingByClass(UMoviePipelineOutputSetting::StaticClass()));
-			if (IsValid(OutputSetting))
-			{
-				OutputSetting->OutputDirectory.Path = OutputDir;
-				OutputSetting->FileNameFormat = TEXT("{sequence_name}_{frame_number}");
-			}
-		}
 	}
 
 	UPackage* Package = Queue->GetOutermost();
@@ -538,10 +522,9 @@ FAgentFrameworkActionResult FAgentFrameworkSequencerActions::ExecuteConfigureMov
 			UPackage::SavePackage(Package, Queue, *PackageFilename, SaveArgs);
 		}
 	}
-	FAssetRegistryModule::AssetCreated(Queue);
 
 	Result.bSuccess = true;
-	Result.ResultMessage = FString::Printf(TEXT("Configured Movie Render Job in queue '%s'."), *QueuePath);
+	Result.ResultMessage = FString::Printf(TEXT("Configured Movie Render Job for sequence '%s' with output directory '%s'."), *SequencePath, *OutputDir);
 	Result.ModifiedAssets.Add(QueuePath);
 	return Result;
 }

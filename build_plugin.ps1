@@ -102,6 +102,16 @@ if (-not (Test-Path $RunUAT)) {
     Write-Error "Could not find RunUAT.bat at expected path: '$RunUAT'"
 }
 
+# 1.5. Run C++ Tool Schema Audit
+Write-Host "`nRunning C++ Tool Schema Audit via export_action_schemas.py..." -ForegroundColor Cyan
+$ExportSchemaScript = Join-Path $RepoRoot "UnrealEngine\src\scripts\export_action_schemas.py"
+if (Test-Path $ExportSchemaScript) {
+    python $ExportSchemaScript
+    if ($LASTEXITCODE -ne 0) {
+        Write-Error "C++ Tool Schema Audit failed! Missing JSON schemas detected."
+    }
+}
+
 # 2. Clean previous build folders from the plugin
 Write-Host "`nCleaning intermediate and build folders in plugin directory..." -ForegroundColor Cyan
 $FoldersToClean = @("Binaries", "Intermediate", "Saved")

@@ -173,12 +173,23 @@ The agent scans your C++ codebase, configures the local environment, and builds 
 
 ---
 
+---
+
 ## Repository structure
 
 - **`AgentFramework/`** — the Unreal Engine C++ editor plugin. Runs the internal MCP server with 150+ Game-Thread tools.
 - **`UnrealEngine/`** — the agent-side plugin: MCP bridge proxy, Python AST server, the 13 skills, system prompts, and agent profiles.
-- **`Tests/`** — a `pytest`-based integration and unit suite verifying the Dual-MCP communication flow.
-- **`Documentation/`** — architecture, developer setup, and testing-matrix docs.
+- **`Tests/`** — a `pytest`-based integration and unit suite, test runners, and benchmark baseline telemetry (`benchmark_baseline.json`).
+
+---
+
+## Building the C++ Plugin
+
+Unreal Engine compilation relies on UBT. To build the C++ plugin headlessly and prevent UAT instance lock conflicts, set the mutex bypass environment variable before building:
+```powershell
+$env:uebp_UATMutexNoWait = '1'
+powershell -ExecutionPolicy Bypass -File .\build_plugin.ps1 -NoZip
+```
 
 ---
 

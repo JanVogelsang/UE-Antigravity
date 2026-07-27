@@ -242,40 +242,49 @@ FAgentFrameworkActionResult FAgentFrameworkNiagaraActions::ExecuteAddEmitter(con
 
 	// Determine Template Emitter Path inside Engine/Niagara content
 	FString TemplatePath;
-	if (EmitterTemplate == TEXT("SpriteBurst"))       TemplatePath = TEXT("/Niagara/Templates/Emitters/SimpleSprite");
-	else if (EmitterTemplate == TEXT("RibbonTrail"))   TemplatePath = TEXT("/Niagara/Templates/Emitters/SimpleRibbon");
-	else if (EmitterTemplate == TEXT("MeshDebris"))    TemplatePath = TEXT("/Niagara/Templates/Emitters/SimpleMesh");
-	else if (EmitterTemplate == TEXT("GPUSimulation")) TemplatePath = TEXT("/Niagara/Templates/Emitters/SimpleGPU");
-	else                                              TemplatePath = TEXT("/Niagara/Templates/Emitters/SimpleSprite");
+	if (EmitterTemplate == TEXT("SpriteBurst"))       TemplatePath = TEXT("/Niagara/DefaultAssets/Templates/Emitters/SimpleSpriteBurst");
+	else if (EmitterTemplate == TEXT("RibbonTrail"))   TemplatePath = TEXT("/Niagara/DefaultAssets/Templates/Emitters/LocationBasedRibbon");
+	else if (EmitterTemplate == TEXT("MeshDebris"))    TemplatePath = TEXT("/Niagara/DefaultAssets/Templates/Emitters/UpwardMeshBurst");
+	else if (EmitterTemplate == TEXT("GPUSimulation")) TemplatePath = TEXT("/Niagara/DefaultAssets/Templates/Emitters/DirectionalBurst");
+	else                                              TemplatePath = TEXT("/Niagara/DefaultAssets/Templates/Emitters/SimpleSpriteBurst");
 
 	UNiagaraEmitter* TemplateEmitter = LoadObject<UNiagaraEmitter>(nullptr, *TemplatePath);
 	if (!IsValid(TemplateEmitter))
 	{
 		// Fallback search in Common locations
-		TemplateEmitter = LoadObject<UNiagaraEmitter>(nullptr, TEXT("/Niagara/SimpleSprite.SimpleSprite"));
+		TemplateEmitter = LoadObject<UNiagaraEmitter>(nullptr, TEXT("/Niagara/DefaultAssets/Templates/Emitters/SimpleSpriteBurst.SimpleSpriteBurst"));
+	}
+
+	if (!IsValid(TemplateEmitter))
+	{
+		Result.Errors.Add(FString::Printf(TEXT("Failed to load Niagara Template Emitter at %s"), *TemplatePath));
+		return Result;
+	}
+
+	if (IsGarbageCollecting())
+	{
+		Result.Errors.Add(TEXT("Cannot modify Niagara System while Garbage Collection is in progress."));
+		return Result;
 	}
 
 	System->Modify();
 
-	UNiagaraEmitter* NewEmitter = nullptr;
-	if (IsValid(TemplateEmitter))
+	FGuid VersionGuid = TemplateEmitter->GetExposedVersion().VersionGuid;
+	if (!VersionGuid.IsValid())
 	{
-		NewEmitter = Cast<UNiagaraEmitter>(StaticDuplicateObject(TemplateEmitter, System, *EmitterName));
-	}
-	else
-	{
-		// Create blank fallback emitter
-		NewEmitter = NewObject<UNiagaraEmitter>(System, *EmitterName, RF_Transactional);
+		FVersionedNiagaraEmitterData* EmitterData = TemplateEmitter->GetLatestEmitterData();
+		if (EmitterData)
+		{
+			VersionGuid = EmitterData->Version.VersionGuid;
+		}
 	}
 
-	if (!IsValid(NewEmitter))
+	const FNiagaraEmitterHandle& AddedHandle = System->AddEmitterHandle(*TemplateEmitter, FName(*EmitterName), VersionGuid);
+	if (!AddedHandle.GetId().IsValid())
 	{
-		Result.Errors.Add(FString::Printf(TEXT("Failed to create emitter instance for %s"), *EmitterName));
+		Result.Errors.Add(FString::Printf(TEXT("Failed to add emitter handle '%s' to system"), *EmitterName));
 		return Result;
 	}
-
-	NewEmitter->Modify();
-	System->AddEmitterHandle(*NewEmitter, FName(*EmitterName), NewEmitter->GetExposedVersion().VersionGuid);
 
 	UPackage* Package = System->GetOutermost();
 	if (IsValid(Package))
@@ -326,15 +335,19 @@ FAgentFrameworkActionResult FAgentFrameworkNiagaraActions::ExecuteAddModule(cons
 
 	// Locate standard module script path
 	FString ModulePath;
-	if (ModuleType == TEXT("AddVelocity"))           ModulePath = TEXT("/Niagara/Modules/Physics/AddVelocity.AddVelocity");
-	else if (ModuleType == TEXT("GravityForce"))     ModulePath = TEXT("/Niagara/Modules/Physics/GravityForce.GravityForce");
-	else if (ModuleType == TEXT("Drag"))             ModulePath = TEXT("/Niagara/Modules/Physics/Drag.Drag");
-	else if (ModuleType == TEXT("Collision"))        ModulePath = TEXT("/Niagara/Modules/Physics/Collision.Collision");
-	else if (ModuleType == TEXT("LightRenderer"))    ModulePath = TEXT("/Niagara/Modules/Rendering/LightRenderer.LightRenderer");
-	else if (ModuleType == TEXT("AccelerationForce"))ModulePath = TEXT("/Niagara/Modules/Physics/AccelerationForce.AccelerationForce");
-	else                                             ModulePath = FString::Printf(TEXT("/Niagara/Modules/Physics/%s.%s"), *ModuleType, *ModuleType);
+	if (ModuleType == TEXT("AddVelocity"))                  ModulePath = TEXT("/Niagara/Modules/Spawn/Velocity/AddVelocity.AddVelocity");
+	else if (ModuleType == TEXT("GravityForce"))            ModulePath = TEXT("/Niagara/Modules/Update/Forces/GravityForce.GravityForce");
+	else if (ModuleType == TEXT("SpawnBurstInstantaneous")) ModulePath = TEXT("/Niagara/Modules/Emitter/SpawnBurst_Instantaneous.SpawnBurst_Instantaneous");
+	else if (ModuleType == TEXT("SpawnBurst_Instantaneous"))ModulePath = TEXT("/Niagara/Modules/Emitter/SpawnBurst_Instantaneous.SpawnBurst_Instantaneous");
+	else if (ModuleType.StartsWith(TEXT("/Niagara/")))       ModulePath = ModuleType;
+	else                                                    ModulePath = FString::Printf(TEXT("/Niagara/Modules/Emitter/%s.%s"), *ModuleType, *ModuleType);
 
 	UNiagaraScript* ModuleScript = LoadObject<UNiagaraScript>(nullptr, *ModulePath);
+	if (!IsValid(ModuleScript))
+	{
+		// Search fallback
+		ModuleScript = LoadObject<UNiagaraScript>(nullptr, *FString::Printf(TEXT("/Niagara/Modules/Spawn/Velocity/%s.%s"), *ModuleType, *ModuleType));
+	}
 	if (!IsValid(ModuleScript))
 	{
 		Result.Errors.Add(FString::Printf(TEXT("Niagara Script Module not found at %s"), *ModulePath));
@@ -781,8 +794,8 @@ bool FAgentFrameworkNiagaraActions::WaitAndReportCompile(UNiagaraSystem* System,
 		return false;
 	}
 
-	// WaitForCompilationComplete blocks game thread until compilation completes.
-	System->WaitForCompilationComplete(true, false);
+	// Request compile asynchronously to prevent blocking the Game Thread HTTP listener
+	System->RequestCompile(false);
 
 	// Extract compilation logs and performance metrics
 	// If compiling failed, extract errors from output log or script states

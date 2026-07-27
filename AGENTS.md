@@ -40,6 +40,7 @@ Before writing code or utilizing MCP tools, you **MUST** read the detailed guide
 *   **Blueprint Node Generation**: Always include a unique, valid `NodeGuid` (32-char hex string) when generating T3D representations.
 *   **The "Ponytail" Ladder**: Follow strict evaluation before writing new C++ or Blueprint logic.
 *   **Automation Test Run Safeguards**: Semicolon-chain `; Quit` to test commands to avoid hanging standalone processes.
+*   **Minimal Module Dependencies Directive**: The `AgentFramework` plugin C++ code must maintain the absolute minimum set of module dependencies required for core Editor integration. If a specific task or feature being implemented for a host project requires additional UE feature modules (e.g., `Foliage`, `StateTree`, `GeometryCore`, `GameplayAbilities`), the agent MUST add that module dependency to the **host game project's `.Build.cs`**, NOT to the `AgentFramework` plugin.
 *   **Ticking Guardrails**: Never place high-overhead logic or unchecked array accesses inside `Tick` or `NativeTick` functions.
 
 ### 4. Target Project Context vs. Plugin Context

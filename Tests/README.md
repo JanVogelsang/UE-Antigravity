@@ -15,25 +15,36 @@ The test framework connects:
 - `mock_client.py`: The `MockAgentClient` that wraps the JSON-RPC interface for the Python server and the HTTP client for the C++ server.
 - `test_e2e_integration.py`: Integration tests verifying the connection and tool invocation flow for both servers.
 
-## Getting Started
+## Environment Setup & Test Execution (Windows)
 
-### 1. Installation
-Install the necessary test dependencies using pip:
-```bash
-pip install -r requirements.txt
+On Windows systems, PATH resolution can sometimes point to restricted shell Pythons (e.g. MinGW/MSYS2) missing required packages.
+
+### Recommended Test Runner
+Always use the PowerShell runner wrapper from the root of the project to ensure the correct Python environment and DLL directories are loaded:
+```powershell
+powershell -File .\run_tests.ps1
 ```
 
-### 2. Configuration
-The paths used to launch Unreal Engine are defined at the top of `conftest.py`:
-- `UNREAL_PATH`: Absolute path to `UnrealEditor-Cmd.exe` (default: `D:\UE_5.7\Engine\Binaries\Win64\UnrealEditor-Cmd.exe`).
-- `PROJECT_PATH`: Absolute path to the `.uproject` file (default: `C:\Users\janv1\Documents\Unreal Projects\AgentFrameworkTest\AgentFrameworkTest.uproject`).
-
-### 3. Running the Tests
-To run the integration tests:
-```bash
-pytest -v
+Or run directly using the standard user Python binary:
+```powershell
+& "$env:USERPROFILE\AppData\Local\Microsoft\WindowsApps\python.exe" -m pip install -r Tests/requirements.txt --user
+powershell -File .\run_tests.ps1
 ```
 
-If the Unreal Engine editor is already open and running on your machine (listening on port 18777), the fixtures will automatically detect it and run the tests against your open instance rather than launching a new one.
+---
 
-If the Unreal Editor is not running and the path `UNREAL_PATH` is invalid, the tests will automatically fall back to spawning a mock C++ HTTP server in a background thread to allow local testing and continuous integration checks to succeed.
+## Benchmarking & Baseline Evaluation
+
+This directory maintains the 42-task Unreal Engine benchmark baseline telemetry dataset.
+
+### Baseline Data & Comparison
+
+- **`benchmark_baseline.json`**: Authoritative post-optimization 42-task baseline dataset.
+- **`BENCHMARK_BASELINE.md`**: Human-readable baseline telemetry comparison report.
+- **`compare_benchmarks.py`**: Automated comparison tool to evaluate new benchmark runs against the baseline.
+
+#### How to Compare Benchmark Runs
+To run a comparison of new benchmark JSON results against the baseline:
+```powershell
+python Tests/compare_benchmarks.py --current path/to/new_run_results.json
+```

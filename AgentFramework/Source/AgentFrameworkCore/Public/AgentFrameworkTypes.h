@@ -73,6 +73,10 @@ struct AGENTFRAMEWORKCORE_API FAgentFrameworkActionResult
 	UPROPERTY(BlueprintReadOnly, Category = "AgentFramework")
 	bool bSuccess = false;
 
+	/** Whether human verification (e.g. CAPTCHA) is required */
+	UPROPERTY(BlueprintReadOnly, Category = "AgentFramework")
+	bool bRequiresHumanVerification = false;
+
 	/** The action that was executed */
 	UPROPERTY(BlueprintReadOnly, Category = "AgentFramework", Meta = (IgnoreForMemberInitializationTest))
 	FGuid ActionId;
