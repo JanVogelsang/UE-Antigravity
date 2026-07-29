@@ -100,15 +100,19 @@ namespace
 	FString ExpandWidgetAssetPath(const FString& InPath)
 	{
 		if (InPath.IsEmpty()) return InPath;
-		if (InPath.StartsWith(TEXT("/Game/")) || InPath.StartsWith(TEXT("/Engine/")) || InPath.StartsWith(TEXT("/Script/")) || InPath.StartsWith(TEXT("/Temp/")))
+		FString ExpandedPath = InPath;
+		if (!InPath.StartsWith(TEXT("/Game/")) && !InPath.StartsWith(TEXT("/Engine/")) && !InPath.StartsWith(TEXT("/Script/")) && !InPath.StartsWith(TEXT("/Temp/")))
 		{
-			return InPath;
+			if (InPath.StartsWith(TEXT("/")))
+			{
+				ExpandedPath = TEXT("/Game") + InPath;
+			}
+			else
+			{
+				ExpandedPath = TEXT("/Game/") + InPath;
+			}
 		}
-		if (InPath.StartsWith(TEXT("/")))
-		{
-			return TEXT("/Game") + InPath;
-		}
-		return TEXT("/Game/") + InPath;
+		return UAgentFrameworkActionUtils::NormalizeAssetObjectPath(ExpandedPath);
 	}
 
 	FString CompressWidgetAssetPath(const FString& InPath)
@@ -1266,6 +1270,7 @@ FAgentFrameworkActionResult FAgentFrameworkWidgetActions::ExecuteAddWidget(const
 		return Result;
 	}
 
+	NewWidget->bIsVariable = true;
 	WidgetBP->WidgetVariableNameToGuidMap.Add(NewWidget->GetFName(), FGuid::NewGuid());
 
 	// Attach to parent panel if specified

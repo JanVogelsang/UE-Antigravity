@@ -123,15 +123,19 @@ namespace
 	FString ExpandBlueprintAssetPath(const FString& InPath)
 	{
 		if (InPath.IsEmpty()) return InPath;
-		if (InPath.StartsWith(TEXT("/Game/")) || InPath.StartsWith(TEXT("/Engine/")) || InPath.StartsWith(TEXT("/Script/")) || InPath.StartsWith(TEXT("/Temp/")))
+		FString ExpandedPath = InPath;
+		if (!InPath.StartsWith(TEXT("/Game/")) && !InPath.StartsWith(TEXT("/Engine/")) && !InPath.StartsWith(TEXT("/Script/")) && !InPath.StartsWith(TEXT("/Temp/")))
 		{
-			return InPath;
+			if (InPath.StartsWith(TEXT("/")))
+			{
+				ExpandedPath = TEXT("/Game") + InPath;
+			}
+			else
+			{
+				ExpandedPath = TEXT("/Game/") + InPath;
+			}
 		}
-		if (InPath.StartsWith(TEXT("/")))
-		{
-			return TEXT("/Game") + InPath;
-		}
-		return TEXT("/Game/") + InPath;
+		return UAgentFrameworkActionUtils::NormalizeAssetObjectPath(ExpandedPath);
 	}
 
 	FString CompressBlueprintAssetPath(const FString& InPath)

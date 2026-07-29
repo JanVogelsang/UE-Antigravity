@@ -5,7 +5,7 @@
   "tools": [
     {
       "name": "create_cpp_class",
-      "description": "Create a new C++ class with header and implementation files. Validates code safety before writing. WARNING: If the header contains UCLASS/USTRUCT macros, Live Coding cannot compile it \u2014 editor restart required. WARNING: Only write or modify C++ files if the user EXPLICITLY requests a C++ solution. Otherwise, default to using Blueprint or Python tools.",
+      "description": "Create a new C++ class with header and implementation files. Validates code safety before writing. Triggers Live Coding compilation to compile and register the new class in the active Editor session. WARNING: Only write or modify C++ files if the user EXPLICITLY requests a C++ solution. Otherwise, default to using Blueprint or Python tools.",
       "input_schema": {
         "type": "object",
         "properties": {
@@ -27,7 +27,7 @@
           },
           "auto_compile": {
             "type": "boolean",
-            "description": "Trigger Live Coding after writing. Only works for .cpp-only changes."
+            "description": "Trigger Live Coding compilation after writing."
           }
         },
         "required": [
@@ -59,7 +59,7 @@
     },
     {
       "name": "trigger_compile",
-      "description": "Trigger Live Coding compilation. Only works for .cpp implementation changes, not structural header changes.",
+      "description": "Trigger Live Coding compilation to compile C++ changes and new classes.",
       "input_schema": {
         "type": "object",
         "properties": {

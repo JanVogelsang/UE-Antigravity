@@ -474,3 +474,30 @@ bool UAgentFrameworkActionUtils::SaveAssetPackage(UPackage* Package, UObject* As
 	FSavePackageArgs SaveArgs;
 	return UPackage::SavePackage(Package, Asset, *PackageFileName, SaveArgs);
 }
+
+FString UAgentFrameworkActionUtils::NormalizeAssetObjectPath(const FString& InPath)
+{
+	if (InPath.IsEmpty())
+	{
+		return InPath;
+	}
+
+	int32 LastDotIndex = INDEX_NONE;
+	int32 LastSlashIndex = INDEX_NONE;
+	InPath.FindLastChar(TEXT('.'), LastDotIndex);
+	InPath.FindLastChar(TEXT('/'), LastSlashIndex);
+
+	if (LastDotIndex != INDEX_NONE && LastDotIndex > LastSlashIndex)
+	{
+		return InPath;
+	}
+
+	FString AssetName = FPackageName::GetLongPackageAssetName(InPath);
+	if (!AssetName.IsEmpty())
+	{
+		return FString::Printf(TEXT("%s.%s"), *InPath, *AssetName);
+	}
+
+	return InPath;
+}
+

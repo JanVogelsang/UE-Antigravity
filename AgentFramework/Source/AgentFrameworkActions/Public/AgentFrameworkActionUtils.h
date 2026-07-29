@@ -224,4 +224,11 @@ public:
 	 * Fully loads a package if needed and saves it safely using UPackage::SavePackage, preventing engine assertion crashes.
 	 */
 	static bool SaveAssetPackage(UPackage* Package, UObject* Asset, const FString& PackageFileName);
+
+	/**
+	 * Normalizes a package path (e.g. "/Game/UI/WBP_HealthBar") to a full object path (e.g. "/Game/UI/WBP_HealthBar.WBP_HealthBar").
+	 * If the path already contains an object suffix or is empty, it is returned as-is.
+	 */
+	UFUNCTION(BlueprintCallable, Category = "AgentFramework|Utils")
+	static FString NormalizeAssetObjectPath(const FString& InPath);
 };

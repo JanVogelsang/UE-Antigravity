@@ -12,8 +12,7 @@
 #include "UObject/MetaData.h"
 #include "Serialization/JsonSerializer.h"
 #include "Serialization/JsonWriter.h"
-#include "Editor.h"
-#include "Sound/SoundBase.h"
+#include "AssetRegistry/AssetRegistryModule.h"
 
 #if WITH_LIVE_CODING
 #include "ILiveCodingModule.h"
@@ -367,8 +366,12 @@ FAgentFrameworkActionResult FAgentFrameworkCppActions::ExecuteTriggerCompile(FAg
 
 			UE_LOG(LogAgentFramework, Log, TEXT("CppActions: Triggering Live Coding compilation..."));
 			LiveCoding->Compile();
+
+			FAssetRegistryModule& AssetRegistryModule = FModuleManager::LoadModuleChecked<FAssetRegistryModule>(TEXT("AssetRegistry"));
+			AssetRegistryModule.Get().Tick(-1.0f);
+
 			Result.bSuccess = true;
-			Result.ResultMessage = TEXT("Live Coding compilation triggered. Check editor status bar for progress.");
+			Result.ResultMessage = TEXT("Live Coding compilation triggered and Asset Registry refreshed. Check editor status bar for progress.");
 			return Result;
 		}
 	}
