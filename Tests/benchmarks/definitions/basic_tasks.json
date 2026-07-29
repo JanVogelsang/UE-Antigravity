@@ -1,0 +1,261 @@
+{
+  "suite": "basic",
+  "version": "1.0.0",
+  "tasks": [
+    {
+      "task_id": "task_01",
+      "prompt": "Find the skeleton asset used by the animation sequence '/Game/Walking_Import0003_Anim'.",
+      "validation_criteria": ""
+    },
+    {
+      "task_id": "task_02",
+      "prompt": "Create a Behavior Tree named 'BT_Enemy' in '/Game/AI', verify its creation, and then clean up by deleting the created asset afterwards to restore the workspace state.",
+      "validation_criteria": "Verify asset creation at '/Game/AI/BT_Enemy' and verify that it was cleanly deleted during the cleanup step."
+    },
+    {
+      "task_id": "task_03",
+      "prompt": "Create a new Blueprint class named BP_TestActor, add a float variable 'Speed', verify compilation, and clean up by deleting BP_TestActor afterwards to restore the workspace state.",
+      "validation_criteria": "Verify BP_TestActor creation with variable 'Speed' and verify that it was cleanly deleted during the cleanup step."
+    },
+    {
+      "task_id": "task_04",
+      "prompt": "Trigger a live C++ compilation of the project from the editor.",
+      "validation_criteria": ""
+    },
+    {
+      "task_id": "task_05",
+      "prompt": "Get the list of currently selected actors in the Editor viewport.",
+      "validation_criteria": ""
+    },
+    {
+      "task_id": "task_06",
+      "prompt": "Retrieve the list of all available tools from the Unreal Engine MCP server.",
+      "validation_criteria": ""
+    },
+    {
+      "task_id": "task_07",
+      "prompt": "Create a new C++ class 'AMyBenchActor' inheriting from AActor, verify header/cpp creation, and clean up created files afterwards to restore workspace state.",
+      "validation_criteria": "Verify C++ source file generation and verify cleanup of created class files."
+    },
+    {
+      "task_id": "task_08",
+      "prompt": "Import a CSV file to create a Data Table named 'DT_Items' in '/Game/Data', verify row count, and clean up by deleting 'DT_Items' afterwards.",
+      "validation_criteria": "Verify Data Table import at '/Game/Data/DT_Items' and verify asset deletion during cleanup."
+    },
+    {
+      "task_id": "task_09",
+      "prompt": "Fetch the last 50 lines of the Unreal Editor output log.",
+      "validation_criteria": ""
+    },
+    {
+      "task_id": "task_10",
+      "prompt": "Create a new Gameplay Ability Blueprint named 'GA_Fireball', verify parent class, and clean up by deleting 'GA_Fireball' afterwards.",
+      "validation_criteria": "Verify Gameplay Ability Blueprint creation and verify clean asset removal during cleanup."
+    },
+    {
+      "task_id": "task_11",
+      "prompt": "Create an Input Mapping Context named 'IMC_Default' and an Input Action 'IA_Jump', wire mapping, and clean up by deleting created input assets afterwards.",
+      "validation_criteria": "Verify IMC_Default and IA_Jump creation and verify clean removal during cleanup."
+    },
+    {
+      "task_id": "task_12",
+      "prompt": "Spawn a Directional Light actor into the current level at location (0,0,1000), verify spawn, and destroy/delete the actor afterwards.",
+      "validation_criteria": "Verify actor spawn in level and verify actor destruction/cleanup."
+    },
+    {
+      "task_id": "task_13",
+      "prompt": "Create a new Material named 'M_Red', add a Vector Parameter for BaseColor, verify compilation, and clean up by deleting 'M_Red' afterwards.",
+      "validation_criteria": "Verify Material creation with BaseColor parameter and verify clean deletion during cleanup."
+    },
+    {
+      "task_id": "task_14",
+      "prompt": "Create a Media Player asset named 'MP_Video' in '/Game/Media', verify creation, and clean up by deleting 'MP_Video' afterwards.",
+      "validation_criteria": "Verify Media Player creation at '/Game/Media/MP_Video' and verify clean asset deletion during cleanup."
+    },
+    {
+      "task_id": "task_15",
+      "prompt": "Get the vertex and triangle count of the Static Mesh '/Engine/BasicShapes/Cube'.",
+      "validation_criteria": ""
+    },
+    {
+      "task_id": "task_16",
+      "prompt": "Create a new Niagara System named 'NS_Sparks' using default fountain template, verify compilation, and clean up by deleting 'NS_Sparks' afterwards.",
+      "validation_criteria": "Verify Niagara System creation and compilation, and verify clean deletion during cleanup."
+    },
+    {
+      "task_id": "task_17",
+      "prompt": "Create a Procedural Content Generation (PCG) Graph named 'PCG_Forest', verify creation, and clean up by deleting 'PCG_Forest' afterwards.",
+      "validation_criteria": "Verify PCG Graph asset creation and verify clean asset deletion during cleanup."
+    },
+    {
+      "task_id": "task_18",
+      "prompt": "Start a Play In Editor (PIE) session and wait for 5 seconds.",
+      "validation_criteria": ""
+    },
+    {
+      "task_id": "task_19",
+      "prompt": "Run an Unreal Insights performance trace for 10 seconds.",
+      "validation_criteria": ""
+    },
+    {
+      "task_id": "task_20",
+      "prompt": "Execute a Python script to print 'Hello from Benchmarker' to the Unreal log.",
+      "validation_criteria": ""
+    },
+    {
+      "task_id": "task_21",
+      "prompt": "Create a Level Sequence asset named 'LS_Cinematic' in '/Game/Cinematics', verify validity, and clean up by deleting 'LS_Cinematic' afterwards.",
+      "validation_criteria": "Verify Level Sequence creation at '/Game/Cinematics/LS_Cinematic' and verify clean asset deletion during cleanup."
+    },
+    {
+      "task_id": "task_22",
+      "prompt": "Retrieve the Default Game Mode class setting from the project configuration.",
+      "validation_criteria": ""
+    },
+    {
+      "task_id": "task_23",
+      "prompt": "Query the source control status of the file '/Game/Maps/MainMap.umap'.",
+      "validation_criteria": ""
+    },
+    {
+      "task_id": "task_24",
+      "prompt": "Run the Data Validation plugin on the directory '/Game/Blueprints'.",
+      "validation_criteria": ""
+    },
+    {
+      "task_id": "task_25",
+      "prompt": "Capture a screenshot of the active editor viewport.",
+      "validation_criteria": ""
+    },
+    {
+      "task_id": "task_26",
+      "prompt": "Create a UMG Widget Blueprint named 'WBP_HUD', add a Canvas Panel, verify tree hierarchy, and clean up by deleting 'WBP_HUD' afterwards.",
+      "validation_criteria": "Verify Widget Blueprint creation with Canvas Panel and verify clean asset deletion during cleanup."
+    },
+    {
+      "task_id": "task_27",
+      "prompt": "Create a Primary Data Asset named 'PDA_Weapon' using class 'UWeaponData', verify properties, and clean up by deleting 'PDA_Weapon' afterwards.",
+      "validation_criteria": "Verify Data Asset creation and verify clean asset deletion during cleanup."
+    },
+    {
+      "task_id": "task_28",
+      "prompt": "Query the Epic Games AI Assistant to explain how to use UInstancedStaticMeshComponent.",
+      "validation_criteria": ""
+    },
+    {
+      "task_id": "task_29",
+      "prompt": "Query the C++ AST for the declaration of AActor.",
+      "validation_criteria": ""
+    },
+    {
+      "task_id": "task_30",
+      "prompt": "Generate compile_commands.json using Unreal Build Tool.",
+      "validation_criteria": ""
+    },
+    {
+      "task_id": "task_31",
+      "prompt": "Search the vector database for 'How to use Enhanced Input'.",
+      "validation_criteria": ""
+    },
+    {
+      "task_id": "task_32",
+      "prompt": "Search for similar blueprints handling player health.",
+      "validation_criteria": ""
+    },
+    {
+      "task_id": "task_33",
+      "prompt": "Format a given block of T3D node text to organize nodes into a clean grid layout.",
+      "validation_criteria": ""
+    },
+    {
+      "task_id": "task_34",
+      "prompt": "Use the add-component skill to add a BoxComponent to 'BP_TestActor', verify component addition, and revert changes afterwards.",
+      "validation_criteria": "Verify component addition to blueprint and verify component state restoration during cleanup."
+    },
+    {
+      "task_id": "task_35",
+      "prompt": "Use the blueprint-authoring skill to implement Print String on Event BeginPlay of 'BP_TestActor', verify nodes, and revert graph changes afterwards.",
+      "validation_criteria": "Verify node injection in EventGraph and verify graph restoration during cleanup."
+    },
+    {
+      "task_id": "task_36",
+      "prompt": "Use the create-actor skill to generate interactable door 'BP_Door', add Interact function, wire pins, and clean up by deleting 'BP_Door' afterwards.",
+      "validation_criteria": "Verify BP_Door creation, function wiring, and verify clean asset deletion during cleanup."
+    },
+    {
+      "task_id": "task_37",
+      "prompt": "Use the create-interface skill to make Blueprint Interface 'BPI_Interactable' with function 'Interact', and clean up by deleting 'BPI_Interactable' afterwards.",
+      "validation_criteria": "Verify Blueprint Interface creation and verify clean asset deletion during cleanup."
+    },
+    {
+      "task_id": "task_38",
+      "prompt": "Use the generate-assets skill to create folder structure '/Game/Core' with GameMode and PlayerController, and clean up created assets afterwards.",
+      "validation_criteria": "Verify folder and asset creation and verify clean asset deletion during cleanup."
+    },
+    {
+      "task_id": "task_39",
+      "prompt": "Use the niagara-authoring skill to set up a burst spawn effect in 'NS_Sparks', verify compilation, and clean up by deleting 'NS_Sparks' afterwards.",
+      "validation_criteria": "Verify Niagara burst spawn configuration and verify clean system deletion during cleanup."
+    },
+    {
+      "task_id": "task_40",
+      "prompt": "Use the pie-verifier skill to run PIE and check for errors.",
+      "validation_criteria": ""
+    },
+    {
+      "task_id": "task_41",
+      "prompt": "Use the setup-input skill to map WASD movement keys to an Input Mapping Context, verify mapping, and revert input configuration afterwards.",
+      "validation_criteria": "Verify Input Mapping Context key mapping and verify mapping restoration during cleanup."
+    },
+    {
+      "task_id": "task_42",
+      "prompt": "Use the setup-replication skill to replicate 'Speed' variable in 'BP_TestActor', verify replication settings, and revert variable replication afterwards.",
+      "validation_criteria": "Verify variable replication configuration and verify state restoration during cleanup."
+    },
+    {
+      "task_id": "task_43",
+      "prompt": "Configure a Mass Entity Spawner to spawn 100 AI crowd agents, verify spawner settings, and clean up spawner configuration afterwards.",
+      "validation_criteria": "Verify Mass Entity Spawner setup and verify clean configuration reset during cleanup."
+    },
+    {
+      "task_id": "task_44",
+      "prompt": "Configure Mass Crowd AI subsystem active agent limits, verify settings, and revert subsystem limits afterwards.",
+      "validation_criteria": "Verify Mass Crowd AI subsystem configuration and verify limit restoration during cleanup."
+    },
+    {
+      "task_id": "task_45",
+      "prompt": "Attach Movement and Avoidance traits to Mass entity definition, verify trait addition, and revert entity traits afterwards.",
+      "validation_criteria": "Verify trait attachment to entity definition and verify trait removal during cleanup."
+    },
+    {
+      "task_id": "task_46",
+      "prompt": "Create StateTree asset 'ST_EnemyLogic' at '/Game/AI', verify state tree creation, and clean up by deleting 'ST_EnemyLogic' afterwards.",
+      "validation_criteria": "Verify StateTree creation at '/Game/AI/ST_EnemyLogic' and verify clean asset deletion during cleanup."
+    },
+    {
+      "task_id": "task_47",
+      "prompt": "Execute an EQS query to find cover positions, verify query execution, and clean up generated query assets afterwards.",
+      "validation_criteria": "Verify EQS query execution and verify query asset cleanup."
+    },
+    {
+      "task_id": "task_48",
+      "prompt": "Query Smart Object interaction handles within a 1000 unit radius in the current level.",
+      "validation_criteria": ""
+    },
+    {
+      "task_id": "task_49",
+      "prompt": "Set up Pose Search Schema and Motion Matching database asset for locomotion, verify schema, and clean up database asset afterwards.",
+      "validation_criteria": "Verify Motion Matching database setup and verify clean asset deletion during cleanup."
+    },
+    {
+      "task_id": "task_50",
+      "prompt": "Configure Movie Render Queue for level sequence 'LS_Cinematic', verify queue settings, and clean up render job parameters afterwards.",
+      "validation_criteria": "Verify Movie Render Queue job configuration and verify job parameter cleanup."
+    },
+    {
+      "task_id": "task_51",
+      "prompt": "Create DMX Fixture Library 'DMX_Stage' with 4 patched channels, verify DMX setup, and clean up by deleting 'DMX_Stage' afterwards.",
+      "validation_criteria": "Verify DMX Fixture Library creation and verify clean asset deletion during cleanup."
+    }
+  ]
+}

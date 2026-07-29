@@ -14,7 +14,10 @@ import argparse
 from pathlib import Path
 
 SCRIPT_DIR = Path(__file__).resolve().parent
-DEFAULT_BASELINE_PATH = SCRIPT_DIR / "benchmark_baseline.json"
+BENCHMARKS_DIR = SCRIPT_DIR / "benchmarks"
+DEFAULT_BASIC_BASELINE = BENCHMARKS_DIR / "results" / "basic_baseline.json"
+DEFAULT_ADVANCED_BASELINE = BENCHMARKS_DIR / "results" / "advanced_baseline.json"
+FALLBACK_BASELINE = SCRIPT_DIR / "benchmark_baseline.json"
 
 def load_json(filepath: Path) -> dict:
     with open(filepath, "r", encoding="utf-8") as f:
@@ -95,12 +98,20 @@ def compare_benchmarks(baseline_data: dict, current_data: dict) -> str:
 def main():
     parser = argparse.ArgumentParser(description="Compare benchmark JSON run results against baseline.")
     parser.add_argument("--current", type=str, required=True, help="Path to current benchmark JSON report.")
-    parser.add_argument("--baseline", type=str, default=str(DEFAULT_BASELINE_PATH), help="Path to baseline JSON report.")
+    parser.add_argument("--suite", choices=["basic", "advanced"], default="basic", help="Benchmark suite (basic or advanced).")
+    parser.add_argument("--baseline", type=str, help="Path to baseline JSON report.")
     parser.add_argument("--output", type=str, help="Optional output Markdown file path.")
     
     args = parser.parse_args()
     
-    baseline_path = Path(args.baseline)
+    if args.baseline:
+        baseline_path = Path(args.baseline)
+    else:
+        if args.suite == "advanced":
+            baseline_path = DEFAULT_ADVANCED_BASELINE
+        else:
+            baseline_path = DEFAULT_BASIC_BASELINE if DEFAULT_BASIC_BASELINE.exists() else FALLBACK_BASELINE
+            
     current_path = Path(args.current)
     
     if not baseline_path.exists():

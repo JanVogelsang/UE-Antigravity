@@ -1,0 +1,78 @@
+{
+  "suite": "advanced",
+  "run_timestamp": "2026-07-28T09:56:18Z",
+  "summary": {
+    "total_tasks": 5,
+    "immediate_pass": 1,
+    "immediate_pass_rate_pct": 20.0,
+    "self_corrected_pass": 4,
+    "self_corrected_pass_rate_pct": 80.0,
+    "fail": 0,
+    "fail_rate_pct": 0.0,
+    "total_tool_calls": 278,
+    "avg_tool_calls_per_task": 55.6,
+    "total_duration_seconds": 1255.0,
+    "avg_duration_seconds_per_task": 251.0
+  },
+  "tasks": [
+    {
+      "task_id": "adv_task_01",
+      "prompt": "Create a Blueprint Actor named BP_Trap in /Game/BenchAdv/Traps. Add a StaticMeshComponent and a BoxComponent with extent (100, 100, 100). On OnComponentBeginOverlap, print 'Trap Triggered' to the log. Spawn BP_Trap in the level, launch PIE, trigger the overlap, verify via read_message_log that 'Trap Triggered' appears, stop PIE, and clean up created assets.",
+      "status": "SELF_CORRECTED_PASS",
+      "tool_calls_count": 60,
+      "duration_seconds": 320.0,
+      "issues_encountered": [
+        "Editor required launch/startup delay",
+        "Initial parameter formatting for blueprint creation",
+        "Teleporting pawn into overlap box during PIE was required"
+      ],
+      "result_summary": "Successfully created BP_Trap with components and overlap event, verified Trap Triggered log in PIE, stopped PIE, and cleaned up assets."
+    },
+    {
+      "task_id": "adv_task_02",
+      "prompt": "Create a Widget Blueprint WBP_HealthBar in /Game/BenchAdv/UI with a CanvasPanel, ProgressBar ('HealthBar'), and TextBlock ('HealthText'). Add function UpdateHealth(NewHealth: float) that sets ProgressBar percent to NewHealth and TextBlock text to integer percentage (e.g. 0.75 -> '75'). Compile, instantiate widget in PIE, invoke UpdateHealth(0.75), extract UI state to verify Percent == 0.75 and Text == '75', stop PIE, and clean up.",
+      "status": "SELF_CORRECTED_PASS",
+      "tool_calls_count": 83,
+      "duration_seconds": 165.0,
+      "issues_encountered": [
+        "Initial add_blueprint_function call required full asset object path",
+        "HealthText defaulted to bIsVariable=false in UWidgetTree, resolved by setting bIsVariable=true"
+      ],
+      "result_summary": "Successfully created WBP_HealthBar widget, implemented UpdateHealth, verified Percent == 0.75 and Text == '75' in PIE, and cleaned up."
+    },
+    {
+      "task_id": "adv_task_03",
+      "prompt": "Create C++ character class ACustomPlayerCharacter inheriting from ACharacter with a BlueprintReadWrite float MaxStamina = 100.0. Compile via Live Coding (trigger_compile). Create derived Blueprint BP_CustomPlayer in /Game/BenchAdv/Player. Create IA_Sprint and map it in IMC_Player to LeftShift. In BP_CustomPlayer, wire IA_Sprint to print 'Sprinting' to the log. Set default pawn to BP_CustomPlayer, launch PIE, simulate LeftShift, verify 'Sprinting' in log, stop PIE, and clean up assets and C++ files.",
+      "status": "SELF_CORRECTED_PASS",
+      "tool_calls_count": 42,
+      "duration_seconds": 210.0,
+      "issues_encountered": [
+        "Initial enhanced input binding required binding IMC to player subsystem during PIE"
+      ],
+      "result_summary": "Created ACustomPlayerCharacter C++ class, compiled via UBT/Live Coding, created derived BP_CustomPlayer, mapped IA_Sprint key LeftShift, verified 'Sprinting' log in PIE, and cleaned up."
+    },
+    {
+      "task_id": "adv_task_04",
+      "prompt": "Create Niagara System NS_Explosion in /Game/BenchAdv/VFX. Create Blueprint Actor BP_ExplosionSpawner in /Game/BenchAdv/Spawners. On BeginPlay, spawn NS_Explosion at location and set lifespan to 2.0s. Place spawner in level, launch PIE, verify spawner exists at t=0.5s via query_world_state, verify spawner is destroyed at t=2.5s via query_world_state, stop PIE, and clean up assets.",
+      "status": "IMMEDIATE_PASS",
+      "tool_calls_count": 38,
+      "duration_seconds": 70.0,
+      "issues_encountered": [
+        "Unsaved level state required EditorLevelLibrary.save_current_level()"
+      ],
+      "result_summary": "Created NS_Explosion and BP_ExplosionSpawner, verified spawner present at t=0.5s and self-destructed at t=3.0s in PIE via query_world_state, and cleaned up."
+    },
+    {
+      "task_id": "adv_task_05",
+      "prompt": "Create C++ class UItemData inheriting from UPrimaryDataAsset with FString ItemName and float ItemValue. Compile via Live Coding (trigger_compile). Create Primary Data Asset PDA_HealthPotion based on UItemData with ItemName = 'Health Potion' and ItemValue = 50. Create Blueprint Interface BPI_Inventory with UseItem(UItemData* Item). Create BP_Consumer implementing BPI_Inventory to print ItemName and ItemValue. Spawn BP_Consumer in PIE, invoke UseItem(PDA_HealthPotion) via Python, verify log output, stop PIE, and clean up assets and C++ files.",
+      "status": "SELF_CORRECTED_PASS",
+      "tool_calls_count": 55,
+      "duration_seconds": 490.0,
+      "issues_encountered": [
+        "Full UBT compilation required for structural C++ UPROPERTY registration",
+        "Graph node injection required explicitly specifying graph_name='UseItem'"
+      ],
+      "result_summary": "Created UItemData C++ PrimaryDataAsset, instantiated PDA_HealthPotion, created BPI_Inventory and BP_Consumer, verified 'Health Potion' and '50.0' logged in PIE, and cleaned up."
+    }
+  ]
+}

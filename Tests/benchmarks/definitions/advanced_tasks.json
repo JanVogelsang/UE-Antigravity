@@ -1,0 +1,120 @@
+{
+  "suite": "advanced",
+  "version": "1.0.0",
+  "tasks": [
+    {
+      "task_id": "adv_task_01",
+      "title": "Interactive Gameplay Trap",
+      "domain": [
+        "Blueprints",
+        "Components",
+        "Events",
+        "PIE"
+      ],
+      "prompt": "Create a Blueprint Actor named BP_Trap in /Game/BenchAdv/Traps. Add a StaticMeshComponent and a BoxComponent with extent (100, 100, 100). On OnComponentBeginOverlap, print 'Trap Triggered' to the log. Spawn BP_Trap in the level, launch PIE, trigger the overlap, verify via read_message_log that 'Trap Triggered' appears, stop PIE, and clean up created assets.",
+      "cleanup_prompt": "Delete /Game/BenchAdv/Traps/BP_Trap and remove level instances.",
+      "victory_conditions": [
+        {
+          "type": "log_contains",
+          "value": "Trap Triggered"
+        }
+      ],
+      "time_budget_seconds": 180
+    },
+    {
+      "task_id": "adv_task_02",
+      "title": "Dynamic Health Bar UMG",
+      "domain": [
+        "UMG Widgets",
+        "Custom Function",
+        "UI Runtime"
+      ],
+      "prompt": "Create a Widget Blueprint WBP_HealthBar in /Game/BenchAdv/UI with a CanvasPanel, ProgressBar ('HealthBar'), and TextBlock ('HealthText'). Add function UpdateHealth(NewHealth: float) that sets ProgressBar percent to NewHealth and TextBlock text to integer percentage (e.g. 0.75 -> '75'). Compile, instantiate widget in PIE, invoke UpdateHealth(0.75), extract UI state to verify Percent == 0.75 and Text == '75', stop PIE, and clean up.",
+      "cleanup_prompt": "Delete /Game/BenchAdv/UI/WBP_HealthBar.",
+      "victory_conditions": [
+        {
+          "property": "Percent",
+          "type": "ui_state",
+          "value": 0.75,
+          "widget": "HealthBar"
+        },
+        {
+          "property": "Text",
+          "type": "ui_state",
+          "value": "75",
+          "widget": "HealthText"
+        }
+      ],
+      "time_budget_seconds": 180
+    },
+    {
+      "task_id": "adv_task_03",
+      "title": "C++ Base Character & Enhanced Input",
+      "domain": [
+        "C++ Creation",
+        "Live Coding",
+        "Derived Blueprint",
+        "Enhanced Input"
+      ],
+      "prompt": "Create C++ character class ACustomPlayerCharacter inheriting from ACharacter with a BlueprintReadWrite float MaxStamina = 100.0. Compile via Live Coding (trigger_compile). Create derived Blueprint BP_CustomPlayer in /Game/BenchAdv/Player. Create IA_Sprint and map it in IMC_Player to LeftShift. In BP_CustomPlayer, wire IA_Sprint to print 'Sprinting' to the log. Set default pawn to BP_CustomPlayer, launch PIE, simulate LeftShift, verify 'Sprinting' in log, stop PIE, and clean up assets and C++ files.",
+      "cleanup_prompt": "Delete BP_CustomPlayer, IA_Sprint, IMC_Player, and remove generated C++ source/header files.",
+      "victory_conditions": [
+        {
+          "type": "log_contains",
+          "value": "Sprinting"
+        }
+      ],
+      "time_budget_seconds": 180
+    },
+    {
+      "task_id": "adv_task_04",
+      "title": "Niagara Spawner Lifecycle",
+      "domain": [
+        "Niagara",
+        "Spawning",
+        "Deferred Lifespan",
+        "PIE World Query"
+      ],
+      "prompt": "Create Niagara System NS_Explosion in /Game/BenchAdv/VFX. Create Blueprint Actor BP_ExplosionSpawner in /Game/BenchAdv/Spawners. On BeginPlay, spawn NS_Explosion at location and set lifespan to 2.0s. Place spawner in level, launch PIE, verify spawner exists at t=0.5s via query_world_state, verify spawner is destroyed at t=2.5s via query_world_state, stop PIE, and clean up assets.",
+      "cleanup_prompt": "Delete NS_Explosion, BP_ExplosionSpawner, and restore level.",
+      "victory_conditions": [
+        {
+          "class": "BP_ExplosionSpawner",
+          "expected": true,
+          "time_offset_s": 0.5,
+          "type": "world_state_contains"
+        },
+        {
+          "class": "BP_ExplosionSpawner",
+          "expected": false,
+          "time_offset_s": 2.5,
+          "type": "world_state_contains"
+        }
+      ],
+      "time_budget_seconds": 240
+    },
+    {
+      "task_id": "adv_task_05",
+      "title": "C++ Data Assets & Blueprint Interfaces",
+      "domain": [
+        "C++ DataAsset",
+        "Live Coding",
+        "PrimaryDataAsset",
+        "Blueprint Interface"
+      ],
+      "prompt": "Create C++ class UItemData inheriting from UPrimaryDataAsset with FString ItemName and float ItemValue. Compile via Live Coding (trigger_compile). Create Primary Data Asset PDA_HealthPotion based on UItemData with ItemName = 'Health Potion' and ItemValue = 50. Create Blueprint Interface BPI_Inventory with UseItem(UItemData* Item). Create BP_Consumer implementing BPI_Inventory to print ItemName and ItemValue. Spawn BP_Consumer in PIE, invoke UseItem(PDA_HealthPotion) via Python, verify log output, stop PIE, and clean up assets and C++ files.",
+      "cleanup_prompt": "Delete C++ files, PDA_HealthPotion, BPI_Inventory, and BP_Consumer.",
+      "victory_conditions": [
+        {
+          "type": "log_contains",
+          "value": "Health Potion"
+        },
+        {
+          "type": "log_contains",
+          "value": "50"
+        }
+      ],
+      "time_budget_seconds": 240
+    }
+  ]
+}
