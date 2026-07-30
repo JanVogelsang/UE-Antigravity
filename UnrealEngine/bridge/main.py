@@ -259,8 +259,9 @@ async def call_agentframework_tool(name, arguments, profile):
                 out_text = msg if bSuccess else (" | ".join(errors) if errors else msg)
                 # Warnings were previously dropped here, which left the agent blind to
                 # partial failures on a bSuccess:true call (unsaved packages, compiler
-                # warnings, engine log errors). Append them so they reach the model.
-                if warnings:
+                # warnings, engine log errors). Append them so they reach the model, unless
+                # the C++ layer already embedded a Diagnostics Log block in the text.
+                if warnings and "--- Diagnostics Log" not in out_text:
                     out_text = "\n".join(
                         filter(None, [out_text, "--- Warnings ---", *(f"  - {w}" for w in warnings)])
                     )

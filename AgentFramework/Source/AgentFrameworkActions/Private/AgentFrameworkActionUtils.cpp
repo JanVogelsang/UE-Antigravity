@@ -512,6 +512,12 @@ void UAgentFrameworkActionUtils::SplitAssetPath(const FString& InPath, FString& 
 		return;
 	}
 
+	// A trailing slash would otherwise yield an empty asset name and break suffix detection.
+	while (OutPackageName.Len() > 1 && OutPackageName.EndsWith(TEXT("/")))
+	{
+		OutPackageName = OutPackageName.LeftChop(1);
+	}
+
 	// Strip a trailing ".ObjectName" suffix, but only when the dot comes after the last
 	// slash — a dot earlier in the path is part of a folder name, not an object suffix.
 	int32 LastSlashIndex = INDEX_NONE;
@@ -521,12 +527,6 @@ void UAgentFrameworkActionUtils::SplitAssetPath(const FString& InPath, FString& 
 	if (LastDotIndex != INDEX_NONE && LastDotIndex > LastSlashIndex)
 	{
 		OutPackageName = OutPackageName.Left(LastDotIndex);
-	}
-
-	// A trailing slash would otherwise yield an empty asset name.
-	while (OutPackageName.Len() > 1 && OutPackageName.EndsWith(TEXT("/")))
-	{
-		OutPackageName = OutPackageName.LeftChop(1);
 	}
 
 	OutPackagePath = FPackageName::GetLongPackagePath(OutPackageName);

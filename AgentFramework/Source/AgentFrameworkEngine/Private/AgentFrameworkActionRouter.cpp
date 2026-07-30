@@ -346,7 +346,7 @@ private:
 			{
 				for (const FString& Existing : Reported)
 				{
-					if (!Existing.IsEmpty() && (Line.Contains(Existing) || Existing.Contains(Line)))
+					if (Existing.Len() >= 15 && (Line.Contains(Existing) || Existing.Contains(Line)))
 					{
 						return true;
 					}
