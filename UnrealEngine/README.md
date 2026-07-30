@@ -5,7 +5,7 @@ This is the AgentFramework agent plugin component of the **UE-AgentFramework** i
 ## Architecture
 
 This plugin encompasses two main components:
-1. **C++ MCP Bridge**: A lightweight C++ proxy (`bridge.exe`) that translates standard input/output (`stdin`/`stdout`) JSON-RPC messages from any MCP-compatible AI client to the Unreal Engine Editor's HTTP loopback server.
+1. **Python MCP Bridge (`bridge/main.py`)**: A lightweight proxy that translates standard input/output (`stdin`/`stdout`) JSON-RPC messages from any MCP-compatible AI client to the Unreal Engine Editor's HTTP loopback server. It is launched as `python -m bridge.main`, with `PYTHONPATH` pointing at the installed plugin directory.
 2. **External Python Server (`ExternalServer`)**: An AST Indexing and RAG server that runs as a standalone Python process. It uses `libclang` to parse C++ files, maintains an SQLite database cache, and performs semantic documentation search.
 
 ### LLM Profile System
@@ -67,8 +67,10 @@ Configure the MCP server in your project's `kilo.jsonc`:
   "mcpServers": {
     "unrealengine": {
       "type": "stdio",
-      "command": "C:\\path\\to\\bridge.exe",
+      "command": "C:\\path\\to\\project\\.agents\\plugins\\UnrealEngine\\ExternalServer\\.venv\\Scripts\\python.exe",
+      "args": ["-X", "utf8", "-u", "-m", "bridge.main"],
       "env": {
+        "PYTHONPATH": "C:\\path\\to\\project\\.agents\\plugins\\UnrealEngine",
         "BRIDGE_PROFILE": "deepseek-v4"
       },
       "enabled": true
@@ -130,7 +132,7 @@ The Codex CLI will automatically discover project-specific servers configured in
 
 ### Other MCP Clients (Claude Desktop, Cursor, etc.)
 
-Any client that supports the MCP stdio transport can use this bridge. Configure the server command pointing to `bridge.exe` and set the `BRIDGE_PROFILE` environment variable to match your model.
+Any client that supports the MCP stdio transport can use this bridge. Point the server command at the installed venv's `python.exe` with `-m bridge.main` (see the example above), set `PYTHONPATH` to the installed plugin directory, and set the `BRIDGE_PROFILE` environment variable to match your model.
 
 ## Installation
 
@@ -182,11 +184,11 @@ Once the plugin is installed and your Unreal Editor is running:
 
 ## Compilation
 
-The bridge uses a lightweight C++ executable (`bridge.exe`) to proxy requests. The agent is configured to automatically compile this binary using `src/build_bridge.bat` when it first boots and detects the binary is missing.
+The bridge requires no compilation — it is the Python module `bridge/main.py`, run from the virtual environment that `install.ps1` creates. There is no build step.
 
-Alternatively, you can compile it manually:
-1. Open a terminal in the plugin directory.
-2. Run `src/build_bridge.bat` (requires Visual Studio C++ build tools installed).
+> **Note:** the bridge was a compiled C++ executable (`bridge.exe`, built via `src/build_bridge.bat`) until commit `5591b0c` (2026-06-30) replaced it with the Python implementation. Both the source and the build script were removed then. If you find a stray `bridge.exe`, it is a leftover build artifact: delete it rather than pointing an assistant config at it, or that assistant will silently run a months-old bridge.
+
+Because `bridge/main.py` is imported once per MCP server process, changes to it only take effect after the MCP server is restarted.
 
 ---
 

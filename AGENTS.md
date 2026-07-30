@@ -6,7 +6,7 @@ When working in this repository, you are developing the integration infrastructu
 
 ## Architecture: Dual-MCP Server
 1. **Internal C++ MCP Server (`AgentFramework/`)**: Unreal Editor plugin running an in-process HTTP loopback server on port `18777`. Executes Game Thread operations (reading Blueprint graphs, adding variables, injecting nodes). **Design Decision:** this directory strictly handles Editor integration and MCP server capabilities. It must *not* manage static agent instructions or skills.
-2. **External Agent & MCP Server (`UnrealEngine/`)**: Handles all LLM logic, static instructions, and `SKILL.md` documents. Includes `bridge.exe` (translates MCP JSON-RPC to HTTP loopback calls targeting the editor) and a Python AST server for C++ symbol resolution, file watching, and semantic search.
+2. **External Agent & MCP Server (`UnrealEngine/`)**: Handles all LLM logic, static instructions, and `SKILL.md` documents. Includes the Python MCP bridge `bridge/main.py`, run as `python -m bridge.main` (translates MCP JSON-RPC to HTTP loopback calls targeting the editor), and a Python AST server for C++ symbol resolution, file watching, and semantic search. Edits to the bridge require an MCP server restart to take effect, since the module is imported once per process.
 
 ## Common Workflows
 

@@ -105,12 +105,9 @@ if (Test-Path $MainMcp) {
     Log-Message "Copied MCP configuration."
 }
 
-$MainBridge = Join-Path $MainPluginDir "bridge.exe"
-$WorktreeBridge = Join-Path $WorktreePluginDir "bridge.exe"
-if (Test-Path $MainBridge) {
-    Copy-Item -Path $MainBridge -Destination $WorktreeBridge -Force
-    Log-Message "Copied precompiled bridge.exe."
-}
+# The precompiled bridge.exe was retired in 5591b0c (2026-06-30) in favour of the Python
+# bridge, which is linked as a junction further below. Copying a stray leftover binary here
+# would seed new worktrees with a months-old bridge, so nothing is copied for it.
 
 # 8. Symlink Plugin Source Code (Junctions to the worktree's own branch source code or main repo copies)
 # A. bridge/
