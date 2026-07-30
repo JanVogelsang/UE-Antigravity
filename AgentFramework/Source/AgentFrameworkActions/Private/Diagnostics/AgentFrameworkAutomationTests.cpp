@@ -20,6 +20,8 @@
 #include "AssetRegistry/AssetRegistryModule.h"
 #include "ObjectTools.h"
 #include "FileHelpers.h"
+#include "Interfaces/IPluginManager.h"
+#include "Misc/Paths.h"
 
 IMPLEMENT_SIMPLE_AUTOMATION_TEST(FAgentFrameworkTokenEfficiencyTest, "AgentFramework.TokenEfficiency", EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
 
@@ -37,9 +39,12 @@ bool FAgentFrameworkTokenEfficiencyTest::RunTest(const FString& Parameters)
 		
 		bool bValid = BlueprintActions.ValidateParams(Params, Errors);
 		TestTrue(TEXT("ValidateParams should return true for valid relative path"), bValid);
-		TestEqual(TEXT("Relative asset path should expand to start with /Game/"), 
-			Params->GetStringField(TEXT("asset_path")), 
-			TEXT("/Game/TestFolder/TestActor"));
+		// ValidateParams expands to /Game/ AND normalizes to a full object path, so that
+		// LoadObject-style lookups downstream resolve. Package-level APIs must strip the
+		// suffix again via AssetPathToPackageName.
+		TestEqual(TEXT("Relative asset path should expand to a /Game/ object path"),
+			Params->GetStringField(TEXT("asset_path")),
+			TEXT("/Game/TestFolder/TestActor.TestActor"));
 	}
 
 	{
@@ -51,9 +56,9 @@ bool FAgentFrameworkTokenEfficiencyTest::RunTest(const FString& Parameters)
 
 		bool bValid = WidgetActions.ValidateParams(Params, Errors);
 		TestTrue(TEXT("Widget ValidateParams should return true"), bValid);
-		TestEqual(TEXT("Widget relative path should expand to /Game/"),
+		TestEqual(TEXT("Widget relative path should expand to a /Game/ object path"),
 			Params->GetStringField(TEXT("asset_path")),
-			TEXT("/Game/TestFolder/TestWidget"));
+			TEXT("/Game/TestFolder/TestWidget.TestWidget"));
 	}
 
 	// ========================================================================
@@ -751,6 +756,203 @@ bool FAgentFrameworkTelemetryTest::RunTest(const FString& Parameters)
 
 	// Clean up at the end
 	UAgentFrameworkActionUtils::ClearTelemetryData();
+	return true;
+}
+
+// ============================================================================
+// Asset path splitting
+// ============================================================================
+// Regression cover for the "short package name" class of bug: agents send package paths
+// and full object paths interchangeably, and FPackageName::GetShortName() does not strip
+// the ".ObjectName" suffix. Feeding its output to CreatePackage() produced malformed
+// packages like "/Game/Traps/BP_Trap.BP_Trap" as a package name.
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FAgentFrameworkAssetPathSplitTest, "AgentFramework.AssetPathSplit", EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
+
+bool FAgentFrameworkAssetPathSplitTest::RunTest(const FString& Parameters)
+{
+	auto CheckSplit = [this](const FString& Input, const FString& ExpectedPackageName, const FString& ExpectedPackagePath, const FString& ExpectedAssetName)
+	{
+		FString PackageName, PackagePath, AssetName;
+		UAgentFrameworkActionUtils::SplitAssetPath(Input, PackageName, PackagePath, AssetName);
+
+		TestEqual(*FString::Printf(TEXT("'%s' -> package name"), *Input), PackageName, ExpectedPackageName);
+		TestEqual(*FString::Printf(TEXT("'%s' -> package path"), *Input), PackagePath, ExpectedPackagePath);
+		TestEqual(*FString::Printf(TEXT("'%s' -> asset name"), *Input), AssetName, ExpectedAssetName);
+	};
+
+	// Plain package path — already clean.
+	CheckSplit(TEXT("/Game/BenchAdv/Traps/BP_Trap"), TEXT("/Game/BenchAdv/Traps/BP_Trap"), TEXT("/Game/BenchAdv/Traps"), TEXT("BP_Trap"));
+
+	// Full object path — the ".BP_Trap" suffix must be stripped, not carried into the name.
+	CheckSplit(TEXT("/Game/BenchAdv/Traps/BP_Trap.BP_Trap"), TEXT("/Game/BenchAdv/Traps/BP_Trap"), TEXT("/Game/BenchAdv/Traps"), TEXT("BP_Trap"));
+
+	// Dots earlier in the path belong to folder names and must survive.
+	CheckSplit(TEXT("/Game/My.Folder/BP_Trap"), TEXT("/Game/My.Folder/BP_Trap"), TEXT("/Game/My.Folder"), TEXT("BP_Trap"));
+	CheckSplit(TEXT("/Game/My.Folder/BP_Trap.BP_Trap"), TEXT("/Game/My.Folder/BP_Trap"), TEXT("/Game/My.Folder"), TEXT("BP_Trap"));
+
+	// A trailing slash must not yield an empty asset name.
+	CheckSplit(TEXT("/Game/UI/WBP_HealthBar/"), TEXT("/Game/UI/WBP_HealthBar"), TEXT("/Game/UI"), TEXT("WBP_HealthBar"));
+
+	// Empty input stays empty rather than producing a bogus "/" package.
+	{
+		FString PackageName, PackagePath, AssetName;
+		UAgentFrameworkActionUtils::SplitAssetPath(FString(), PackageName, PackagePath, AssetName);
+		TestTrue(TEXT("Empty input yields an empty package name"), PackageName.IsEmpty());
+		TestTrue(TEXT("Empty input yields an empty asset name"), AssetName.IsEmpty());
+	}
+
+	// NormalizeAssetObjectPath is the inverse direction and must round-trip with the split.
+	{
+		const FString ObjectPath = UAgentFrameworkActionUtils::NormalizeAssetObjectPath(TEXT("/Game/UI/WBP_HealthBar"));
+		TestEqual(TEXT("Package path normalizes to an object path"), ObjectPath, TEXT("/Game/UI/WBP_HealthBar.WBP_HealthBar"));
+
+		FString PackageName, PackagePath, AssetName;
+		UAgentFrameworkActionUtils::SplitAssetPath(ObjectPath, PackageName, PackagePath, AssetName);
+		TestEqual(TEXT("Splitting the normalized object path recovers the package name"), PackageName, TEXT("/Game/UI/WBP_HealthBar"));
+	}
+
+	return true;
+}
+
+// ============================================================================
+// modify_cpp_file path containment
+// ============================================================================
+// The old guard accepted anything under FPaths::ProjectDir(), so an agent could write into the
+// AgentFramework plugin's own source — which is how a stray UCLASS ended up compiled into
+// AgentFrameworkEngine. Writes must stay in the host project's source trees.
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FAgentFrameworkCppPathContainmentTest, "AgentFramework.CppPathContainment", EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
+
+bool FAgentFrameworkCppPathContainmentTest::RunTest(const FString& Parameters)
+{
+	FAgentFrameworkCppActions CppActions;
+
+	auto TryModify = [&CppActions](const FString& FilePath)
+	{
+		TSharedRef<FJsonObject> Params = MakeShared<FJsonObject>();
+		Params->SetStringField(TEXT("_tool_name"), TEXT("modify_cpp_file"));
+		Params->SetStringField(TEXT("file_path"), FilePath);
+		Params->SetStringField(TEXT("content"), TEXT("// AgentFramework containment test\n"));
+		return CppActions.ExecuteAction(Params);
+	};
+
+	auto ExpectRejected = [this, &TryModify](const FString& FilePath, const FString& Why)
+	{
+		FAgentFrameworkActionResult Res = TryModify(FilePath);
+		TestFalse(*FString::Printf(TEXT("Should reject %s: %s"), *Why, *FilePath), Res.bSuccess);
+		TestTrue(*FString::Printf(TEXT("Rejection of %s should explain why"), *Why), Res.Errors.Num() > 0);
+		TestFalse(*FString::Printf(TEXT("Rejected write must not create %s"), *FilePath), FPaths::FileExists(FilePath));
+	};
+
+	// The plugin must never be able to rewrite its own source.
+	if (TSharedPtr<IPlugin> SelfPlugin = IPluginManager::Get().FindPlugin(TEXT("AgentFramework")))
+	{
+		const FString SelfSource = FPaths::Combine(SelfPlugin->GetBaseDir(),
+			TEXT("Source"), TEXT("AgentFrameworkEngine"), TEXT("Public"), TEXT("AgentFrameworkContainmentProbe.h"));
+		ExpectRejected(SelfSource, TEXT("a write into the plugin's own source"));
+	}
+
+	// Inside the project but outside any source tree.
+	ExpectRejected(FPaths::Combine(FPaths::ProjectConfigDir(), TEXT("ContainmentProbe.h")), TEXT("a write into Config/"));
+	ExpectRejected(FPaths::Combine(FPaths::ProjectSavedDir(), TEXT("ContainmentProbe.cpp")), TEXT("a write into Saved/"));
+
+	// Right location, wrong kind of file — this tool writes source, not arbitrary content.
+	ExpectRejected(FPaths::Combine(FPaths::GameSourceDir(), TEXT("ContainmentProbe.ini")), TEXT("a non-source extension"));
+
+	// Traversal that would resolve back out of the project.
+	ExpectRejected(FPaths::Combine(FPaths::GameSourceDir(), TEXT("..")) / TEXT("ContainmentProbe.h"), TEXT("a '..' traversal"));
+
+	return true;
+}
+
+// ============================================================================
+// create_blueprint_actor idempotency
+// ============================================================================
+// Re-running create_blueprint_actor on an existing path used to reach
+// FKismetEditorUtilities::CreateBlueprint on a package that already held a Blueprint,
+// which asserts in Kismet2.cpp and takes the editor down. It must reuse instead.
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FAgentFrameworkCreateBlueprintIdempotencyTest, "AgentFramework.CreateBlueprintIdempotency", EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
+
+bool FAgentFrameworkCreateBlueprintIdempotencyTest::RunTest(const FString& Parameters)
+{
+	const FString ActorPath = TEXT("/Game/AgentFramework_IdempotencyTestActor");
+
+	auto DeleteIfPresent = [&ActorPath]()
+	{
+		FAssetRegistryModule& AssetRegistryModule = FModuleManager::LoadModuleChecked<FAssetRegistryModule>("AssetRegistry");
+		FString PackageName, PackagePath, AssetName;
+		UAgentFrameworkActionUtils::SplitAssetPath(ActorPath, PackageName, PackagePath, AssetName);
+
+		FAssetData Existing = AssetRegistryModule.Get().GetAssetByObjectPath(FSoftObjectPath(PackageName + TEXT(".") + AssetName));
+		if (Existing.IsValid())
+		{
+			if (UObject* Obj = Existing.GetAsset())
+			{
+				TArray<UObject*> AssetsToDelete;
+				AssetsToDelete.Add(Obj);
+				ObjectTools::DeleteObjects(AssetsToDelete, false);
+			}
+		}
+	};
+
+	DeleteIfPresent();
+
+	FAgentFrameworkBlueprintActions BlueprintActions;
+
+	auto CreateActor = [&BlueprintActions](const FString& Path, const FString& ParentClass)
+	{
+		TSharedRef<FJsonObject> Params = MakeShared<FJsonObject>();
+		Params->SetStringField(TEXT("_tool_name"), TEXT("create_blueprint_actor"));
+		Params->SetStringField(TEXT("asset_path"), Path);
+		Params->SetStringField(TEXT("parent_class"), ParentClass);
+		return BlueprintActions.ExecuteAction(Params);
+	};
+
+	// First call creates it.
+	{
+		FAgentFrameworkActionResult Res = CreateActor(ActorPath, TEXT("Actor"));
+		TestTrue(TEXT("First create_blueprint_actor call should succeed"), Res.bSuccess);
+	}
+
+	// Second call with the same parent must reuse, not crash and not fail.
+	{
+		FAgentFrameworkActionResult Res = CreateActor(ActorPath, TEXT("Actor"));
+		TestTrue(TEXT("Re-creating the same Blueprint should succeed by reusing it"), Res.bSuccess);
+		TestTrue(TEXT("Reuse should be reported in the result message"), Res.ResultMessage.Contains(TEXT("Reused existing")));
+
+		// The Warnings array is the structured channel the MCP bridge relays to the agent.
+		// Assert it explicitly: a silently-empty Warnings array is how the original
+		// "agent error blindness" failure mode manifests.
+		TestTrue(TEXT("Reuse should populate the Warnings array"), Res.Warnings.Num() > 0);
+		bool bFoundReuseWarning = false;
+		for (const FString& Warning : Res.Warnings)
+		{
+			if (Warning.Contains(TEXT("already existed")))
+			{
+				bFoundReuseWarning = true;
+				break;
+			}
+		}
+		TestTrue(TEXT("A Warnings entry should explain that the asset already existed"), bFoundReuseWarning);
+	}
+
+	// Passing the full object path must resolve to the same asset, not a second one.
+	{
+		FAgentFrameworkActionResult Res = CreateActor(ActorPath + TEXT(".AgentFramework_IdempotencyTestActor"), TEXT("Actor"));
+		TestTrue(TEXT("Object-path form should resolve to the existing Blueprint"), Res.bSuccess);
+		TestTrue(TEXT("Object-path form should also report reuse"), Res.ResultMessage.Contains(TEXT("Reused existing")));
+	}
+
+	// A conflicting parent class must be refused with guidance rather than silently reparenting.
+	{
+		FAgentFrameworkActionResult Res = CreateActor(ActorPath, TEXT("Pawn"));
+		TestFalse(TEXT("Mismatched parent_class should fail"), Res.bSuccess);
+		TestTrue(TEXT("Mismatched parent_class should report an error"), Res.Errors.Num() > 0);
+	}
+
+	DeleteIfPresent();
 	return true;
 }
 

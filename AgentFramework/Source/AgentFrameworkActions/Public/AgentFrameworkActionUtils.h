@@ -231,4 +231,19 @@ public:
 	 */
 	UFUNCTION(BlueprintCallable, Category = "AgentFramework|Utils")
 	static FString NormalizeAssetObjectPath(const FString& InPath);
+
+	/**
+	 * Splits either a package path ("/Game/UI/WBP_HealthBar") or a full object path
+	 * ("/Game/UI/WBP_HealthBar.WBP_HealthBar") into its clean components.
+	 *
+	 * Agents send both formats interchangeably. FPackageName::GetShortName() does NOT strip
+	 * an object suffix, so feeding its output into CreatePackage() produces a malformed
+	 * package named "WBP_HealthBar.WBP_HealthBar" and a "short package name" warning.
+	 * Always split through here before creating an asset.
+	 *
+	 * @param OutPackageName Full package name with no object suffix ("/Game/UI/WBP_HealthBar").
+	 * @param OutPackagePath Containing directory ("/Game/UI").
+	 * @param OutAssetName   Asset name only ("WBP_HealthBar").
+	 */
+	static void SplitAssetPath(const FString& InPath, FString& OutPackageName, FString& OutPackagePath, FString& OutAssetName);
 };

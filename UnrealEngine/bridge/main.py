@@ -225,7 +225,8 @@ async def call_agentframework_tool(name, arguments, profile):
             bRequiresHumanVerification = ue_result.get("bRequiresHumanVerification", False)
             msg = ue_result.get("ResultMessage", "")
             errors = ue_result.get("Errors", [])
-            
+            warnings = ue_result.get("Warnings", [])
+
             if bRequiresHumanVerification:
                 err_details = " | ".join(errors) if errors else msg
                 verification_text = f"[REQUIRES_HUMAN_VERIFICATION] Human verification (CAPTCHA) required: {err_details}. Please notify the user to complete verification in Unreal Editor."
@@ -247,13 +248,27 @@ async def call_agentframework_tool(name, arguments, profile):
                     "data": base64_data,
                     "mimeType": "image/png"
                 })
+                # Image payloads cannot carry the diagnostics inline, so warnings ride
+                # alongside as a second block rather than being dropped.
+                if warnings:
+                    content.append({
+                        "type": "text",
+                        "text": "\n".join(["--- Warnings ---", *(f"  - {w}" for w in warnings)])
+                    })
             else:
                 out_text = msg if bSuccess else (" | ".join(errors) if errors else msg)
+                # Warnings were previously dropped here, which left the agent blind to
+                # partial failures on a bSuccess:true call (unsaved packages, compiler
+                # warnings, engine log errors). Append them so they reach the model.
+                if warnings:
+                    out_text = "\n".join(
+                        filter(None, [out_text, "--- Warnings ---", *(f"  - {w}" for w in warnings)])
+                    )
                 content.append({
                     "type": "text",
                     "text": out_text
                 })
-                
+
             return {
                 "content": content,
                 "isError": not bSuccess

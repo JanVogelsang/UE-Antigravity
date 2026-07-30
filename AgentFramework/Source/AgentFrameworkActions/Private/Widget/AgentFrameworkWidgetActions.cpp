@@ -1014,8 +1014,18 @@ FAgentFrameworkActionResult FAgentFrameworkWidgetActions::ExecuteCreateWidgetBlu
 	FString ParentClassName = TEXT("UserWidget");
 	UAgentFrameworkActionUtils::TryGetStringParam(Params, TEXT("parent_class"), ParentClassName, Result.Errors, false);
 
-	FString PackagePath = FPackageName::GetLongPackagePath(AssetPath);
-	FString AssetName   = FPackageName::GetShortName(AssetPath);
+	// Split via the shared helper: an agent-supplied object path ("/Game/UI/WBP.WBP") would
+	// otherwise keep its ".WBP" suffix in the asset name and produce a malformed package.
+	FString PackageName, PackagePath, AssetName;
+	UAgentFrameworkActionUtils::SplitAssetPath(AssetPath, PackageName, PackagePath, AssetName);
+
+	if (AssetName.IsEmpty() || PackagePath.IsEmpty())
+	{
+		Result.Errors.Add(FString::Printf(
+			TEXT("asset_path '%s' does not name an asset. Provide a full path including the asset name, e.g. /Game/UI/WBP_MainMenu."),
+			*AssetPath));
+		return Result;
+	}
 
 	// Resolve parent class
 	UClass* ParentClass = UUserWidget::StaticClass();
@@ -1034,22 +1044,62 @@ FAgentFrameworkActionResult FAgentFrameworkWidgetActions::ExecuteCreateWidgetBlu
 		}
 	}
 
-	IAssetTools& AssetTools = FModuleManager::LoadModuleChecked<FAssetToolsModule>("AssetTools").Get();
+	// Reuse an existing Widget Blueprint rather than creating over it. CreateAsset reaches
+	// FKismetEditorUtilities::CreateBlueprint, which asserts in Kismet2.cpp when the target
+	// package already holds a Blueprint and brings the editor down with it.
+	const FString ObjectPath = FString::Printf(TEXT("%s.%s"), *PackageName, *AssetName);
+	UWidgetBlueprint* NewWidget = nullptr;
+	bool bReusedExisting = false;
 
-	UWidgetBlueprintFactory* Factory = NewObject<UWidgetBlueprintFactory>();
-	Factory->ParentClass = ParentClass;
-
-	UObject* NewAsset = AssetTools.CreateAsset(AssetName, PackagePath, UWidgetBlueprint::StaticClass(), Factory);
-	UWidgetBlueprint* NewWidget = Cast<UWidgetBlueprint>(NewAsset);
-
-	if (!IsValid(NewWidget))
+	UObject* InMemoryAsset = FindObject<UObject>(nullptr, *ObjectPath);
+	if (InMemoryAsset != nullptr || FPackageName::DoesPackageExist(PackageName))
 	{
-		Result.Errors.Add(FString::Printf(TEXT("Failed to create Widget Blueprint at '%s'. Verify the path is valid, starts with /Game/, and the directory exists. Example: /Game/UI/WBP_MainMenu"), *AssetPath));
-		return Result;
+		NewWidget = Cast<UWidgetBlueprint>(InMemoryAsset);
+		if (!IsValid(NewWidget))
+		{
+			NewWidget = LoadObject<UWidgetBlueprint>(nullptr, *ObjectPath);
+		}
+
+		if (!IsValid(NewWidget))
+		{
+			Result.Errors.Add(FString::Printf(
+				TEXT("An asset already exists at '%s' but could not be loaded as a Widget Blueprint. Call delete_asset on this path first, or choose a different asset_path."),
+				*PackageName));
+			return Result;
+		}
+
+		bReusedExisting = true;
+		Result.Warnings.Add(FString::Printf(
+			TEXT("Widget Blueprint '%s' already existed, so it was reused rather than recreated. Its existing widget tree was left in place — inspect it with get_widget_tree before adding widgets."),
+			*PackageName));
+		UE_LOG(LogAgentFramework, Log, TEXT("WidgetActions: Reusing existing Widget Blueprint '%s'"), *PackageName);
+	}
+	else
+	{
+		IAssetTools& AssetTools = FModuleManager::LoadModuleChecked<FAssetToolsModule>("AssetTools").Get();
+
+		UWidgetBlueprintFactory* Factory = NewObject<UWidgetBlueprintFactory>();
+		Factory->ParentClass = ParentClass;
+
+		UObject* NewAsset = AssetTools.CreateAsset(AssetName, PackagePath, UWidgetBlueprint::StaticClass(), Factory);
+		NewWidget = Cast<UWidgetBlueprint>(NewAsset);
+
+		if (!IsValid(NewWidget))
+		{
+			Result.Errors.Add(FString::Printf(TEXT("Failed to create Widget Blueprint at '%s'. Verify the path is valid, starts with /Game/, and the directory exists. Example: /Game/UI/WBP_MainMenu"), *PackageName));
+			return Result;
+		}
 	}
 
-	// Set the root widget
-	if (IsValid(NewWidget->WidgetTree) && !RootWidgetClassName.IsEmpty() && RootWidgetClassName != TEXT("none"))
+	// Set the root widget — but never replace the root of a widget tree that already has one,
+	// or a re-run of this tool would orphan every widget the agent previously added.
+	if (bReusedExisting && IsValid(NewWidget->WidgetTree) && IsValid(NewWidget->WidgetTree->RootWidget))
+	{
+		Result.Warnings.Add(FString::Printf(
+			TEXT("Kept the existing root widget '%s' — root_widget_class was ignored so the existing widget tree is not discarded."),
+			*NewWidget->WidgetTree->RootWidget->GetName()));
+	}
+	else if (IsValid(NewWidget->WidgetTree) && !RootWidgetClassName.IsEmpty() && RootWidgetClassName != TEXT("none"))
 	{
 		UClass* RootClass = ResolveWidgetClass(RootWidgetClassName);
 		if (IsValid(RootClass))
@@ -1087,11 +1137,23 @@ FAgentFrameworkActionResult FAgentFrameworkWidgetActions::ExecuteCreateWidgetBlu
 		}
 	}
 
-	FAssetRegistryModule::AssetCreated(NewWidget);
+	if (!bReusedExisting)
+	{
+		FAssetRegistryModule::AssetCreated(NewWidget);
+	}
+
+	// Report what the asset actually is, not what was requested — on the reuse path the
+	// existing parent class and root widget win, and claiming otherwise would mislead.
+	const FString ActualParentName = IsValid(NewWidget->ParentClass) ? NewWidget->ParentClass->GetName() : ParentClass->GetName();
+	const FString ActualRootName = (IsValid(NewWidget->WidgetTree) && IsValid(NewWidget->WidgetTree->RootWidget))
+		? NewWidget->WidgetTree->RootWidget->GetName()
+		: TEXT("none");
 
 	Result.bSuccess = true;
-	Result.ResultMessage = FString::Printf(TEXT("Created Widget Blueprint '%s' (parent: %s) with root widget '%s'. Next: use add_widget to populate the tree, then set_widget_slot to configure layout."), *AssetName, *ParentClass->GetName(), *RootWidgetClassName);
-	Result.ModifiedAssets.Add(AssetPath);
+	Result.ResultMessage = FString::Printf(TEXT("%s Widget Blueprint '%s' (parent: %s) with root widget '%s'. Next: use add_widget to populate the tree, then set_widget_slot to configure layout."),
+		bReusedExisting ? TEXT("Reused existing") : TEXT("Created"),
+		*AssetName, *ActualParentName, *ActualRootName);
+	Result.ModifiedAssets.Add(PackageName);
 	return Result;
 }
 

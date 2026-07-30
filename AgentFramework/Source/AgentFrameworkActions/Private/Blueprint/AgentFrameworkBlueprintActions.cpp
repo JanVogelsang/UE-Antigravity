@@ -147,6 +147,27 @@ namespace
 		return InPath;
 	}
 
+	/**
+	 * Expands a relative path and strips any ".ObjectName" suffix, so the result names a PACKAGE.
+	 *
+	 * ExpandBlueprintAssetPath() returns an OBJECT path ("/Game/UI/WBP.WBP"). Package-level
+	 * APIs — FindPackage(), USourceControlHelpers::PackageFilename(), and the
+	 * AgentDirtiedPackages set (which FAgentFrameworkActionsModule clears by
+	 * UPackage::GetFName()) — all reject or mis-key an object path. Route through here before
+	 * calling any of them. Safe to call on an already-expanded path; expansion is idempotent.
+	 */
+	FString AssetPathToPackageName(const FString& InAssetPath)
+	{
+		FString PackageName, PackagePath, AssetName;
+		UAgentFrameworkActionUtils::SplitAssetPath(ExpandBlueprintAssetPath(InAssetPath), PackageName, PackagePath, AssetName);
+		return PackageName;
+	}
+
+	FName AssetPathToPackageFName(const FString& InAssetPath)
+	{
+		return FName(*AssetPathToPackageName(InAssetPath));
+	}
+
 	FString GetVarTypeString(const FEdGraphPinType& VarType)
 	{
 		auto FormatSingleType = [](const FName& PinCategory, const FName& PinSubCategory, UObject* SubCategoryObject) -> FString
@@ -475,12 +496,13 @@ FAgentFrameworkActionResult FAgentFrameworkBlueprintActions::ExecuteAction(const
 		if (Params->TryGetStringField(TEXT("asset_path"), AssetPath))
 		{
 			AssetPath = ExpandBlueprintAssetPath(AssetPath);
+			const FString PackageName = AssetPathToPackageName(AssetPath);
 
 			// 1. In-memory Dirty Check (Smart Sentinel)
-			UPackage* Package = FindPackage(nullptr, *AssetPath);
+			UPackage* Package = FindPackage(nullptr, *PackageName);
 			if (Package && Package->IsDirty())
 			{
-				if (!FAgentFrameworkActionsModule::AgentDirtiedPackages.Contains(FName(*AssetPath)))
+				if (!FAgentFrameworkActionsModule::AgentDirtiedPackages.Contains(FName(*PackageName)))
 				{
 					FAgentFrameworkActionResult FailResult;
 					FailResult.bSuccess = false;
@@ -493,7 +515,7 @@ FAgentFrameworkActionResult FAgentFrameworkBlueprintActions::ExecuteAction(const
 			ISourceControlModule& SCModule = ISourceControlModule::Get();
 			if (SCModule.IsEnabled() && SCModule.GetProvider().IsAvailable())
 			{
-				FString FilePath = USourceControlHelpers::PackageFilename(AssetPath);
+				FString FilePath = USourceControlHelpers::PackageFilename(PackageName);
 				FSourceControlStatePtr SCState = SCModule.GetProvider().GetState(FilePath, EStateCacheUsage::Use);
 				if (SCState.IsValid() && (SCState->IsCheckedOutOther() || !SCState->CanEdit()))
 				{
@@ -567,7 +589,22 @@ FAgentFrameworkActionResult FAgentFrameworkBlueprintActions::ExecuteAction(const
 		if (UAgentFrameworkActionUtils::TryGetStringParam(Params, TEXT("asset_path"), AssetPath, Errors, false))
 		{
 			AssetModificationCounts.FindOrAdd(AssetPath, 0)++;
-			FAgentFrameworkActionsModule::AgentDirtiedPackages.Add(FName(*AssetPath));
+
+			// Only claim authorship of the dirty state while the package is ACTUALLY dirty.
+			// This runs after the tool has finished, and tools that save their asset leave it
+			// clean — an unconditional claim here would outlive the edit and make the Smart
+			// Sentinel mistake a LATER user edit for our own, then overwrite it.
+			const FString TouchedPackageName = AssetPathToPackageName(AssetPath);
+			const FName TouchedPackageFName(*TouchedPackageName);
+			UPackage* TouchedPackage = FindPackage(nullptr, *TouchedPackageName);
+			if (TouchedPackage && TouchedPackage->IsDirty())
+			{
+				FAgentFrameworkActionsModule::AgentDirtiedPackages.Add(TouchedPackageFName);
+			}
+			else
+			{
+				FAgentFrameworkActionsModule::AgentDirtiedPackages.Remove(TouchedPackageFName);
+			}
 		}
 
 #if WITH_EDITOR
@@ -781,8 +818,18 @@ bool FAgentFrameworkBlueprintActions::DetectInfiniteLoopRisk(UBlueprint* Bluepri
 				FName EventName = EventNode->GetFunctionName();
 				if (EventName == FName(TEXT("ReceiveTick")))
 				{
-					OutWarnings.Add(TEXT("WARNING: EventTick detected. Avoid spawning actors, adding components, or performing heavy operations in Tick — this runs every frame and can cause severe performance degradation."));
-					bRiskDetected = true;
+					// A freshly created Blueprint already contains a stub Tick node that drives
+					// nothing, so flagging its mere presence fired on every create_blueprint_actor
+					// call. The advice is about work performed each frame — only warn when Tick is
+					// enabled AND actually wired to logic.
+					const UEdGraphPin* ThenPin = EventNode->FindPin(UEdGraphSchema_K2::PN_Then, EGPD_Output);
+					const bool bDrivesLogic = (ThenPin != nullptr) && (ThenPin->LinkedTo.Num() > 0);
+
+					if (bDrivesLogic && EventNode->IsNodeEnabled())
+					{
+						OutWarnings.Add(TEXT("WARNING: EventTick detected. Avoid spawning actors, adding components, or performing heavy operations in Tick — this runs every frame and can cause severe performance degradation."));
+						bRiskDetected = true;
+					}
 				}
 			}
 		}
@@ -1067,29 +1114,85 @@ FAgentFrameworkActionResult FAgentFrameworkBlueprintActions::ExecuteCreateBluepr
 		return Result;
 	}
 
-	FString PackagePath = FPackageName::GetLongPackagePath(AssetPath);
-	FString AssetName   = FPackageName::GetShortName(AssetPath);
+	// Agents pass both "/Game/Traps/BP_Trap" and "/Game/Traps/BP_Trap.BP_Trap". Splitting via
+	// FPackageName::GetShortName() alone keeps the ".BP_Trap" suffix in the asset name, which
+	// makes CreatePackage() build a malformed package ("short package name" warning).
+	FString PackageName, PackagePath, AssetName;
+	UAgentFrameworkActionUtils::SplitAssetPath(AssetPath, PackageName, PackagePath, AssetName);
 
-	IAssetTools& AssetTools = FModuleManager::LoadModuleChecked<FAssetToolsModule>("AssetTools").Get();
-	FString UniqueName, UniquePackagePath;
-	AssetTools.CreateUniqueAssetName(AssetPath, TEXT(""), UniquePackagePath, UniqueName);
-
-	UBlueprintFactory* Factory = NewObject<UBlueprintFactory>();
-	if (IsValid(Factory))
+	if (AssetName.IsEmpty() || PackagePath.IsEmpty())
 	{
-		Factory->ParentClass = ParentClass;
-	}
-
-	UObject* NewAsset = AssetTools.CreateAsset(AssetName, PackagePath, UBlueprint::StaticClass(), Factory);
-	UBlueprint* NewBlueprint = Cast<UBlueprint>(NewAsset);
-
-	if (!IsValid(NewBlueprint))
-	{
-		Result.Errors.Add(FString::Printf(TEXT("Failed to create Blueprint at '%s'. Check that the path is valid and under /Game/."), *AssetPath));
+		Result.Errors.Add(FString::Printf(
+			TEXT("asset_path '%s' does not name an asset. Provide a full path including the asset name, e.g. /Game/Blueprints/BP_MyActor."),
+			*AssetPath));
 		return Result;
 	}
 
-	UE_LOG(LogAgentFramework, Log, TEXT("BlueprintActions: Created Blueprint '%s' with parent '%s'"), *AssetPath, *ParentClassName);
+	const FString ObjectPath = FString::Printf(TEXT("%s.%s"), *PackageName, *AssetName);
+
+	// Reuse an existing Blueprint instead of creating on top of it. AssetTools.CreateAsset
+	// reaches FKismetEditorUtilities::CreateBlueprint, which asserts in Kismet2.cpp
+	// (BpCdo->HasAnyFlags(RF_ClassDefaultObject)) when the target package already holds a
+	// Blueprint — taking the whole editor down. Agents retry tool calls routinely, so this
+	// path is hit often and must be idempotent rather than fatal.
+	UBlueprint* NewBlueprint = nullptr;
+	bool bReusedExisting = false;
+
+	UObject* InMemoryAsset = FindObject<UObject>(nullptr, *ObjectPath);
+	if (InMemoryAsset != nullptr || FPackageName::DoesPackageExist(PackageName))
+	{
+		UBlueprint* ExistingBlueprint = Cast<UBlueprint>(InMemoryAsset);
+		if (!IsValid(ExistingBlueprint))
+		{
+			ExistingBlueprint = LoadObject<UBlueprint>(nullptr, *ObjectPath);
+		}
+
+		if (!IsValid(ExistingBlueprint))
+		{
+			Result.Errors.Add(FString::Printf(
+				TEXT("An asset already exists at '%s' but could not be loaded as a Blueprint. Call delete_asset on this path first, or choose a different asset_path."),
+				*PackageName));
+			return Result;
+		}
+
+		if (ExistingBlueprint->ParentClass != ParentClass)
+		{
+			Result.Errors.Add(FString::Printf(
+				TEXT("Blueprint '%s' already exists with parent class '%s', which does not match the requested parent '%s'. Call delete_asset on this path first, or choose a different asset_path."),
+				*PackageName,
+				IsValid(ExistingBlueprint->ParentClass) ? *ExistingBlueprint->ParentClass->GetName() : TEXT("None"),
+				*ParentClassName));
+			return Result;
+		}
+
+		NewBlueprint = ExistingBlueprint;
+		bReusedExisting = true;
+		Result.Warnings.Add(FString::Printf(
+			TEXT("Blueprint '%s' already existed with the requested parent class, so it was reused rather than recreated. Any inline components/variables in this call were applied to the existing asset."),
+			*PackageName));
+		UE_LOG(LogAgentFramework, Log, TEXT("BlueprintActions: Reusing existing Blueprint '%s' (parent '%s')"), *PackageName, *ParentClassName);
+	}
+	else
+	{
+		IAssetTools& AssetTools = FModuleManager::LoadModuleChecked<FAssetToolsModule>("AssetTools").Get();
+
+		UBlueprintFactory* Factory = NewObject<UBlueprintFactory>();
+		if (IsValid(Factory))
+		{
+			Factory->ParentClass = ParentClass;
+		}
+
+		UObject* NewAsset = AssetTools.CreateAsset(AssetName, PackagePath, UBlueprint::StaticClass(), Factory);
+		NewBlueprint = Cast<UBlueprint>(NewAsset);
+
+		if (!IsValid(NewBlueprint))
+		{
+			Result.Errors.Add(FString::Printf(TEXT("Failed to create Blueprint at '%s'. Check that the path is valid and under /Game/."), *PackageName));
+			return Result;
+		}
+
+		UE_LOG(LogAgentFramework, Log, TEXT("BlueprintActions: Created Blueprint '%s' with parent '%s'"), *PackageName, *ParentClassName);
+	}
 
 	// --- Inline Components ---
 	const TArray<TSharedPtr<FJsonValue>>* ComponentsArray = nullptr;
@@ -1108,6 +1211,14 @@ FAgentFrameworkActionResult FAgentFrameworkBlueprintActions::ExecuteCreateBluepr
 				!UAgentFrameworkActionUtils::TryGetStringParam(CompObj, TEXT("class"), CompClassName, InlineCompErrors, true))
 			{
 				Result.Warnings.Append(InlineCompErrors);
+				continue;
+			}
+
+			// On the reuse path the component may already be there. CreateNode() would
+			// silently rename the duplicate ("Mesh_1"), so skip instead of stacking copies.
+			if (bReusedExisting && IsValid(FindSCSNodeByName(NewBlueprint, CompName)))
+			{
+				Result.Warnings.Add(FString::Printf(TEXT("Component '%s' already exists on this Blueprint — left as-is instead of adding a duplicate."), *CompName));
 				continue;
 			}
 
@@ -1189,8 +1300,8 @@ FAgentFrameworkActionResult FAgentFrameworkBlueprintActions::ExecuteCreateBluepr
 	{
 		Result.bSuccess = false;
 		Result.Errors.Add(FString::Printf(
-			TEXT("Blueprint '%s' created but FAILED to compile. Fix the COMPILE ERROR messages above, then call compile_blueprint to verify."),
-			*AssetPath));
+			TEXT("Blueprint '%s' %s but FAILED to compile. Fix the COMPILE ERROR messages above, then call compile_blueprint to verify."),
+			*PackageName, bReusedExisting ? TEXT("was updated") : TEXT("was created")));
 	}
 
 	// Save
@@ -1207,12 +1318,16 @@ FAgentFrameworkActionResult FAgentFrameworkBlueprintActions::ExecuteCreateBluepr
 		}
 	}
 
-	FAssetRegistryModule::AssetCreated(NewBlueprint);
+	if (!bReusedExisting)
+	{
+		FAssetRegistryModule::AssetCreated(NewBlueprint);
+	}
 
 	Result.bSuccess = bCompileOk;
-	Result.ResultMessage = FString::Printf(TEXT("Created Blueprint '%s' (parent: %s). Compile: %s."),
+	Result.ResultMessage = FString::Printf(TEXT("%s Blueprint '%s' (parent: %s). Compile: %s."),
+		bReusedExisting ? TEXT("Reused existing") : TEXT("Created"),
 		*AssetName, *ParentClassName, bCompileOk ? TEXT("SUCCESS") : TEXT("FAILED"));
-	Result.ModifiedAssets.Add(AssetPath);
+	Result.ModifiedAssets.Add(PackageName);
 	return Result;
 }
 
@@ -5102,8 +5217,9 @@ FAgentFrameworkActionResult FAgentFrameworkBlueprintActions::ExecuteCheckAssetSt
 		return Result;
 	}
 	AssetPath = ExpandBlueprintAssetPath(AssetPath);
+	const FString PackageName = AssetPathToPackageName(AssetPath);
 
-	UPackage* Package = FindPackage(nullptr, *AssetPath);
+	UPackage* Package = FindPackage(nullptr, *PackageName);
 	bool bIsDirty = IsValid(Package) ? Package->IsDirty() : false;
 
 	bool bIsOpen = false;
@@ -5121,7 +5237,7 @@ FAgentFrameworkActionResult FAgentFrameworkBlueprintActions::ExecuteCheckAssetSt
 	ISourceControlModule& SCModule = ISourceControlModule::Get();
 	if (SCModule.IsEnabled() && SCModule.GetProvider().IsAvailable())
 	{
-		FString FilePath = USourceControlHelpers::PackageFilename(AssetPath);
+		FString FilePath = USourceControlHelpers::PackageFilename(PackageName);
 		FSourceControlStatePtr SCState = SCModule.GetProvider().GetState(FilePath, EStateCacheUsage::Use);
 		if (SCState.IsValid())
 		{
@@ -5340,7 +5456,7 @@ FAgentFrameworkActionResult FAgentFrameworkBlueprintActions::ExecuteDisconnectPi
 	}
 
 	FBlueprintEditorUtils::MarkBlueprintAsModified(Blueprint);
-	FAgentFrameworkActionsModule::AgentDirtiedPackages.Add(FName(*AssetPath));
+	FAgentFrameworkActionsModule::AgentDirtiedPackages.Add(AssetPathToPackageFName(AssetPath));
 	CompileAndReport(Blueprint, Result, true);
 
 	Result.bSuccess = true;
@@ -5546,7 +5662,7 @@ FAgentFrameworkActionResult FAgentFrameworkBlueprintActions::ExecuteModifySubobj
 	{
 		FBlueprintEditorUtils::MarkBlueprintAsModified(Blueprint);
 	}
-	FAgentFrameworkActionsModule::AgentDirtiedPackages.Add(FName(*AssetPath));
+	FAgentFrameworkActionsModule::AgentDirtiedPackages.Add(AssetPathToPackageFName(AssetPath));
 	CompileAndReport(Blueprint, Result, true);
 
 	Result.bSuccess = true;
@@ -5638,7 +5754,7 @@ FAgentFrameworkActionResult FAgentFrameworkBlueprintActions::ExecuteConfigureAct
 	ActorCDO->NetPriority = static_cast<float>(NetPriority);
 
 	FBlueprintEditorUtils::MarkBlueprintAsModified(Blueprint);
-	FAgentFrameworkActionsModule::AgentDirtiedPackages.Add(FName(*AssetPath));
+	FAgentFrameworkActionsModule::AgentDirtiedPackages.Add(AssetPathToPackageFName(AssetPath));
 	CompileAndReport(Blueprint, Result, true);
 
 	Result.bSuccess = true;
@@ -5748,7 +5864,7 @@ FAgentFrameworkActionResult FAgentFrameworkBlueprintActions::ExecuteSetVariableR
 	}
 
 	FBlueprintEditorUtils::MarkBlueprintAsStructurallyModified(Blueprint);
-	FAgentFrameworkActionsModule::AgentDirtiedPackages.Add(FName(*AssetPath));
+	FAgentFrameworkActionsModule::AgentDirtiedPackages.Add(AssetPathToPackageFName(AssetPath));
 	CompileAndReport(Blueprint, Result, true);
 
 	Result.bSuccess = true;

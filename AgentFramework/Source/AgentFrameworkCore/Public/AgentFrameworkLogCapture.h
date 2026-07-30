@@ -31,8 +31,17 @@ public:
 	/** Returns total entry count ever recorded (monotonically increasing sequence number for snapshotting). */
 	uint64 GetSnapshotIndex();
 
-	/** Formats log errors and counts warnings logged since StartIndex. */
-	FString GetLogDeltaFormatted(uint64 StartIndex, int32& OutErrorCount, int32& OutWarningCount);
+	/**
+	 * Collects the actual text of errors and warnings logged since StartIndex.
+	 *
+	 * The warning text itself is returned (not just a count) so the router can surface it
+	 * to the agent. Without this an agent sees { bSuccess: true } and stays blind to engine
+	 * warnings emitted during the tool call.
+	 *
+	 * Entries are de-duplicated, truncated to 300 chars, and capped at MaxPerSeverity per
+	 * severity to keep tool responses small. Low-signal categories are filtered out.
+	 */
+	void GetLogDeltaEntries(uint64 StartIndex, TArray<FString>& OutErrors, TArray<FString>& OutWarnings, int32 MaxPerSeverity = 8);
 
 	/** Thread-safely copies captured entries into OutEntries. */
 	void GetEntries(TArray<FAgentFrameworkLogEntry>& OutEntries);

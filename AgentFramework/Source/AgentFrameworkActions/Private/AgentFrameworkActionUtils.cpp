@@ -501,3 +501,35 @@ FString UAgentFrameworkActionUtils::NormalizeAssetObjectPath(const FString& InPa
 	return InPath;
 }
 
+void UAgentFrameworkActionUtils::SplitAssetPath(const FString& InPath, FString& OutPackageName, FString& OutPackagePath, FString& OutAssetName)
+{
+	OutPackageName = InPath;
+	OutPackagePath.Reset();
+	OutAssetName.Reset();
+
+	if (InPath.IsEmpty())
+	{
+		return;
+	}
+
+	// Strip a trailing ".ObjectName" suffix, but only when the dot comes after the last
+	// slash — a dot earlier in the path is part of a folder name, not an object suffix.
+	int32 LastSlashIndex = INDEX_NONE;
+	int32 LastDotIndex = INDEX_NONE;
+	OutPackageName.FindLastChar(TEXT('/'), LastSlashIndex);
+	OutPackageName.FindLastChar(TEXT('.'), LastDotIndex);
+	if (LastDotIndex != INDEX_NONE && LastDotIndex > LastSlashIndex)
+	{
+		OutPackageName = OutPackageName.Left(LastDotIndex);
+	}
+
+	// A trailing slash would otherwise yield an empty asset name.
+	while (OutPackageName.Len() > 1 && OutPackageName.EndsWith(TEXT("/")))
+	{
+		OutPackageName = OutPackageName.LeftChop(1);
+	}
+
+	OutPackagePath = FPackageName::GetLongPackagePath(OutPackageName);
+	OutAssetName = FPackageName::GetLongPackageAssetName(OutPackageName);
+}
+

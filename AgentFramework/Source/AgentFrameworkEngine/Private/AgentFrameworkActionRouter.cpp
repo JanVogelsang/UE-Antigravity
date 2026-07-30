@@ -120,6 +120,33 @@ static bool ValidateAssetPathParam(const TSharedPtr<FJsonObject>& Params, FStrin
 
 struct FAgentFrameworkDiagnostics
 {
+	/**
+	 * True when ResultMessage carries a machine-parsed payload rather than prose.
+	 *
+	 * Tools like extract_ui_state and get_blueprint_info return a JSON document in
+	 * ResultMessage, and the capture_* tools return base64 image data; callers parse both
+	 * verbatim. Appending a diagnostics block to those would corrupt the payload, so for
+	 * them the Warnings array is the only safe channel.
+	 */
+	static bool IsOpaquePayload(const FString& Message)
+	{
+		const FString Trimmed = Message.TrimStart();
+		if (Trimmed.IsEmpty())
+		{
+			return false;
+		}
+		if (Trimmed.StartsWith(TEXT("{")) || Trimmed.StartsWith(TEXT("[")))
+		{
+			return true;
+		}
+		if (Trimmed.StartsWith(TEXT("data:")))
+		{
+			return true;
+		}
+		// A long run with no whitespace is a raw base64 blob, not a message.
+		return Trimmed.Len() > 512 && !Trimmed.Contains(TEXT(" "));
+	}
+
 	static void EnrichErrorString(FString& ErrorMsg)
 	{
 		if (ErrorMsg.Contains(TEXT("Failed to load package")) || ErrorMsg.Contains(TEXT("LoadObject failed")))
@@ -281,23 +308,80 @@ private:
 	ScopedTelemetry.Result = Executor->ExecuteAction(ParamsWithToolName);
 #endif
 
+	// Fold engine log output emitted during this tool call back into the response.
+	//
+	// Agents evaluate a tool call almost entirely from its payload, so a call that
+	// returns { bSuccess: true } while the engine logged an error or warning in the
+	// background reads as a clean success. Both the text AND the Warnings array are
+	// populated: Warnings is the structured channel, but ResultMessage is what the MCP
+	// bridge relays verbatim on success, so the text copy is what the agent actually reads.
 	if (LogCapture.IsValid() && ToolCall.ToolName != TEXT("read_message_log"))
 	{
-		int32 ErrorCount = 0;
-		int32 WarningCount = 0;
-		FString LogDelta = LogCapture->GetLogDeltaFormatted(BaselineLogIndex, ErrorCount, WarningCount);
+		TArray<FString> CapturedErrors;
+		TArray<FString> CapturedWarnings;
+		LogCapture->GetLogDeltaEntries(BaselineLogIndex, CapturedErrors, CapturedWarnings);
 
-		if (ErrorCount > 0)
+		// Drop anything the executor already reported so the agent does not read it twice.
+		auto IsAlreadyReported = [&ScopedTelemetry](const FString& Line)
 		{
-			ScopedTelemetry.Result.ResultMessage += FString::Printf(
-				TEXT("\n\n--- Diagnostics Log (%d Error(s) emitted during execution) ---\n%s"),
-				ErrorCount, *LogDelta);
+			// Guard the empty case: FString::Contains(TEXT("")) is always true, so an empty
+			// entry in Errors/Warnings would suppress every captured line.
+			if (Line.IsEmpty())
+			{
+				return true;
+			}
+
+			auto Overlaps = [&Line](const TArray<FString>& Reported)
+			{
+				for (const FString& Existing : Reported)
+				{
+					if (!Existing.IsEmpty() && (Line.Contains(Existing) || Existing.Contains(Line)))
+					{
+						return true;
+					}
+				}
+				return false;
+			};
+
+			return Overlaps(ScopedTelemetry.Result.Errors) || Overlaps(ScopedTelemetry.Result.Warnings);
+		};
+
+		FString Diagnostics;
+
+		if (CapturedErrors.Num() > 0)
+		{
+			Diagnostics += FString::Printf(TEXT("\n\n--- Diagnostics Log (%d Error(s) emitted during execution) ---\n"), CapturedErrors.Num());
+			for (const FString& Line : CapturedErrors)
+			{
+				Diagnostics += FString::Printf(TEXT("  - %s\n"), *Line);
+				if (!IsAlreadyReported(Line))
+				{
+					ScopedTelemetry.Result.Warnings.Add(FString::Printf(TEXT("ENGINE ERROR LOGGED: %s"), *Line));
+				}
+			}
 		}
-		else if (WarningCount >= 3)
+
+		if (CapturedWarnings.Num() > 0)
 		{
-			ScopedTelemetry.Result.ResultMessage += FString::Printf(
-				TEXT("\n\n[Diagnostics Log: %d warning(s) emitted during tool execution]"),
-				WarningCount);
+			Diagnostics += FString::Printf(TEXT("\n\n--- Diagnostics Log (%d Warning(s) emitted during execution) ---\n"), CapturedWarnings.Num());
+			for (const FString& Line : CapturedWarnings)
+			{
+				Diagnostics += FString::Printf(TEXT("  - %s\n"), *Line);
+				if (!IsAlreadyReported(Line))
+				{
+					ScopedTelemetry.Result.Warnings.Add(Line);
+				}
+			}
+		}
+
+		if (!Diagnostics.IsEmpty() && !FAgentFrameworkDiagnostics::IsOpaquePayload(ScopedTelemetry.Result.ResultMessage))
+		{
+			if (CapturedErrors.Num() > 0 && ScopedTelemetry.Result.bSuccess)
+			{
+				Diagnostics += TEXT("\n[AI HINT: This tool reported success but the engine logged error(s) above. "
+					"Verify the asset/state actually changed as intended before moving on — do not assume success.]");
+			}
+			ScopedTelemetry.Result.ResultMessage += Diagnostics;
 		}
 	}
 

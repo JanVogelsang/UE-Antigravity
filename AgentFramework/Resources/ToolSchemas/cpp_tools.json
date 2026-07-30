@@ -59,13 +59,17 @@
     },
     {
       "name": "trigger_compile",
-      "description": "Trigger Live Coding compilation to compile C++ changes and new classes.",
+      "description": "Compile C++ changes via Live Coding. By default this BLOCKS until the compile finishes and returns the real result (succeeded / no changes / failed), so do not poll it in a loop. Live Coding CANNOT patch new UCLASS/USTRUCT/UENUM types or new source files — for those, call regenerate_project_files and have the user restart the editor with an IDE build.",
       "input_schema": {
         "type": "object",
         "properties": {
           "compile": {
             "type": "boolean",
             "description": "Must be true"
+          },
+          "wait_for_completion": {
+            "type": "boolean",
+            "description": "Default true: wait for the compile to finish and return its result. Set false only to queue the compile and return immediately, in which case you will not learn whether it succeeded."
           }
         },
         "required": [

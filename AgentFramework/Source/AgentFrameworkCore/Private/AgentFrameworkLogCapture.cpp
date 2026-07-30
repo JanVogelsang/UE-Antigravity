@@ -57,35 +57,81 @@ uint64 FAgentFrameworkLogCapture::GetSnapshotIndex()
 	return TotalEntriesEver;
 }
 
-FString FAgentFrameworkLogCapture::GetLogDeltaFormatted(uint64 StartIndex, int32& OutErrorCount, int32& OutWarningCount)
+namespace AgentFrameworkLogCaptureInternal
+{
+	/**
+	 * Categories that emit high-volume warnings unrelated to whatever tool is executing
+	 * (renderer/shader/audio churn, HTTP server chatter). Surfacing these to the agent
+	 * would bury the signal, so they are dropped from the warning delta. Errors are
+	 * never filtered — an error in any category is worth reporting.
+	 */
+	static bool IsLowSignalWarningCategory(const FString& Category)
+	{
+		static const TCHAR* DeniedCategories[] = {
+			TEXT("LogSlate"),
+			TEXT("LogRHI"),
+			TEXT("LogD3D12RHI"),
+			TEXT("LogShaderCompilers"),
+			TEXT("LogShaders"),
+			TEXT("LogAudioMixer"),
+			TEXT("LogHttp"),
+			TEXT("LogHttpServer"),
+			TEXT("LogDerivedDataCache"),
+			TEXT("LogVirtualization")
+		};
+
+		for (const TCHAR* Denied : DeniedCategories)
+		{
+			if (Category.Equals(Denied, ESearchCase::IgnoreCase))
+			{
+				return true;
+			}
+		}
+		return false;
+	}
+}
+
+void FAgentFrameworkLogCapture::GetLogDeltaEntries(uint64 StartIndex, TArray<FString>& OutErrors, TArray<FString>& OutWarnings, int32 MaxPerSeverity)
 {
 	FScopeLock Lock(&LogLock);
 
-	OutErrorCount = 0;
-	OutWarningCount = 0;
+	OutErrors.Reset();
+	OutWarnings.Reset();
+
+	if (MaxPerSeverity <= 0)
+	{
+		return;
+	}
 
 	uint64 EntriesPassed = (TotalEntriesEver >= StartIndex) ? (TotalEntriesEver - StartIndex) : 0;
 	int32 OffsetFromHead = Entries.Num() - static_cast<int32>(FMath::Min<uint64>(EntriesPassed, static_cast<uint64>(Entries.Num())));
 	int32 SafeStartIndex = FMath::Clamp(OffsetFromHead, 0, Entries.Num());
 
-	FString DeltaErrors;
-
 	for (int32 i = SafeStartIndex; i < Entries.Num(); ++i)
 	{
-		const auto& Entry = Entries[i];
-		if (Entry.Verbosity == ELogVerbosity::Error || Entry.Verbosity == ELogVerbosity::Fatal)
-		{
-			OutErrorCount++;
-			FString Msg = Entry.Message.Left(300);
-			DeltaErrors += FString::Printf(TEXT("  - [%s] %s\n"), *Entry.Category, *Msg);
-		}
-		else if (Entry.Verbosity == ELogVerbosity::Warning)
-		{
-			OutWarningCount++;
-		}
-	}
+		const FAgentFrameworkLogEntry& Entry = Entries[i];
 
-	return DeltaErrors;
+		const bool bIsError = (Entry.Verbosity == ELogVerbosity::Error || Entry.Verbosity == ELogVerbosity::Fatal);
+		const bool bIsWarning = (Entry.Verbosity == ELogVerbosity::Warning);
+		if (!bIsError && !bIsWarning)
+		{
+			continue;
+		}
+
+		TArray<FString>& Target = bIsError ? OutErrors : OutWarnings;
+		if (Target.Num() >= MaxPerSeverity)
+		{
+			continue;
+		}
+
+		if (bIsWarning && AgentFrameworkLogCaptureInternal::IsLowSignalWarningCategory(Entry.Category))
+		{
+			continue;
+		}
+
+		FString Formatted = FString::Printf(TEXT("[%s] %s"), *Entry.Category, *Entry.Message.Left(300));
+		Target.AddUnique(MoveTemp(Formatted));
+	}
 }
 
 void FAgentFrameworkLogCapture::GetEntries(TArray<FAgentFrameworkLogEntry>& OutEntries)

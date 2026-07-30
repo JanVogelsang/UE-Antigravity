@@ -5,7 +5,7 @@
   "tools": [
     {
       "name": "create_blueprint_actor",
-      "description": "Create a new Blueprint asset with optional inline components and variables. Compiles and saves automatically.\n\nCommon parent_class values: Actor, Pawn, Character, PlayerController, GameModeBase, HUD, GameStateBase, PlayerState, ActorComponent, SceneComponent.\n\nFor a 3rd-person character use parent_class='Character' with SpringArmComponent (CameraBoom) + CameraComponent (FollowCamera).\nFor a projectile use parent_class='Actor' with ProjectileMovementComponent + SphereComponent + StaticMeshComponent.\n\nAfter creation, use inject_blueprint_nodes_t3d to add logic, and set_component_properties to assign meshes.",
+      "description": "Create a new Blueprint asset with optional inline components and variables. Compiles and saves automatically.\n\nIdempotent: if a Blueprint already exists at asset_path with the same parent_class it is reused (not recreated) and any inline components/variables are applied to it. If the existing parent_class differs the call FAILS - call delete_asset first or choose a different asset_path.\n\nCommon parent_class values: Actor, Pawn, Character, PlayerController, GameModeBase, HUD, GameStateBase, PlayerState, ActorComponent, SceneComponent.\n\nFor a 3rd-person character use parent_class='Character' with SpringArmComponent (CameraBoom) + CameraComponent (FollowCamera).\nFor a projectile use parent_class='Actor' with ProjectileMovementComponent + SphereComponent + StaticMeshComponent.\n\nAfter creation, use inject_blueprint_nodes_t3d to add logic, and set_component_properties to assign meshes.",
       "input_schema": {
         "type": "object",
         "properties": {
