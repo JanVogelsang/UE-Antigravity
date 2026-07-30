@@ -381,12 +381,19 @@ bool FAgentFrameworkHttpServer::HandleExecuteToolRequest(const FHttpServerReques
 	ToolCall.ToolCallId = FGuid::NewGuid().ToString();
 	if (!RequestObj->TryGetStringField(TEXT("name"), ToolCall.ToolName) || ToolCall.ToolName.IsEmpty())
 	{
-		OnComplete(FHttpServerResponse::Error(EHttpServerResponseCodes::BadRequest));
-		return true;
+		if (!RequestObj->TryGetStringField(TEXT("tool"), ToolCall.ToolName) || ToolCall.ToolName.IsEmpty())
+		{
+			OnComplete(FHttpServerResponse::Error(EHttpServerResponseCodes::BadRequest));
+			return true;
+		}
 	}
 
 	const TSharedPtr<FJsonObject>* ArgumentsObj = nullptr;
 	if (RequestObj->TryGetObjectField(TEXT("arguments"), ArgumentsObj) && ArgumentsObj)
+	{
+		ToolCall.InputParams = *ArgumentsObj;
+	}
+	else if (RequestObj->TryGetObjectField(TEXT("parameters"), ArgumentsObj) && ArgumentsObj)
 	{
 		ToolCall.InputParams = *ArgumentsObj;
 	}

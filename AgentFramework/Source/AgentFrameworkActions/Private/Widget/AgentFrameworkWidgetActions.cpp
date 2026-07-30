@@ -2,6 +2,7 @@
 
 #include "Widget/AgentFrameworkWidgetActions.h"
 #include "AgentFrameworkCoreModule.h"
+#include "AgentFrameworkActionsModule.h"
 #include "AgentFrameworkActionUtils.h"
 
 // UMG Runtime — Panels
@@ -726,6 +727,27 @@ FAgentFrameworkActionResult FAgentFrameworkWidgetActions::ExecuteAction(const TS
 	if (Transaction.IsSet() && !Result.bSuccess)
 	{
 		Transaction->Cancel();
+	}
+
+	if (!bIsReadOnly && Result.bSuccess)
+	{
+		FString AssetPath;
+		if (Params->TryGetStringField(TEXT("asset_path"), AssetPath) ||
+			Params->TryGetStringField(TEXT("widget_blueprint_path"), AssetPath))
+		{
+			AssetPath = ExpandWidgetAssetPath(AssetPath);
+			const FString PackageName = FPackageName::ObjectPathToPackageName(AssetPath);
+			const FName PackageFName(*PackageName);
+			UPackage* Package = FindPackage(nullptr, *PackageName);
+			if (Package && Package->IsDirty())
+			{
+				FAgentFrameworkActionsModule::AgentDirtiedPackages.Add(PackageFName);
+			}
+			else
+			{
+				FAgentFrameworkActionsModule::AgentDirtiedPackages.Remove(PackageFName);
+			}
+		}
 	}
 
 	return Result;

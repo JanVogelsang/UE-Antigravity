@@ -334,8 +334,7 @@ bool FAgentFrameworkBlueprintActions::ValidateParams(const TSharedRef<FJsonObjec
 	{
 		if (!Params->HasField(TEXT("parent_class")))
 		{
-			OutErrors.Add(TEXT("Missing required field for create_blueprint_actor: parent_class"));
-			return false;
+			Params->SetStringField(TEXT("parent_class"), TEXT("Actor"));
 		}
 	}
 	else if (ToolName == TEXT("add_blueprint_component"))
@@ -396,18 +395,22 @@ bool FAgentFrameworkBlueprintActions::ValidateParams(const TSharedRef<FJsonObjec
 	}
 	else if (ToolName == TEXT("connect_blueprint_pins"))
 	{
-		if (!Params->HasField(TEXT("source_node")) || !Params->HasField(TEXT("source_pin")) ||
-			!Params->HasField(TEXT("target_node")) || !Params->HasField(TEXT("target_pin")))
+		bool bHasSourceNode = Params->HasField(TEXT("source_node")) || Params->HasField(TEXT("from_node"));
+		bool bHasSourcePin  = Params->HasField(TEXT("source_pin"))  || Params->HasField(TEXT("from_pin"));
+		bool bHasTargetNode = Params->HasField(TEXT("target_node")) || Params->HasField(TEXT("to_node"));
+		bool bHasTargetPin  = Params->HasField(TEXT("target_pin"))  || Params->HasField(TEXT("to_pin"));
+
+		if (!bHasSourceNode || !bHasSourcePin || !bHasTargetNode || !bHasTargetPin)
 		{
-			OutErrors.Add(TEXT("Missing required field(s) for connect_blueprint_pins: source_node, source_pin, target_node, target_pin"));
+			OutErrors.Add(TEXT("Missing required field(s) for connect_blueprint_pins: source_node (or from_node), source_pin (or from_pin), target_node (or to_node), target_pin (or to_pin)"));
 			return false;
 		}
 	}
 	else if (ToolName == TEXT("add_enhanced_input_node"))
 	{
-		if (!Params->HasField(TEXT("input_action")) || !Params->HasField(TEXT("event_type")))
+		if (!Params->HasField(TEXT("input_action")))
 		{
-			OutErrors.Add(TEXT("Missing required field(s) for add_enhanced_input_node: input_action, event_type"));
+			OutErrors.Add(TEXT("Missing required field for add_enhanced_input_node: input_action"));
 			return false;
 		}
 	}
@@ -2525,9 +2528,16 @@ FAgentFrameworkActionResult FAgentFrameworkBlueprintActions::ExecuteInjectNodesT
 			FString SrcNodeName, SrcPinName, DstNodeName, DstPinName;
 			TArray<FString> ItemErrors;
 			UAgentFrameworkActionUtils::TryGetStringParam(ConnObj, TEXT("source_node"), SrcNodeName, ItemErrors, false);
+			if (SrcNodeName.IsEmpty()) UAgentFrameworkActionUtils::TryGetStringParam(ConnObj, TEXT("from_node"), SrcNodeName, ItemErrors, false);
+
 			UAgentFrameworkActionUtils::TryGetStringParam(ConnObj, TEXT("source_pin"), SrcPinName, ItemErrors, false);
+			if (SrcPinName.IsEmpty()) UAgentFrameworkActionUtils::TryGetStringParam(ConnObj, TEXT("from_pin"), SrcPinName, ItemErrors, false);
+
 			UAgentFrameworkActionUtils::TryGetStringParam(ConnObj, TEXT("target_node"), DstNodeName, ItemErrors, false);
+			if (DstNodeName.IsEmpty()) UAgentFrameworkActionUtils::TryGetStringParam(ConnObj, TEXT("to_node"), DstNodeName, ItemErrors, false);
+
 			UAgentFrameworkActionUtils::TryGetStringParam(ConnObj, TEXT("target_pin"), DstPinName, ItemErrors, false);
+			if (DstPinName.IsEmpty()) UAgentFrameworkActionUtils::TryGetStringParam(ConnObj, TEXT("to_pin"), DstPinName, ItemErrors, false);
 
 			if (!SrcNodeName.IsEmpty() && !SrcPinName.IsEmpty() && !DstNodeName.IsEmpty() && !DstPinName.IsEmpty())
 			{
@@ -3019,13 +3029,30 @@ FAgentFrameworkActionResult FAgentFrameworkBlueprintActions::ExecuteConnectPins(
 	FString TargetPin;
 	TArray<FString> Errors;
 
-	if (!UAgentFrameworkActionUtils::TryGetStringParam(Params, TEXT("asset_path"), AssetPath, Errors, true) ||
-		!UAgentFrameworkActionUtils::TryGetStringParam(Params, TEXT("source_node"), SourceNode, Errors, true) ||
-		!UAgentFrameworkActionUtils::TryGetStringParam(Params, TEXT("source_pin"), SourcePin, Errors, true) ||
-		!UAgentFrameworkActionUtils::TryGetStringParam(Params, TEXT("target_node"), TargetNode, Errors, true) ||
-		!UAgentFrameworkActionUtils::TryGetStringParam(Params, TEXT("target_pin"), TargetPin, Errors, true))
+	if (!UAgentFrameworkActionUtils::TryGetStringParam(Params, TEXT("asset_path"), AssetPath, Errors, true))
 	{
 		Result.Errors.Append(Errors);
+		return Result;
+	}
+
+	if (!Params->TryGetStringField(TEXT("source_node"), SourceNode) && !Params->TryGetStringField(TEXT("from_node"), SourceNode))
+	{
+		Result.Errors.Add(TEXT("Missing required parameter: source_node or from_node"));
+		return Result;
+	}
+	if (!Params->TryGetStringField(TEXT("source_pin"), SourcePin) && !Params->TryGetStringField(TEXT("from_pin"), SourcePin))
+	{
+		Result.Errors.Add(TEXT("Missing required parameter: source_pin or from_pin"));
+		return Result;
+	}
+	if (!Params->TryGetStringField(TEXT("target_node"), TargetNode) && !Params->TryGetStringField(TEXT("to_node"), TargetNode))
+	{
+		Result.Errors.Add(TEXT("Missing required parameter: target_node or to_node"));
+		return Result;
+	}
+	if (!Params->TryGetStringField(TEXT("target_pin"), TargetPin) && !Params->TryGetStringField(TEXT("to_pin"), TargetPin))
+	{
+		Result.Errors.Add(TEXT("Missing required parameter: target_pin or to_pin"));
 		return Result;
 	}
 	TArray<FString> OptErrors;
