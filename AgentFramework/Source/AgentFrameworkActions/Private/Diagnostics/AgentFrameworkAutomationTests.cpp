@@ -6,6 +6,7 @@
 #include "Cpp/AgentFrameworkCppActions.h"
 #include "Widget/AgentFrameworkWidgetActions.h"
 #include "Diagnostics/AgentFrameworkDiagnosticsActions.h"
+#include "Context/AgentFrameworkContextActions.h"
 #include "Dom/JsonObject.h"
 #include "AgentFrameworkActionUtils.h"
 #include "AIAssistant/AIAssistantBridge.h"
@@ -69,30 +70,46 @@ bool FAgentFrameworkTokenEfficiencyTest::RunTest(const FString& Parameters)
 	FString ActorPath = TEXT("/Game/AgentFramework_TestActor");
 	FString WidgetPath = TEXT("/Game/AgentFramework_TestWidget");
 
-	// Clean up any left-over assets from previous failed test runs
-	FAssetRegistryModule& AssetRegistryModule = FModuleManager::LoadModuleChecked<FAssetRegistryModule>("AssetRegistry");
-	FAssetData ExistingActorAsset = AssetRegistryModule.Get().GetAssetByObjectPath(FSoftObjectPath(ActorPath + TEXT(".") + FPackageName::GetShortName(ActorPath)));
-	if (ExistingActorAsset.IsValid())
+	// Delete the test assets. Run both before and after the test body: cleaning up on the way
+	// out keeps the host project free of test residue, and cleaning up on the way in recovers
+	// from a previous run that crashed before it could.
+	//
+	// Uses the plugin's own delete_asset rather than a bare ObjectTools::DeleteObjects call.
+	// DeleteObjects leaves the .uasset on disk when the object is still referenced, which is
+	// exactly what happened here — the end-of-test cleanup looked correct but the files
+	// survived every headless run. ExecuteDeleteAsset falls back through the editor asset
+	// subsystem, ObjectTools, and finally a direct file delete.
+	auto DeleteTestAssets = [&ActorPath, &WidgetPath]()
 	{
-		UObject* Obj = ExistingActorAsset.GetAsset();
-		if (Obj)
+		FAgentFrameworkContextActions ContextActions;
+		for (const FString& PackagePath : { ActorPath, WidgetPath })
 		{
-			TArray<UObject*> AssetsToDelete;
-			AssetsToDelete.Add(Obj);
-			ObjectTools::DeleteObjects(AssetsToDelete, false);
+			TSharedRef<FJsonObject> DeleteParams = MakeShared<FJsonObject>();
+			DeleteParams->SetStringField(TEXT("tool_name"), TEXT("delete_asset"));
+			DeleteParams->SetStringField(TEXT("asset_path"), PackagePath);
+			ContextActions.ExecuteAction(DeleteParams);
 		}
-	}
-	FAssetData ExistingWidgetAsset = AssetRegistryModule.Get().GetAssetByObjectPath(FSoftObjectPath(WidgetPath + TEXT(".") + FPackageName::GetShortName(WidgetPath)));
-	if (ExistingWidgetAsset.IsValid())
+	};
+
+	// True only when neither the in-memory asset nor its package file remains.
+	auto TestAssetsRemain = [&ActorPath, &WidgetPath]()
 	{
-		UObject* Obj = ExistingWidgetAsset.GetAsset();
-		if (Obj)
+		for (const FString& PackagePath : { ActorPath, WidgetPath })
 		{
-			TArray<UObject*> AssetsToDelete;
-			AssetsToDelete.Add(Obj);
-			ObjectTools::DeleteObjects(AssetsToDelete, false);
+			FString PackageName, PackageDir, AssetName;
+			UAgentFrameworkActionUtils::SplitAssetPath(PackagePath, PackageName, PackageDir, AssetName);
+
+			FString PackageFilename;
+			if (FPackageName::TryConvertLongPackageNameToFilename(PackageName, PackageFilename, FPackageName::GetAssetPackageExtension())
+				&& FPaths::FileExists(PackageFilename))
+			{
+				return true;
+			}
 		}
-	}
+		return false;
+	};
+
+	DeleteTestAssets();
 
 	FAgentFrameworkBlueprintActions BlueprintActions;
 	FAgentFrameworkWidgetActions WidgetActions;
@@ -294,8 +311,13 @@ bool FAgentFrameworkTokenEfficiencyTest::RunTest(const FString& Parameters)
 		FAgentFrameworkActionResult Res = WidgetActions.ExecuteAction(Params);
 		TestTrue(TEXT("instantiate_ui_hierarchy should execute successfully"), Res.bSuccess);
 
-		// Verify the constructed UI hierarchy in the Widget Blueprint asset
-		UWidgetBlueprint* WidgetBP = Cast<UWidgetBlueprint>(ExistingWidgetAsset.GetAsset());
+		// Verify the constructed UI hierarchy in the Widget Blueprint asset. The pre-test
+		// FAssetData lookup is gone now that cleanup runs through delete_asset, so load the
+		// freshly created asset by its object path instead.
+		FString WidgetPackageName, WidgetPackageDir, WidgetAssetName;
+		UAgentFrameworkActionUtils::SplitAssetPath(WidgetPath, WidgetPackageName, WidgetPackageDir, WidgetAssetName);
+		UWidgetBlueprint* WidgetBP = LoadObject<UWidgetBlueprint>(
+			nullptr, *FString::Printf(TEXT("%s.%s"), *WidgetPackageName, *WidgetAssetName));
 		if (WidgetBP)
 		{
 			WidgetBP->PostLoad(); // Ensure it is fully loaded/constructed
@@ -342,24 +364,12 @@ bool FAgentFrameworkTokenEfficiencyTest::RunTest(const FString& Parameters)
 	// ========================================================================
 	// Cleanup Assets
 	// ========================================================================
-	{
-		TArray<UObject*> AssetsToDelete;
-		FAssetData ActorAsset = AssetRegistryModule.Get().GetAssetByObjectPath(FSoftObjectPath(ActorPath + TEXT(".") + FPackageName::GetShortName(ActorPath)));
-		if (ActorAsset.IsValid() && ActorAsset.GetAsset())
-		{
-			AssetsToDelete.Add(ActorAsset.GetAsset());
-		}
-		FAssetData WidgetAsset = AssetRegistryModule.Get().GetAssetByObjectPath(FSoftObjectPath(WidgetPath + TEXT(".") + FPackageName::GetShortName(WidgetPath)));
-		if (WidgetAsset.IsValid() && WidgetAsset.GetAsset())
-		{
-			AssetsToDelete.Add(WidgetAsset.GetAsset());
-		}
+	DeleteTestAssets();
 
-		if (AssetsToDelete.Num() > 0)
-		{
-			ObjectTools::DeleteObjects(AssetsToDelete, false);
-		}
-	}
+	// Assert the cleanup actually worked. The previous implementation reported nothing when
+	// deletion silently failed, so every headless run left AgentFramework_TestActor.uasset and
+	// AgentFramework_TestWidget.uasset behind in the host project.
+	TestFalse(TEXT("Test assets must not survive the run"), TestAssetsRemain());
 
 	return true;
 }
