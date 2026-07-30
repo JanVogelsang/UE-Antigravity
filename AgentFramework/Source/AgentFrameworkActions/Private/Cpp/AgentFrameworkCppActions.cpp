@@ -330,12 +330,22 @@ FAgentFrameworkActionResult FAgentFrameworkCppActions::ExecuteCreateCppClass(con
 	FString HeaderPath = FPaths::Combine(PublicDir, ClassName + TEXT(".h"));
 	FString CppPath = FPaths::Combine(PrivateDir, ClassName + TEXT(".cpp"));
 
+	// Validate before creating anything. WriteFileWithBackup would refuse a bad path anyway,
+	// but MakeDirectory runs first, so a rejected 'subdirectory' would still leave empty
+	// directories behind — including inside the plugin the agent was just told not to touch.
+	FString WriteError;
+	if (!IsWritableSourcePath(HeaderPath, WriteError) ||
+		(!CppCode.IsEmpty() && !IsWritableSourcePath(CppPath, WriteError)))
+	{
+		Result.Errors.Add(WriteError);
+		return Result;
+	}
+
 	// Ensure directories exist
 	IFileManager::Get().MakeDirectory(*PublicDir, true);
 	IFileManager::Get().MakeDirectory(*PrivateDir, true);
 
 	// Write header
-	FString WriteError;
 	if (!WriteFileWithBackup(HeaderPath, HeaderCode, WriteError))
 	{
 		Result.Errors.Add(WriteError);
@@ -703,6 +713,15 @@ FAgentFrameworkActionResult FAgentFrameworkCppActions::ExecuteMacroCreateCppClas
 		"}\n"
 	), *ClassName, *FullClassName, *FullClassName);
 
+	// Validate before creating anything, so a rejected 'module_name' cannot leave empty
+	// directories behind (see the equivalent guard in ExecuteCreateCppClass).
+	FString WriteError;
+	if (!IsWritableSourcePath(HeaderPath, WriteError) || !IsWritableSourcePath(CppPath, WriteError))
+	{
+		Result.Errors.Add(WriteError);
+		return Result;
+	}
+
 	// Ensure directories exist
 	if (bUsePublicPrivate)
 	{
@@ -714,7 +733,6 @@ FAgentFrameworkActionResult FAgentFrameworkCppActions::ExecuteMacroCreateCppClas
 		IFileManager::Get().MakeDirectory(*ModuleDir, true);
 	}
 
-	FString WriteError;
 	if (!WriteFileWithBackup(HeaderPath, HeaderContent, WriteError))
 	{
 		Result.Errors.Add(WriteError);

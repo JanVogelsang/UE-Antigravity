@@ -91,17 +91,14 @@ namespace AgentFrameworkLogCaptureInternal
 	}
 }
 
-void FAgentFrameworkLogCapture::GetLogDeltaEntries(uint64 StartIndex, TArray<FString>& OutErrors, TArray<FString>& OutWarnings, int32 MaxPerSeverity)
+void FAgentFrameworkLogCapture::GetLogDeltaEntries(uint64 StartIndex, FAgentFrameworkLogDelta& OutDelta, int32 MaxPerSeverity)
 {
 	FScopeLock Lock(&LogLock);
 
-	OutErrors.Reset();
-	OutWarnings.Reset();
-
-	if (MaxPerSeverity <= 0)
-	{
-		return;
-	}
+	OutDelta.Errors.Reset();
+	OutDelta.Warnings.Reset();
+	OutDelta.TotalErrors = 0;
+	OutDelta.TotalWarnings = 0;
 
 	uint64 EntriesPassed = (TotalEntriesEver >= StartIndex) ? (TotalEntriesEver - StartIndex) : 0;
 	int32 OffsetFromHead = Entries.Num() - static_cast<int32>(FMath::Min<uint64>(EntriesPassed, static_cast<uint64>(Entries.Num())));
@@ -118,13 +115,18 @@ void FAgentFrameworkLogCapture::GetLogDeltaEntries(uint64 StartIndex, TArray<FSt
 			continue;
 		}
 
-		TArray<FString>& Target = bIsError ? OutErrors : OutWarnings;
-		if (Target.Num() >= MaxPerSeverity)
+		if (bIsWarning && AgentFrameworkLogCaptureInternal::IsLowSignalWarningCategory(Entry.Category))
 		{
 			continue;
 		}
 
-		if (bIsWarning && AgentFrameworkLogCaptureInternal::IsLowSignalWarningCategory(Entry.Category))
+		// Count every eligible entry, even the ones the cap drops, so the caller can report
+		// how much it is not showing rather than passing off a truncated list as complete.
+		TArray<FString>& Target = bIsError ? OutDelta.Errors : OutDelta.Warnings;
+		int32& Total = bIsError ? OutDelta.TotalErrors : OutDelta.TotalWarnings;
+		++Total;
+
+		if (MaxPerSeverity <= 0 || Target.Num() >= MaxPerSeverity)
 		{
 			continue;
 		}

@@ -317,9 +317,20 @@ private:
 	// bridge relays verbatim on success, so the text copy is what the agent actually reads.
 	if (LogCapture.IsValid() && ToolCall.ToolName != TEXT("read_message_log"))
 	{
-		TArray<FString> CapturedErrors;
-		TArray<FString> CapturedWarnings;
-		LogCapture->GetLogDeltaEntries(BaselineLogIndex, CapturedErrors, CapturedWarnings);
+		FAgentFrameworkLogDelta LogDelta;
+		LogCapture->GetLogDeltaEntries(BaselineLogIndex, LogDelta);
+
+		const TArray<FString>& CapturedErrors = LogDelta.Errors;
+		const TArray<FString>& CapturedWarnings = LogDelta.Warnings;
+
+		// Say how many entries exist, not how many survived the cap — a truncated list
+		// presented as the complete set is the blindness this whole mechanism exists to fix.
+		auto DescribeCount = [](int32 Shown, int32 Total)
+		{
+			return (Total > Shown)
+				? FString::Printf(TEXT("%d, showing first %d"), Total, Shown)
+				: FString::Printf(TEXT("%d"), Total);
+		};
 
 		// Drop anything the executor already reported so the agent does not read it twice.
 		auto IsAlreadyReported = [&ScopedTelemetry](const FString& Line)
@@ -350,7 +361,8 @@ private:
 
 		if (CapturedErrors.Num() > 0)
 		{
-			Diagnostics += FString::Printf(TEXT("\n\n--- Diagnostics Log (%d Error(s) emitted during execution) ---\n"), CapturedErrors.Num());
+			Diagnostics += FString::Printf(TEXT("\n\n--- Diagnostics Log (%s Error(s) emitted during execution) ---\n"),
+				*DescribeCount(CapturedErrors.Num(), LogDelta.TotalErrors));
 			for (const FString& Line : CapturedErrors)
 			{
 				Diagnostics += FString::Printf(TEXT("  - %s\n"), *Line);
@@ -363,7 +375,8 @@ private:
 
 		if (CapturedWarnings.Num() > 0)
 		{
-			Diagnostics += FString::Printf(TEXT("\n\n--- Diagnostics Log (%d Warning(s) emitted during execution) ---\n"), CapturedWarnings.Num());
+			Diagnostics += FString::Printf(TEXT("\n\n--- Diagnostics Log (%s Warning(s) emitted during execution) ---\n"),
+				*DescribeCount(CapturedWarnings.Num(), LogDelta.TotalWarnings));
 			for (const FString& Line : CapturedWarnings)
 			{
 				Diagnostics += FString::Printf(TEXT("  - %s\n"), *Line);

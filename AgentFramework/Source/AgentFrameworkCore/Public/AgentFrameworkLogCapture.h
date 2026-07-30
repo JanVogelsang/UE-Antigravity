@@ -13,6 +13,22 @@ struct FAgentFrameworkLogEntry
 	double Time;
 };
 
+/** Errors and warnings emitted during a window of log output, plus how many there really were. */
+struct FAgentFrameworkLogDelta
+{
+	/** Error/fatal lines, de-duplicated and capped. */
+	TArray<FString> Errors;
+
+	/** Warning lines, de-duplicated and capped, excluding low-signal categories. */
+	TArray<FString> Warnings;
+
+	/** Every error/fatal entry in the window, before de-duplication and capping. */
+	int32 TotalErrors = 0;
+
+	/** Every warning that passed the category filter, before de-duplication and capping. */
+	int32 TotalWarnings = 0;
+};
+
 /**
  * Output device that captures log messages into a thread-safe circular buffer.
  * Singleton attached to GLog during module init or first query.
@@ -39,9 +55,11 @@ public:
 	 * warnings emitted during the tool call.
 	 *
 	 * Entries are de-duplicated, truncated to 300 chars, and capped at MaxPerSeverity per
-	 * severity to keep tool responses small. Low-signal categories are filtered out.
+	 * severity to keep tool responses small. Low-signal categories are filtered out. The
+	 * Total* counts report how many entries were actually eligible, so callers can say how
+	 * many were dropped instead of presenting a truncated list as the whole picture.
 	 */
-	void GetLogDeltaEntries(uint64 StartIndex, TArray<FString>& OutErrors, TArray<FString>& OutWarnings, int32 MaxPerSeverity = 8);
+	void GetLogDeltaEntries(uint64 StartIndex, FAgentFrameworkLogDelta& OutDelta, int32 MaxPerSeverity = 8);
 
 	/** Thread-safely copies captured entries into OutEntries. */
 	void GetEntries(TArray<FAgentFrameworkLogEntry>& OutEntries);

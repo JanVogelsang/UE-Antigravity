@@ -212,6 +212,7 @@ FAgentFrameworkActionResult FAgentFrameworkAnimationActions::ExecuteCreateAnimBl
 	// calls routinely, so this path must be idempotent rather than fatal.
 	const FString ObjectPath = FString::Printf(TEXT("%s.%s"), *PackageName, *AssetName);
 	UAnimBlueprint* NewAnimBP = nullptr;
+	bool bReusedExisting = false;
 
 	UObject* InMemoryAsset = FindObject<UObject>(nullptr, *ObjectPath);
 	if (InMemoryAsset != nullptr || FPackageName::DoesPackageExist(PackageName))
@@ -230,8 +231,22 @@ FAgentFrameworkActionResult FAgentFrameworkAnimationActions::ExecuteCreateAnimBl
 			return Result;
 		}
 
+		// The reuse path never applies Factory->TargetSkeleton, so an existing asset bound to a
+		// different skeleton must be refused rather than silently returned as if it targeted the
+		// requested one — downstream bone-driven authoring would be built on a false premise.
+		if (NewAnimBP->TargetSkeleton != Skeleton)
+		{
+			Result.Errors.Add(FString::Printf(
+				TEXT("Animation Blueprint '%s' already exists but targets skeleton '%s', not the requested '%s'. Call delete_asset on this path first, or choose a different asset_path."),
+				*PackageName,
+				IsValid(NewAnimBP->TargetSkeleton) ? *NewAnimBP->TargetSkeleton->GetPathName() : TEXT("None"),
+				*SkeletonPath));
+			return Result;
+		}
+
+		bReusedExisting = true;
 		Result.Warnings.Add(FString::Printf(
-			TEXT("Animation Blueprint '%s' already existed, so it was reused rather than recreated. Its existing AnimGraph was left in place."),
+			TEXT("Animation Blueprint '%s' already existed with the requested skeleton, so it was reused rather than recreated. Its existing AnimGraph was left in place."),
 			*PackageName));
 		UE_LOG(LogAgentFramework, Log, TEXT("AnimationActions: Reusing existing AnimBP '%s'"), *PackageName);
 	}
@@ -260,17 +275,21 @@ FAgentFrameworkActionResult FAgentFrameworkAnimationActions::ExecuteCreateAnimBl
 			UPackage::SavePackage(Package, NewAnimBP, *PackageFilename, SaveArgs);
 		}
 	}
-	FAssetRegistryModule::AssetCreated(NewAnimBP);
+	if (!bReusedExisting)
+	{
+		FAssetRegistryModule::AssetCreated(NewAnimBP);
+	}
 
-	UE_LOG(LogAgentFramework, Log, TEXT("AnimationActions: Created AnimBP '%s' targeting skeleton '%s'"), *AssetPath, *SkeletonPath);
+	UE_LOG(LogAgentFramework, Log, TEXT("AnimationActions: %s AnimBP '%s' targeting skeleton '%s'"),
+		bReusedExisting ? TEXT("Reused") : TEXT("Created"), *AssetPath, *SkeletonPath);
 
 	Result.bSuccess = true;
 	Result.ResultMessage = FString::Printf(
-		TEXT("Created Animation Blueprint '%s' targeting skeleton '%s'.\n"
+		TEXT("%s Animation Blueprint '%s' targeting skeleton '%s'.\n"
 		     "Architecture note: The AnimGraph (blend nodes, state machines) must be authored in the editor UI. "
 		     "The EventGraph (variable caching from the owning Pawn) can be wired via inject_blueprint_nodes_t3d. "
 		     "Assign to a character via assign_anim_blueprint."),
-		*AssetName, *SkeletonPath);
+		bReusedExisting ? TEXT("Reused existing") : TEXT("Created"), *AssetName, *SkeletonPath);
 	Result.ModifiedAssets.Add(AssetPath);
 	return Result;
 }
@@ -806,6 +825,7 @@ FAgentFrameworkActionResult FAgentFrameworkAnimationActions::ExecuteGetAnimInfo(
 		// FKismetEditorUtilities::CreateBlueprint, which asserts in Kismet2.cpp when the target
 		// package already holds a Blueprint and takes the editor down with it. Reuse instead.
 		const FString ObjectPath = FString::Printf(TEXT("%s.%s"), *PackageName, *AssetName);
+		bool bReusedExisting = false;
 		UObject* ControlRigBP = FindObject<UObject>(nullptr, *ObjectPath);
 		if (!IsValid(ControlRigBP) && FPackageName::DoesPackageExist(PackageName))
 		{
@@ -822,6 +842,7 @@ FAgentFrameworkActionResult FAgentFrameworkAnimationActions::ExecuteGetAnimInfo(
 				return Result;
 			}
 
+			bReusedExisting = true;
 			Result.Warnings.Add(FString::Printf(
 				TEXT("Control Rig '%s' already existed, so it was reused rather than recreated."),
 				*PackageName));
@@ -840,7 +861,8 @@ FAgentFrameworkActionResult FAgentFrameworkAnimationActions::ExecuteGetAnimInfo(
 		}
 
 		Result.bSuccess = true;
-		Result.ResultMessage = FString::Printf(TEXT("Created Control Rig blueprint at '%s'."), *AssetPath);
+		Result.ResultMessage = FString::Printf(TEXT("%s Control Rig blueprint at '%s'."),
+			bReusedExisting ? TEXT("Reused existing") : TEXT("Created"), *AssetPath);
 		Result.ModifiedAssets.Add(AssetPath);
 		return Result;
 	}

@@ -22,6 +22,8 @@
 #include "FileHelpers.h"
 #include "Interfaces/IPluginManager.h"
 #include "Misc/Paths.h"
+#include "AgentFrameworkLogCapture.h"
+#include "AgentFrameworkCoreModule.h"
 
 IMPLEMENT_SIMPLE_AUTOMATION_TEST(FAgentFrameworkTokenEfficiencyTest, "AgentFramework.TokenEfficiency", EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
 
@@ -862,6 +864,94 @@ bool FAgentFrameworkCppPathContainmentTest::RunTest(const FString& Parameters)
 
 	// Traversal that would resolve back out of the project.
 	ExpectRejected(FPaths::Combine(FPaths::GameSourceDir(), TEXT("..")) / TEXT("ContainmentProbe.h"), TEXT("a '..' traversal"));
+
+	// A rejected create_cpp_class must not leave directories behind: the path is validated
+	// before MakeDirectory, not just before the write.
+	//
+	// create_cpp_class builds <Project>/Source/<ModuleName>/Public, so three '..' segments are
+	// needed to climb back out to <Project>. Fewer than that still resolves inside Source/ and
+	// is legitimately allowed — the guard bounds the project's source tree, not directory depth.
+	{
+		const FString EscapingSubDir = FPaths::Combine(TEXT(".."), TEXT(".."), TEXT(".."), TEXT("ContainmentProbeDir"));
+		const FString EscapedDir = FPaths::Combine(FPaths::ProjectDir(), TEXT("ContainmentProbeDir"));
+
+		TSharedRef<FJsonObject> Params = MakeShared<FJsonObject>();
+		Params->SetStringField(TEXT("_tool_name"), TEXT("create_cpp_class"));
+		Params->SetStringField(TEXT("class_name"), TEXT("ContainmentProbe"));
+		Params->SetStringField(TEXT("header_code"), TEXT("#pragma once\n"));
+		Params->SetStringField(TEXT("subdirectory"), EscapingSubDir);
+
+		FAgentFrameworkActionResult Res = CppActions.ExecuteAction(Params);
+		TestFalse(TEXT("create_cpp_class should reject a subdirectory escaping the project source tree"), Res.bSuccess);
+		TestFalse(TEXT("Rejected create_cpp_class must not create the escaped directory"),
+			IFileManager::Get().DirectoryExists(*EscapedDir));
+	}
+
+	return true;
+}
+
+// ============================================================================
+// Log delta accounting
+// ============================================================================
+// The router prints these counts to the agent. Reporting the capped list length as the total
+// would present a truncated view as the complete one — the blindness this mechanism exists to fix.
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FAgentFrameworkLogDeltaCountsTest, "AgentFramework.LogDeltaCounts", EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
+
+bool FAgentFrameworkLogDeltaCountsTest::RunTest(const FString& Parameters)
+{
+	TSharedPtr<FAgentFrameworkLogCapture> LogCapture = FAgentFrameworkLogCapture::Get();
+	if (!LogCapture.IsValid())
+	{
+		AddError(TEXT("Log capture singleton unavailable"));
+		return false;
+	}
+
+	// Feed the capture device directly rather than via UE_LOG. FOutputDeviceRedirector buffers
+	// output and dispatches it to attached devices on a later flush, so logging and reading
+	// within one function would race; and any error logged during an automation test is itself
+	// recorded as a test failure. Serialize() is the exact entry point GLog would call.
+	const int32 Cap = 5;
+	const int32 EmittedErrors = 12;
+	const int32 EmittedWarnings = 9;
+
+	const uint64 Baseline = LogCapture->GetSnapshotIndex();
+
+	for (int32 i = 0; i < EmittedErrors; ++i)
+	{
+		LogCapture->Serialize(*FString::Printf(TEXT("LogDeltaCounts distinct error %d"), i), ELogVerbosity::Error, FName(TEXT("LogAgentFramework")));
+	}
+	for (int32 i = 0; i < EmittedWarnings; ++i)
+	{
+		LogCapture->Serialize(*FString::Printf(TEXT("LogDeltaCounts distinct warning %d"), i), ELogVerbosity::Warning, FName(TEXT("LogAgentFramework")));
+	}
+	// Low-signal categories must be excluded from the list AND the total, so the count the
+	// router prints never promises entries the agent cannot see.
+	LogCapture->Serialize(TEXT("LogDeltaCounts filtered warning"), ELogVerbosity::Warning, FName(TEXT("LogSlate")));
+
+	FAgentFrameworkLogDelta Delta;
+	LogCapture->GetLogDeltaEntries(Baseline, Delta, Cap);
+
+	TestEqual(TEXT("Shown errors are capped at MaxPerSeverity"), Delta.Errors.Num(), Cap);
+	TestEqual(TEXT("Shown warnings are capped at MaxPerSeverity"), Delta.Warnings.Num(), Cap);
+
+	TestEqual(TEXT("Total errors count every emitted entry, not just the shown ones"), Delta.TotalErrors, EmittedErrors);
+	TestEqual(TEXT("Total warnings exclude filtered categories but count the rest"), Delta.TotalWarnings, EmittedWarnings);
+
+	TestTrue(TEXT("Error total must exceed the shown list so truncation is reportable"), Delta.TotalErrors > Delta.Errors.Num());
+	TestTrue(TEXT("Warning total must exceed the shown list so truncation is reportable"), Delta.TotalWarnings > Delta.Warnings.Num());
+
+	// Duplicates collapse in the shown list but must still count toward the total.
+	const uint64 DupBaseline = LogCapture->GetSnapshotIndex();
+	for (int32 i = 0; i < 4; ++i)
+	{
+		LogCapture->Serialize(TEXT("LogDeltaCounts repeated warning"), ELogVerbosity::Warning, FName(TEXT("LogAgentFramework")));
+	}
+
+	FAgentFrameworkLogDelta DupDelta;
+	LogCapture->GetLogDeltaEntries(DupBaseline, DupDelta, Cap);
+	TestEqual(TEXT("Identical warnings collapse to one shown entry"), DupDelta.Warnings.Num(), 1);
+	TestEqual(TEXT("De-duplicated entries still count toward the total"), DupDelta.TotalWarnings, 4);
 
 	return true;
 }

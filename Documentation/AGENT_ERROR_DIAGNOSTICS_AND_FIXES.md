@@ -250,8 +250,26 @@ Reused existing Blueprint 'BP_WarningCheck' (parent: Actor). Compile: SUCCESS.
 Both an executor-authored warning and an unrelated analysis warning reached the model in the same
 response — the exact blindness Category D described.
 
+Engine-generated output reaches the agent too, not just executor-authored warnings. Calling
+`get_blueprint_info` on a non-existent asset returns:
+
+```
+Blueprint not found: '/Game/DoesNotExistAnywhere/BP_NoSuchAsset.BP_NoSuchAsset'
+--- Warnings ---
+  - [LogUObjectGlobals] Failed to find object 'Blueprint /Game/DoesNotExistAnywhere/BP_NoSuchAsset.BP_NoSuchAsset'
+```
+
+That warning is emitted inside `LoadObject` by the engine, captured by the log device, carried in
+`Result.Warnings`, and surfaced by the bridge — the full path Category D was missing.
+
 **Operational note:** `bridge/main.py` is imported once per MCP server process, so any future
 bridge change needs an MCP server restart before it takes effect.
+
+**Testing note:** log lines emitted with `UE_LOG` inside an automation test do not reach attached
+output devices synchronously, so `AgentFramework.LogDeltaCounts` drives
+`FAgentFrameworkLogCapture::Serialize` directly instead. (Logging an *error* in a test would also
+fail that test outright, since the automation framework records logged errors as failures.) The
+live probe above is what proves the `GLog` path itself.
 
 ## 5. Follow-Up Hardening
 
