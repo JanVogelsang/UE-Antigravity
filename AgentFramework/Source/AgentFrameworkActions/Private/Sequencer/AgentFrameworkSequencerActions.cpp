@@ -495,13 +495,23 @@ FAgentFrameworkActionResult FAgentFrameworkSequencerActions::ExecuteConfigureMov
 		return Result;
 	}
 
-	UObject* Queue = LoadObject<UObject>(nullptr, *QueuePath);
+	FString QueuePackageName, QueuePackagePath, QueueAssetName;
+	UAgentFrameworkActionUtils::SplitAssetPath(QueuePath, QueuePackageName, QueuePackagePath, QueueAssetName);
+
+	if (QueueAssetName.IsEmpty() || QueuePackagePath.IsEmpty())
+	{
+		Result.Errors.Add(FString::Printf(
+			TEXT("queue_path '%s' does not name an asset. Provide a full path including the asset name, e.g. /Game/Cinematics/MRQ_Shots."),
+			*QueuePath));
+		return Result;
+	}
+
+	// Load through the explicit object path — a bare package path does not reliably resolve.
+	UObject* Queue = LoadObject<UObject>(nullptr, *FString::Printf(TEXT("%s.%s"), *QueuePackageName, *QueueAssetName));
 	if (!IsValid(Queue))
 	{
-		FString PackagePath = FPackageName::GetLongPackagePath(QueuePath);
-		FString AssetName = FPackageName::GetShortName(QueuePath);
 		IAssetTools& AssetTools = FModuleManager::LoadModuleChecked<FAssetToolsModule>("AssetTools").Get();
-		Queue = AssetTools.CreateAsset(AssetName, PackagePath, QueueClass, nullptr);
+		Queue = AssetTools.CreateAsset(QueueAssetName, QueuePackagePath, QueueClass, nullptr);
 	}
 
 	if (!IsValid(Queue))

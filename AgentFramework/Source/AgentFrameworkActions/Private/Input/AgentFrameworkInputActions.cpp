@@ -182,22 +182,31 @@ FAgentFrameworkActionResult FAgentFrameworkInputActions::ExecuteCreateInputActio
 	FString ValueTypeStr;
 	UAgentFrameworkActionUtils::TryGetStringParam(Params, TEXT("value_type"), ValueTypeStr, Result.Errors, false);
 
-	// Check if asset already exists
-	if (IsValid(FindObject<UInputAction>(nullptr, *AssetPath)))
+	// Agents pass both "/Game/Input/IA_Jump" and "/Game/Input/IA_Jump.IA_Jump". Feeding the
+	// latter straight into CreatePackage() builds a malformed package, so split it first.
+	FString PackageName, PackagePath, AssetName;
+	UAgentFrameworkActionUtils::SplitAssetPath(AssetPath, PackageName, PackagePath, AssetName);
+
+	if (AssetName.IsEmpty() || PackagePath.IsEmpty())
 	{
-		Result.bSuccess = true;
-		Result.ResultMessage = FString::Printf(TEXT("Input Action already exists at %s"), *AssetPath);
+		Result.Errors.Add(FString::Printf(
+			TEXT("asset_path '%s' does not name an asset. Provide a full path including the asset name, e.g. /Game/Input/IA_Jump."),
+			*AssetPath));
 		return Result;
 	}
 
-	// Extract package path and asset name
-	FString PackagePath = AssetPath;
-	FString AssetName = FPackageName::GetLongPackageAssetName(AssetPath);
+	// Check if asset already exists
+	if (IsValid(FindObject<UInputAction>(nullptr, *FString::Printf(TEXT("%s.%s"), *PackageName, *AssetName))))
+	{
+		Result.bSuccess = true;
+		Result.ResultMessage = FString::Printf(TEXT("Input Action already exists at %s"), *PackageName);
+		return Result;
+	}
 
-	UPackage* Package = CreatePackage(*PackagePath);
+	UPackage* Package = CreatePackage(*PackageName);
 	if (!IsValid(Package))
 	{
-		Result.Errors.Add(FString::Printf(TEXT("Failed to create package: %s"), *PackagePath));
+		Result.Errors.Add(FString::Printf(TEXT("Failed to create package: %s"), *PackageName));
 		return Result;
 	}
 
@@ -218,9 +227,9 @@ FAgentFrameworkActionResult FAgentFrameworkInputActions::ExecuteCreateInputActio
 	NewAction->bConsumeInput = bConsumeInput;
 
 	// Save
-	if (!SaveAssetPackage(Package, NewAction, PackagePath))
+	if (!SaveAssetPackage(Package, NewAction, PackageName))
 	{
-		Result.Errors.Add(FString::Printf(TEXT("Failed to save Input Action to disk: %s"), *PackagePath));
+		Result.Errors.Add(FString::Printf(TEXT("Failed to save Input Action to disk: %s"), *PackageName));
 		return Result;
 	}
 
@@ -250,20 +259,29 @@ FAgentFrameworkActionResult FAgentFrameworkInputActions::ExecuteCreateInputMappi
 		return Result;
 	}
 
-	// Check if asset already exists
-	if (IsValid(FindObject<UInputMappingContext>(nullptr, *AssetPath)))
+	FString PackageName, PackagePath, AssetName;
+	UAgentFrameworkActionUtils::SplitAssetPath(AssetPath, PackageName, PackagePath, AssetName);
+
+	if (AssetName.IsEmpty() || PackagePath.IsEmpty())
 	{
-		Result.bSuccess = true;
-		Result.ResultMessage = FString::Printf(TEXT("Input Mapping Context already exists at %s"), *AssetPath);
+		Result.Errors.Add(FString::Printf(
+			TEXT("asset_path '%s' does not name an asset. Provide a full path including the asset name, e.g. /Game/Input/IMC_Default."),
+			*AssetPath));
 		return Result;
 	}
 
-	FString AssetName = FPackageName::GetLongPackageAssetName(AssetPath);
+	// Check if asset already exists
+	if (IsValid(FindObject<UInputMappingContext>(nullptr, *FString::Printf(TEXT("%s.%s"), *PackageName, *AssetName))))
+	{
+		Result.bSuccess = true;
+		Result.ResultMessage = FString::Printf(TEXT("Input Mapping Context already exists at %s"), *PackageName);
+		return Result;
+	}
 
-	UPackage* Package = CreatePackage(*AssetPath);
+	UPackage* Package = CreatePackage(*PackageName);
 	if (!IsValid(Package))
 	{
-		Result.Errors.Add(FString::Printf(TEXT("Failed to create package: %s"), *AssetPath));
+		Result.Errors.Add(FString::Printf(TEXT("Failed to create package: %s"), *PackageName));
 		return Result;
 	}
 
@@ -276,9 +294,9 @@ FAgentFrameworkActionResult FAgentFrameworkInputActions::ExecuteCreateInputMappi
 	}
 
 	// Save
-	if (!SaveAssetPackage(Package, NewIMC, AssetPath))
+	if (!SaveAssetPackage(Package, NewIMC, PackageName))
 	{
-		Result.Errors.Add(FString::Printf(TEXT("Failed to save IMC to disk: %s"), *AssetPath));
+		Result.Errors.Add(FString::Printf(TEXT("Failed to save IMC to disk: %s"), *PackageName));
 		return Result;
 	}
 

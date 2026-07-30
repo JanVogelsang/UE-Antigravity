@@ -363,8 +363,17 @@ FAgentFrameworkActionResult FAgentFrameworkMeshActions::ExecuteCreateDynamicMesh
 		return Result;
 	}
 
-	FString PackagePath = FPackageName::GetLongPackagePath(AssetPath);
-	FString AssetName = FPackageName::GetShortName(AssetPath);
+	FString PackageName, PackagePath, AssetName;
+	UAgentFrameworkActionUtils::SplitAssetPath(AssetPath, PackageName, PackagePath, AssetName);
+
+	if (AssetName.IsEmpty() || PackagePath.IsEmpty())
+	{
+		Result.Errors.Add(FString::Printf(
+			TEXT("asset_path '%s' does not name an asset. Provide a full path including the asset name, e.g. /Game/Meshes/DM_Terrain."),
+			*AssetPath));
+		return Result;
+	}
+
 	IAssetTools& AssetTools = FModuleManager::LoadModuleChecked<FAssetToolsModule>("AssetTools").Get();
 	UObject* Mesh = AssetTools.CreateAsset(AssetName, PackagePath, DynamicMeshClass, nullptr);
 
@@ -524,8 +533,17 @@ FAgentFrameworkActionResult FAgentFrameworkMeshActions::ExecuteSetupDataflowGrap
 		return Result;
 	}
 
-	FString PackagePath = FPackageName::GetLongPackagePath(AssetPath);
-	FString AssetName = FPackageName::GetShortName(AssetPath);
+	FString PackageName, PackagePath, AssetName;
+	UAgentFrameworkActionUtils::SplitAssetPath(AssetPath, PackageName, PackagePath, AssetName);
+
+	if (AssetName.IsEmpty() || PackagePath.IsEmpty())
+	{
+		Result.Errors.Add(FString::Printf(
+			TEXT("asset_path '%s' does not name an asset. Provide a full path including the asset name, e.g. /Game/Meshes/DF_Fracture."),
+			*AssetPath));
+		return Result;
+	}
+
 	IAssetTools& AssetTools = FModuleManager::LoadModuleChecked<FAssetToolsModule>("AssetTools").Get();
 	UObject* DataflowObj = AssetTools.CreateAsset(AssetName, PackagePath, DataflowClass, nullptr);
 

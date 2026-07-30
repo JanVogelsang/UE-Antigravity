@@ -168,10 +168,19 @@ FAgentFrameworkActionResult FAgentFrameworkNiagaraActions::ExecuteCreateSystem(c
 	{
 		return Result;
 	}
-	FString PackagePath = FPackageName::GetLongPackagePath(AssetPath);
-	FString AssetName = FPackageName::GetShortName(AssetPath);
+	FString PackageName, PackagePath, AssetName;
+	UAgentFrameworkActionUtils::SplitAssetPath(AssetPath, PackageName, PackagePath, AssetName);
 
-	UNiagaraSystem* ExistingSystem = LoadObject<UNiagaraSystem>(nullptr, *AssetPath);
+	if (AssetName.IsEmpty() || PackagePath.IsEmpty())
+	{
+		Result.Errors.Add(FString::Printf(
+			TEXT("asset_path '%s' does not name an asset. Provide a full path including the asset name, e.g. /Game/VFX/NS_Explosion."),
+			*AssetPath));
+		return Result;
+	}
+
+	// Load through the explicit object path — a bare package path does not reliably resolve.
+	UNiagaraSystem* ExistingSystem = LoadObject<UNiagaraSystem>(nullptr, *FString::Printf(TEXT("%s.%s"), *PackageName, *AssetName));
 	if (IsValid(ExistingSystem))
 	{
 		Result.bSuccess = true;

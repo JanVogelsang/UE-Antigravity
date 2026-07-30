@@ -408,8 +408,17 @@ FAgentFrameworkActionResult FAgentFrameworkLevelActions::ExecuteCreateFoliageTyp
 		return Result;
 	}
 
-	FString PackagePath = FPackageName::GetLongPackagePath(AssetPath);
-	FString AssetName = FPackageName::GetShortName(AssetPath);
+	FString PackageName, PackagePath, AssetName;
+	UAgentFrameworkActionUtils::SplitAssetPath(AssetPath, PackageName, PackagePath, AssetName);
+
+	if (AssetName.IsEmpty() || PackagePath.IsEmpty())
+	{
+		Result.Errors.Add(FString::Printf(
+			TEXT("asset_path '%s' does not name an asset. Provide a full path including the asset name, e.g. /Game/Foliage/FT_Grass."),
+			*AssetPath));
+		return Result;
+	}
+
 	IAssetTools& AssetTools = FModuleManager::LoadModuleChecked<FAssetToolsModule>("AssetTools").Get();
 	UObject* FoliageType = AssetTools.CreateAsset(AssetName, PackagePath, FoliageClass, nullptr);
 
@@ -487,8 +496,17 @@ FAgentFrameworkActionResult FAgentFrameworkLevelActions::ExecuteCreateLandscapeG
 		return Result;
 	}
 
-	FString PackagePath = FPackageName::GetLongPackagePath(AssetPath);
-	FString AssetName = FPackageName::GetShortName(AssetPath);
+	FString PackageName, PackagePath, AssetName;
+	UAgentFrameworkActionUtils::SplitAssetPath(AssetPath, PackageName, PackagePath, AssetName);
+
+	if (AssetName.IsEmpty() || PackagePath.IsEmpty())
+	{
+		Result.Errors.Add(FString::Printf(
+			TEXT("asset_path '%s' does not name an asset. Provide a full path including the asset name, e.g. /Game/Landscape/LGT_Grass."),
+			*AssetPath));
+		return Result;
+	}
+
 	IAssetTools& AssetTools = FModuleManager::LoadModuleChecked<FAssetToolsModule>("AssetTools").Get();
 	UObject* GrassType = AssetTools.CreateAsset(AssetName, PackagePath, GrassTypeClass, nullptr);
 

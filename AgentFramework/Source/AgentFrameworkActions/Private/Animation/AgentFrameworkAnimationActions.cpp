@@ -167,8 +167,18 @@ FAgentFrameworkActionResult FAgentFrameworkAnimationActions::ExecuteCreateAnimBl
 		return Result;
 	}
 
-	FString PackagePath = FPackageName::GetLongPackagePath(AssetPath);
-	FString AssetName   = FPackageName::GetShortName(AssetPath);
+	// Agents pass both "/Game/Anim/ABP_Hero" and "/Game/Anim/ABP_Hero.ABP_Hero". GetShortName()
+	// keeps the object suffix, which makes CreateAsset build a malformed package.
+	FString PackageName, PackagePath, AssetName;
+	UAgentFrameworkActionUtils::SplitAssetPath(AssetPath, PackageName, PackagePath, AssetName);
+
+	if (AssetName.IsEmpty() || PackagePath.IsEmpty())
+	{
+		Result.Errors.Add(FString::Printf(
+			TEXT("asset_path '%s' does not name an asset. Provide a full path including the asset name, e.g. /Game/Animations/ABP_MyCharacter."),
+			*AssetPath));
+		return Result;
+	}
 
 	IAssetTools& AssetTools = FModuleManager::LoadModuleChecked<FAssetToolsModule>("AssetTools").Get();
 
@@ -196,13 +206,45 @@ FAgentFrameworkActionResult FAgentFrameworkAnimationActions::ExecuteCreateAnimBl
 		}
 	}
 
-	UObject* NewAsset = AssetTools.CreateAsset(AssetName, PackagePath, UAnimBlueprint::StaticClass(), Factory);
-	UAnimBlueprint* NewAnimBP = Cast<UAnimBlueprint>(NewAsset);
+	// Reuse an existing Animation Blueprint rather than creating over it. CreateAsset reaches
+	// FKismetEditorUtilities::CreateBlueprint, which asserts in Kismet2.cpp when the target
+	// package already holds a Blueprint and brings the editor down with it. Agents retry tool
+	// calls routinely, so this path must be idempotent rather than fatal.
+	const FString ObjectPath = FString::Printf(TEXT("%s.%s"), *PackageName, *AssetName);
+	UAnimBlueprint* NewAnimBP = nullptr;
 
-	if (!IsValid(NewAnimBP))
+	UObject* InMemoryAsset = FindObject<UObject>(nullptr, *ObjectPath);
+	if (InMemoryAsset != nullptr || FPackageName::DoesPackageExist(PackageName))
 	{
-		Result.Errors.Add(FString::Printf(TEXT("Failed to create Animation Blueprint at '%s'."), *AssetPath));
-		return Result;
+		NewAnimBP = Cast<UAnimBlueprint>(InMemoryAsset);
+		if (!IsValid(NewAnimBP))
+		{
+			NewAnimBP = LoadObject<UAnimBlueprint>(nullptr, *ObjectPath);
+		}
+
+		if (!IsValid(NewAnimBP))
+		{
+			Result.Errors.Add(FString::Printf(
+				TEXT("An asset already exists at '%s' but could not be loaded as an Animation Blueprint. Call delete_asset on this path first, or choose a different asset_path."),
+				*PackageName));
+			return Result;
+		}
+
+		Result.Warnings.Add(FString::Printf(
+			TEXT("Animation Blueprint '%s' already existed, so it was reused rather than recreated. Its existing AnimGraph was left in place."),
+			*PackageName));
+		UE_LOG(LogAgentFramework, Log, TEXT("AnimationActions: Reusing existing AnimBP '%s'"), *PackageName);
+	}
+	else
+	{
+		UObject* NewAsset = AssetTools.CreateAsset(AssetName, PackagePath, UAnimBlueprint::StaticClass(), Factory);
+		NewAnimBP = Cast<UAnimBlueprint>(NewAsset);
+
+		if (!IsValid(NewAnimBP))
+		{
+			Result.Errors.Add(FString::Printf(TEXT("Failed to create Animation Blueprint at '%s'."), *PackageName));
+			return Result;
+		}
 	}
 
 	// Save
@@ -451,8 +493,16 @@ FAgentFrameworkActionResult FAgentFrameworkAnimationActions::ExecuteCreateAnimMo
 		return Result;
 	}
 
-	FString PackagePath = FPackageName::GetLongPackagePath(AssetPath);
-	FString AssetName   = FPackageName::GetShortName(AssetPath);
+	FString PackageName, PackagePath, AssetName;
+	UAgentFrameworkActionUtils::SplitAssetPath(AssetPath, PackageName, PackagePath, AssetName);
+
+	if (AssetName.IsEmpty() || PackagePath.IsEmpty())
+	{
+		Result.Errors.Add(FString::Printf(
+			TEXT("asset_path '%s' does not name an asset. Provide a full path including the asset name, e.g. /Game/Animations/AM_Attack."),
+			*AssetPath));
+		return Result;
+	}
 
 	IAssetTools& AssetTools = FModuleManager::LoadModuleChecked<FAssetToolsModule>("AssetTools").Get();
 
@@ -617,8 +667,17 @@ FAgentFrameworkActionResult FAgentFrameworkAnimationActions::ExecuteGetAnimInfo(
 			return Result;
 		}
 
-		FString DBPkgPath = FPackageName::GetLongPackagePath(AssetPath);
-		FString DBName = FPackageName::GetShortName(AssetPath);
+		FString DBPackageName, DBPkgPath, DBName;
+		UAgentFrameworkActionUtils::SplitAssetPath(AssetPath, DBPackageName, DBPkgPath, DBName);
+
+		if (DBName.IsEmpty() || DBPkgPath.IsEmpty())
+		{
+			Result.Errors.Add(FString::Printf(
+				TEXT("asset_path '%s' does not name an asset. Provide a full path including the asset name, e.g. /Game/Animations/PSD_Locomotion."),
+				*AssetPath));
+			return Result;
+		}
+
 		IAssetTools& AssetTools = FModuleManager::LoadModuleChecked<FAssetToolsModule>("AssetTools").Get();
 		UObject* Database = AssetTools.CreateAsset(DBName, DBPkgPath, DBClass, nullptr);
 
@@ -649,8 +708,17 @@ FAgentFrameworkActionResult FAgentFrameworkAnimationActions::ExecuteGetAnimInfo(
 			return Result;
 		}
 
-		FString PkgPath = FPackageName::GetLongPackagePath(AssetPath);
-		FString AssetName = FPackageName::GetShortName(AssetPath);
+		FString PackageName, PkgPath, AssetName;
+		UAgentFrameworkActionUtils::SplitAssetPath(AssetPath, PackageName, PkgPath, AssetName);
+
+		if (AssetName.IsEmpty() || PkgPath.IsEmpty())
+		{
+			Result.Errors.Add(FString::Printf(
+				TEXT("asset_path '%s' does not name an asset. Provide a full path including the asset name, e.g. /Game/Animations/IK_Hero."),
+				*AssetPath));
+			return Result;
+		}
+
 		IAssetTools& AssetTools = FModuleManager::LoadModuleChecked<FAssetToolsModule>("AssetTools").Get();
 		UObject* IKRigDef = AssetTools.CreateAsset(AssetName, PkgPath, IKRigClass, nullptr);
 
@@ -681,8 +749,17 @@ FAgentFrameworkActionResult FAgentFrameworkAnimationActions::ExecuteGetAnimInfo(
 			return Result;
 		}
 
-		FString PkgPath = FPackageName::GetLongPackagePath(AssetPath);
-		FString AssetName = FPackageName::GetShortName(AssetPath);
+		FString PackageName, PkgPath, AssetName;
+		UAgentFrameworkActionUtils::SplitAssetPath(AssetPath, PackageName, PkgPath, AssetName);
+
+		if (AssetName.IsEmpty() || PkgPath.IsEmpty())
+		{
+			Result.Errors.Add(FString::Printf(
+				TEXT("asset_path '%s' does not name an asset. Provide a full path including the asset name, e.g. /Game/Animations/RTG_HeroToMannequin."),
+				*AssetPath));
+			return Result;
+		}
+
 		IAssetTools& AssetTools = FModuleManager::LoadModuleChecked<FAssetToolsModule>("AssetTools").Get();
 		UObject* Retargeter = AssetTools.CreateAsset(AssetName, PkgPath, RetargeterClass, nullptr);
 
@@ -714,15 +791,52 @@ FAgentFrameworkActionResult FAgentFrameworkAnimationActions::ExecuteGetAnimInfo(
 			return Result;
 		}
 
-		FString PkgPath = FPackageName::GetLongPackagePath(AssetPath);
-		FString AssetName = FPackageName::GetShortName(AssetPath);
-		IAssetTools& AssetTools = FModuleManager::LoadModuleChecked<FAssetToolsModule>("AssetTools").Get();
-		UObject* ControlRigBP = AssetTools.CreateAsset(AssetName, PkgPath, ControlRigBPClass, nullptr);
+		FString PackageName, PkgPath, AssetName;
+		UAgentFrameworkActionUtils::SplitAssetPath(AssetPath, PackageName, PkgPath, AssetName);
 
-		if (!IsValid(ControlRigBP))
+		if (AssetName.IsEmpty() || PkgPath.IsEmpty())
 		{
-			Result.Errors.Add(FString::Printf(TEXT("Failed to create Control Rig at '%s'."), *AssetPath));
+			Result.Errors.Add(FString::Printf(
+				TEXT("asset_path '%s' does not name an asset. Provide a full path including the asset name, e.g. /Game/Animations/CR_Hero."),
+				*AssetPath));
 			return Result;
+		}
+
+		// ControlRigBlueprint derives from UBlueprint, so CreateAsset reaches
+		// FKismetEditorUtilities::CreateBlueprint, which asserts in Kismet2.cpp when the target
+		// package already holds a Blueprint and takes the editor down with it. Reuse instead.
+		const FString ObjectPath = FString::Printf(TEXT("%s.%s"), *PackageName, *AssetName);
+		UObject* ControlRigBP = FindObject<UObject>(nullptr, *ObjectPath);
+		if (!IsValid(ControlRigBP) && FPackageName::DoesPackageExist(PackageName))
+		{
+			ControlRigBP = LoadObject<UObject>(nullptr, *ObjectPath);
+		}
+
+		if (IsValid(ControlRigBP))
+		{
+			if (!ControlRigBP->IsA(ControlRigBPClass))
+			{
+				Result.Errors.Add(FString::Printf(
+					TEXT("An asset already exists at '%s' but is a '%s', not a Control Rig Blueprint. Call delete_asset on this path first, or choose a different asset_path."),
+					*PackageName, *ControlRigBP->GetClass()->GetName()));
+				return Result;
+			}
+
+			Result.Warnings.Add(FString::Printf(
+				TEXT("Control Rig '%s' already existed, so it was reused rather than recreated."),
+				*PackageName));
+			UE_LOG(LogAgentFramework, Log, TEXT("AnimationActions: Reusing existing Control Rig '%s'"), *PackageName);
+		}
+		else
+		{
+			IAssetTools& AssetTools = FModuleManager::LoadModuleChecked<FAssetToolsModule>("AssetTools").Get();
+			ControlRigBP = AssetTools.CreateAsset(AssetName, PkgPath, ControlRigBPClass, nullptr);
+
+			if (!IsValid(ControlRigBP))
+			{
+				Result.Errors.Add(FString::Printf(TEXT("Failed to create Control Rig at '%s'."), *PackageName));
+				return Result;
+			}
 		}
 
 		Result.bSuccess = true;
@@ -786,8 +900,17 @@ FAgentFrameworkActionResult FAgentFrameworkAnimationActions::ExecuteCreateBlendS
 	int32 GridNum = 4;
 	UAgentFrameworkActionUtils::TryGetIntParam(Params, TEXT("grid_num"), GridNum, Result.Errors, false);
 
-	FString PkgPath = FPackageName::GetLongPackagePath(AssetPath);
-	FString AssetName = FPackageName::GetShortName(AssetPath);
+	FString PackageName, PkgPath, AssetName;
+	UAgentFrameworkActionUtils::SplitAssetPath(AssetPath, PackageName, PkgPath, AssetName);
+
+	if (AssetName.IsEmpty() || PkgPath.IsEmpty())
+	{
+		Result.Errors.Add(FString::Printf(
+			TEXT("asset_path '%s' does not name an asset. Provide a full path including the asset name, e.g. /Game/Animations/BS_Locomotion."),
+			*AssetPath));
+		return Result;
+	}
+
 	IAssetTools& AssetTools = FModuleManager::LoadModuleChecked<FAssetToolsModule>("AssetTools").Get();
 	UBlendSpace* BlendSpace = Cast<UBlendSpace>(AssetTools.CreateAsset(AssetName, PkgPath, UBlendSpace::StaticClass(), nullptr));
 

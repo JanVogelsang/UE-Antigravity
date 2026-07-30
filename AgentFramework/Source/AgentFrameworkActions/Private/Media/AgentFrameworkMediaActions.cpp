@@ -161,13 +161,23 @@ FAgentFrameworkActionResult FAgentFrameworkMediaActions::ExecuteCreateMediaPlaye
 		return Result;
 	}
 
-	FString PackagePath = FPackageName::GetLongPackagePath(AssetPath);
-	FString AssetName = FPackageName::GetLongPackageAssetName(AssetPath);
+	// Agents pass both "/Game/Media/MP_Video" and "/Game/Media/MP_Video.MP_Video"; the latter must
+	// not reach CreatePackage() directly or it builds a malformed package.
+	FString PackageName, PackagePath, AssetName;
+	UAgentFrameworkActionUtils::SplitAssetPath(AssetPath, PackageName, PackagePath, AssetName);
 
-	UPackage* Package = CreatePackage(*AssetPath);
+	if (AssetName.IsEmpty() || PackagePath.IsEmpty())
+	{
+		Result.Errors.Add(FString::Printf(
+			TEXT("asset_path '%s' does not name an asset. Provide a full path including the asset name, e.g. /Game/Media/MP_Cutscene."),
+			*AssetPath));
+		return Result;
+	}
+
+	UPackage* Package = CreatePackage(*PackageName);
 	if (!IsValid(Package))
 	{
-		Result.Errors.Add(FString::Printf(TEXT("Failed to create package for asset at '%s'."), *AssetPath));
+		Result.Errors.Add(FString::Printf(TEXT("Failed to create package for asset at '%s'."), *PackageName));
 		return Result;
 	}
 
@@ -203,13 +213,21 @@ FAgentFrameworkActionResult FAgentFrameworkMediaActions::ExecuteCreateMediaTextu
 		return Result;
 	}
 
-	FString PackagePath = FPackageName::GetLongPackagePath(AssetPath);
-	FString AssetName = FPackageName::GetLongPackageAssetName(AssetPath);
+	FString PackageName, PackagePath, AssetName;
+	UAgentFrameworkActionUtils::SplitAssetPath(AssetPath, PackageName, PackagePath, AssetName);
 
-	UPackage* Package = CreatePackage(*AssetPath);
+	if (AssetName.IsEmpty() || PackagePath.IsEmpty())
+	{
+		Result.Errors.Add(FString::Printf(
+			TEXT("asset_path '%s' does not name an asset. Provide a full path including the asset name, e.g. /Game/Media/MT_Cutscene."),
+			*AssetPath));
+		return Result;
+	}
+
+	UPackage* Package = CreatePackage(*PackageName);
 	if (!IsValid(Package))
 	{
-		Result.Errors.Add(FString::Printf(TEXT("Failed to create package for asset at '%s'."), *AssetPath));
+		Result.Errors.Add(FString::Printf(TEXT("Failed to create package for asset at '%s'."), *PackageName));
 		return Result;
 	}
 
@@ -245,13 +263,21 @@ FAgentFrameworkActionResult FAgentFrameworkMediaActions::ExecuteCreateFileMediaS
 		return Result;
 	}
 
-	FString PackagePath = FPackageName::GetLongPackagePath(AssetPath);
-	FString AssetName = FPackageName::GetLongPackageAssetName(AssetPath);
+	FString PackageName, PackagePath, AssetName;
+	UAgentFrameworkActionUtils::SplitAssetPath(AssetPath, PackageName, PackagePath, AssetName);
 
-	UPackage* Package = CreatePackage(*AssetPath);
+	if (AssetName.IsEmpty() || PackagePath.IsEmpty())
+	{
+		Result.Errors.Add(FString::Printf(
+			TEXT("asset_path '%s' does not name an asset. Provide a full path including the asset name, e.g. /Game/Media/FMS_Intro."),
+			*AssetPath));
+		return Result;
+	}
+
+	UPackage* Package = CreatePackage(*PackageName);
 	if (!IsValid(Package))
 	{
-		Result.Errors.Add(FString::Printf(TEXT("Failed to create package for asset at '%s'."), *AssetPath));
+		Result.Errors.Add(FString::Printf(TEXT("Failed to create package for asset at '%s'."), *PackageName));
 		return Result;
 	}
 
@@ -403,13 +429,21 @@ FAgentFrameworkActionResult FAgentFrameworkMediaActions::ExecuteConfigureSoundWa
 
 	if (!CueAssetPath.IsEmpty())
 	{
-		FString CuePackagePath = FPackageName::GetLongPackagePath(CueAssetPath);
-		FString CueAssetName = FPackageName::GetLongPackageAssetName(CueAssetPath);
+		FString CuePackageName, CuePackagePath, CueAssetName;
+		UAgentFrameworkActionUtils::SplitAssetPath(CueAssetPath, CuePackageName, CuePackagePath, CueAssetName);
 
-		UPackage* CuePackage = CreatePackage(*CueAssetPath);
+		UPackage* CuePackage = (CueAssetName.IsEmpty() || CuePackagePath.IsEmpty())
+			? nullptr
+			: CreatePackage(*CuePackageName);
 		USoundCue* SoundCue = nullptr;
 
-		if (IsValid(CuePackage))
+		if (!IsValid(CuePackage))
+		{
+			Result.Warnings.Add(FString::Printf(
+				TEXT("cue_asset_path '%s' does not name a valid asset path, so no Sound Cue was created."),
+				*CueAssetPath));
+		}
+		else
 		{
 			UClass* CueFactoryClass = FindFirstObject<UClass>(TEXT("SoundCueFactoryNew"), EFindFirstObjectOptions::None);
 			if (IsValid(CueFactoryClass))

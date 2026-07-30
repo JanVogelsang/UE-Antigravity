@@ -232,8 +232,16 @@ FAgentFrameworkActionResult FAgentFrameworkPCGActions::ExecuteCreatePCGGraph(con
 		return Result;
 	}
 
-	FString PackagePath = FPackageName::GetLongPackagePath(AssetPath);
-	FString AssetName   = FPackageName::GetShortName(AssetPath);
+	FString PackageName, PackagePath, AssetName;
+	UAgentFrameworkActionUtils::SplitAssetPath(AssetPath, PackageName, PackagePath, AssetName);
+
+	if (AssetName.IsEmpty() || PackagePath.IsEmpty())
+	{
+		Result.Errors.Add(FString::Printf(
+			TEXT("asset_path '%s' does not name an asset. Provide a full path including the asset name, e.g. /Game/PCG/PCG_Scatter."),
+			*AssetPath));
+		return Result;
+	}
 
 	IAssetTools& AssetTools = FModuleManager::LoadModuleChecked<FAssetToolsModule>("AssetTools").Get();
 	FString UniqueName, UniquePackagePath;
@@ -255,7 +263,6 @@ FAgentFrameworkActionResult FAgentFrameworkPCGActions::ExecuteCreatePCGGraph(con
 	else
 	{
 		// Fallback: create empty package and construct directly
-		FString PackageName = PackagePath / AssetName;
 		UPackage* Package = CreatePackage(*PackageName);
 		if (IsValid(Package))
 		{

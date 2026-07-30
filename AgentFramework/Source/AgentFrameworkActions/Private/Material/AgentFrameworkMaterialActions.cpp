@@ -164,8 +164,16 @@ FAgentFrameworkActionResult FAgentFrameworkMaterialActions::ExecuteCreateMateria
 		return Result;
 	}
 
-	FString PackagePath = FPackageName::GetLongPackagePath(AssetPath);
-	FString AssetName = FPackageName::GetShortName(AssetPath);
+	FString PackageName, PackagePath, AssetName;
+	UAgentFrameworkActionUtils::SplitAssetPath(AssetPath, PackageName, PackagePath, AssetName);
+
+	if (AssetName.IsEmpty() || PackagePath.IsEmpty())
+	{
+		Result.Errors.Add(FString::Printf(
+			TEXT("asset_path '%s' does not name an asset. Provide a full path including the asset name, e.g. /Game/Materials/M_Rock."),
+			*AssetPath));
+		return Result;
+	}
 
 	FAssetToolsModule& AssetToolsModule = FModuleManager::LoadModuleChecked<FAssetToolsModule>("AssetTools");
 	IAssetTools& AssetTools = AssetToolsModule.Get();
@@ -335,8 +343,16 @@ FAgentFrameworkActionResult FAgentFrameworkMaterialActions::ExecuteCreateMateria
 		return Result;
 	}
 
-	FString PackagePath = FPackageName::GetLongPackagePath(AssetPath);
-	FString AssetName = FPackageName::GetShortName(AssetPath);
+	FString PackageName, PackagePath, AssetName;
+	UAgentFrameworkActionUtils::SplitAssetPath(AssetPath, PackageName, PackagePath, AssetName);
+
+	if (AssetName.IsEmpty() || PackagePath.IsEmpty())
+	{
+		Result.Errors.Add(FString::Printf(
+			TEXT("asset_path '%s' does not name an asset. Provide a full path including the asset name, e.g. /Game/Materials/MI_Rock_Wet."),
+			*AssetPath));
+		return Result;
+	}
 
 	UMaterial* ParentMaterial = LoadObject<UMaterial>(nullptr, *ParentPath);
 	if (!IsValid(ParentMaterial))
@@ -635,13 +651,22 @@ FAgentFrameworkActionResult FAgentFrameworkMaterialActions::ExecuteCreatePBRMate
 	}
 
 	// 6. Create Material Asset
-	FString PackagePath = FPackageName::GetLongPackagePath(AssetPath);
-	FString AssetName = FPackageName::GetShortName(AssetPath);
+	FString PackageName, PackagePath, AssetName;
+	UAgentFrameworkActionUtils::SplitAssetPath(AssetPath, PackageName, PackagePath, AssetName);
+
+	if (AssetName.IsEmpty() || PackagePath.IsEmpty())
+	{
+		Result.Errors.Add(FString::Printf(
+			TEXT("asset_path '%s' does not name an asset. Provide a full path including the asset name, e.g. /Game/Materials/M_Rock."),
+			*AssetPath));
+		return Result;
+	}
 
 	FAssetToolsModule& AssetToolsModule = FModuleManager::LoadModuleChecked<FAssetToolsModule>("AssetTools");
 	IAssetTools& AssetTools = AssetToolsModule.Get();
 
-	UMaterial* NewMaterial = LoadObject<UMaterial>(nullptr, *AssetPath);
+	// Load through the explicit object path — a bare package path does not reliably resolve.
+	UMaterial* NewMaterial = LoadObject<UMaterial>(nullptr, *FString::Printf(TEXT("%s.%s"), *PackageName, *AssetName));
 	if (!IsValid(NewMaterial))
 	{
 		UMaterialFactoryNew* Factory = NewObject<UMaterialFactoryNew>();
