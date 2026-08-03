@@ -1011,8 +1011,29 @@ def parse_rsp_file(rsp_path, base_dir):
             args.append(arg)
     return args
 
+# Helper to detect precompiled-header files that must not be force-included textually.
+# UBT emits /Yu"SharedPCH.<Module>.h" together with /FI"SharedPCH.<Module>.h". MSVC resolves
+# the /FI from the prebuilt .pch, but libclang has no .pch and would parse the header as plain
+# text, which exhausts its stack and aborts the whole translation unit. Definitions.*.h forced
+# includes (which carry the module's <MODULE>_API defines) must still be honoured.
+def is_pch_header(path):
+    name = os.path.basename(path.strip('"')).lower()
+    return name.startswith("sharedpch.") or name.startswith("pch.")
+
 # Helper to convert MSVC-style flags in response files to Clang format for libclang
 def convert_msvc_to_clang(msvc_args, base_dir):
+    # Pre-scan for /Yu targets: a header the compiler is told to consume as a PCH must never be
+    # turned into a textual -include below.
+    pch_targets = set()
+    for arg in msvc_args:
+        if arg.startswith(("/Yu", "-Yu")):
+            target = arg[3:].strip('"')
+            if target:
+                pch_targets.add(os.path.basename(target).lower())
+
+    def is_pch_forced_include(path):
+        return is_pch_header(path) or os.path.basename(path.strip('"')).lower() in pch_targets
+
     clang_args = []
     i = 0
     while i < len(msvc_args):
@@ -1044,15 +1065,17 @@ def convert_msvc_to_clang(msvc_args, base_dir):
             path = msvc_args[i + 1].strip('"')
             if not os.path.isabs(path):
                 path = os.path.normpath(os.path.join(base_dir, path))
-            clang_args.append("-include")
-            clang_args.append(path)
+            if not is_pch_forced_include(path):
+                clang_args.append("-include")
+                clang_args.append(path)
             i += 2
         elif arg.startswith("/FI") or arg.startswith("-FI"):
             path = arg[3:].strip('"')
             if not os.path.isabs(path):
                 path = os.path.normpath(os.path.join(base_dir, path))
-            clang_args.append("-include")
-            clang_args.append(path)
+            if not is_pch_forced_include(path):
+                clang_args.append("-include")
+                clang_args.append(path)
             i += 1
         # C++ language standards
         elif arg.startswith("/std:"):
